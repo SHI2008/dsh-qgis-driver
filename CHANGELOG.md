@@ -3,6 +3,20 @@
 このプラグインの変更履歴。Keep a Changelog 準拠。
 バージョンは `metadata.txt` の `version` と同期させる。
 
+## [Fork] - 2026-11-16
+
+Independent maintenance fork starts from upstream v0.16.2
+(tag `upstream-0.16.2`, commit `af25aed`).
+
+### Added
+- i18n/zh.json: filled the 8 missing Chinese entries (suggested prompts
+  feature); Japanese tag `【ブリッジ】` replaced with `【桥接】`.
+- metadata.txt: Japanese words in `about` replaced with English
+  (AI Assistant / Hot Reload).
+
+### Notes
+- This fork is not intended to be merged upstream.
+
 ## [0.16.2] - 2026-11-16
 
 ### Added

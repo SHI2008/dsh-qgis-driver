@@ -2,6 +2,12 @@
 
 # QGIS Live Driver (`geo_driver`)
 
+> **Fork notice:** This repository is an independent fork of
+> [yamamoto-ryuzo/qgis_live_harness](https://github.com/yamamoto-ryuzo/qgis_live_harness)
+> (`qgis-plugin/geo_driver`, upstream v0.16.2). It is maintained separately
+> from the upstream project, and changes here are not intended to be merged
+> upstream. The original author and GPL-3.0 licensing are preserved.
+
 **📖 日本語ドキュメント: <https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver/docs>**
 （インストール・使い方・仕様の詳細はこちら）
 

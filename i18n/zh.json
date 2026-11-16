@@ -38,7 +38,7 @@
     "Enter also sends. While sending it changes to \"Abort\" and\nstops the ongoing round trip (in-flight API responses/tool executions cannot be interrupted).": "Enter 也可发送。发送时会变为“中止”并\n停止正在进行的往返(进行中的 API 响应/工具执行无法中断)。",
     "Enter instructions (Enter to send / Shift+Enter for a new line / Ctrl+V or drag & drop to attach images).\nUse /agent and /skill to edit instructions directly (/help)": "输入指示(Enter 发送 / Shift+Enter 换行 / Ctrl+V 或拖放以附加图片)。\n使用 /agent 和 /skill 直接编辑指示(/help)",
     "Entering code {0} on GitHub…": "正在 GitHub 上输入代码 {0}…",
-    "Explain the provider type tags 【API】/【ACP】/【ブリッジ】": "说明提供程序类型标签【API】/【ACP】/【ブリッジ】",
+    "Explain the provider type tags 【API】/【ACP】/【ブリッジ】": "说明提供程序类型标签【API】/【ACP】/【桥接】",
     "Failed to fetch the model list: {0}": "获取模型列表失败: {0}",
     "Failed to get a device code for sign-in: {0}": "获取登录设备代码失败: {0}",
     "Failed to save the attached image: {0}": "保存附加图片失败: {0}",
@@ -102,7 +102,13 @@
     "{0} running…": "{0} 正在运行…",
     "{0} server(s)": "{0} 个服务器",
     "{0} → skipped by user": "{0} → 已被用户跳过",
-    "■ Abort": "■ 中止"
+    "■ Abort": "■ 中止",
+    "Suggested prompts: picking one inserts the prompt text into the input field.\nLists bundled <plugin>/prompts/*.md and user ~/.qgis-live/prompts/*.md.\nEdit them via /prompt or the instruction editor.": "建议提示词:选择一项会把提示词文本插入输入框。\n列出内置的 <plugin>/prompts/*.md 和用户 ~/.qgis-live/prompts/*.md。\n可通过 /prompt 或指示编辑器编辑。",
+    "Create, edit, or delete suggested prompts (.md)": "创建、编辑或删除建议提示词(.md)",
+    "Suggested…": "建议提示词…",
+    "prompt '{0}' not found (provide a body to save it as new)": "未找到提示词 '{0}'(提供内容以将其另存为新提示词)",
+    "Inserted prompt '{0}'": "已插入提示词 '{0}'",
+    "prompt": "提示词"
   },
   "_InstructionsDialog": {
     " (bundled)": "(内置)",
@@ -124,7 +130,9 @@
     "Save failed": "保存失败",
     "Send the editor body and the instructions above to the chat AI.\nWhen the AI saves, the result is reflected in the editor (not while there are unsaved manual edits)": "将编辑器内容和上述指示发送给聊天 AI。\n当 AI 保存时,结果会反映到编辑器中(存在未保存的手动编辑时除外)",
     "Skills: only the list of id+description+use_when appears in the prompt; the model reads the body via qgis_pyeval's open() when needed. Format: \"# Title\" → description → \"use_when: when to use\" (optional)": "技能: 提示中只显示 id+描述+use_when 列表;模型在需要时通过 qgis_pyeval 的 open() 读取内容。格式:“# 标题” → 描述 → “use_when: 何时使用”(可选)",
-    "e.g. \"Add a summary section\" \"Make the tone more concise\"": "例如 “添加摘要部分” “让语气更简洁”"
+    "e.g. \"Add a summary section\" \"Make the tone more concise\"": "例如 “添加摘要部分” “让语气更简洁”",
+    "Edit instructions": "编辑指示",
+    "Prompts: shown in the panel's suggestion list; the body after the header is inserted into the chat input when picked. Format: \"# Title\" → description → \"use_when: when to use\" (optional) → prompt text": "提示词: 显示在面板的建议列表中;选择后,标题之后的正文会插入聊天输入框。格式:“# 标题” → 描述 → “use_when: 何时使用”(可选) → 提示词正文"
   },
   "_McpDialog": {
     "Cannot read JSON: {0}": "无法读取 JSON: {0}",
