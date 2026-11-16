@@ -1,4 +1,4 @@
-"""HTTP server built into geo_driver. Standard library only.
+"""HTTP server built into dsh_qgis_driver. Standard library only.
 
 Serves a plain REST surface on one port, so AI tools/apps can drive QGIS
 with nothing but HTTP POST.
@@ -482,7 +482,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/health":
             self._json(200, {"ok": True, "pid": os.getpid(),
-                             "plugin": "geo_driver"})
+                             "plugin": "dsh_qgis_driver"})
         elif self.path == "/api/tools":
             self._json(200, {"tools": self._tools()})
         elif self.path == "/api/status":

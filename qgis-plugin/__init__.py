@@ -77,16 +77,16 @@ class GeoDriverPlugin:
       - File JSONL (commands.jsonl/results.jsonl) — language-neutral base
       - HTTP (default 127.0.0.1:<auto port>; set QGIS_LIVE_HOST=0.0.0.0 and
         QGIS_LIVE_PORT=<port> for cross-machine access) (/api/* = REST)
-      - ~/.qgis-live/<pid>-geo_driver.json — connection info + token (discovery)
+      - ~/.qgis-live/<pid>-dsh_qgis_driver.json — connection info + token (discovery)
 
     Auth: every endpoint except /api/health requires a token (Bearer/X-Api-Key/
     api-key). The per-session token is in the registry; QGIS_LIVE_API_KEY is a
     stable extra key for remote clients (use it as the "Key" with host:port).
     """
 
-    SETTING_ENABLED = "geo_driver/enabled"
-    SETTING_AI_PANEL = "geo_driver/ai_panel_open"
-    _MENU_NAME = "QGIS Live Driver"
+    SETTING_ENABLED = "dsh_qgis_driver/enabled"
+    SETTING_AI_PANEL = "dsh_qgis_driver/ai_panel_open"
+    _MENU_NAME = "dsh-qgis-driver"
     # Menu action source strings (English); they are translated for display
     _ACTION_SOURCES = ("Remote Control",
                        "AI Assistant",
@@ -99,7 +99,7 @@ class GeoDriverPlugin:
         """For removing leftover actions: include both English sources and translations."""
         texts = set(self._ACTION_SOURCES)
         for src in self._ACTION_SOURCES:
-            texts.add(QCoreApplication.translate("geo_driver", src))
+            texts.add(QCoreApplication.translate("dsh_qgis_driver", src))
         return texts
 
     def __init__(self, iface):
@@ -130,7 +130,7 @@ class GeoDriverPlugin:
             pass
         # Cross-plugin layer organization service. geo_import etc. can place
         # added layers into the profile rules via
-        # plugins['geo_driver'].layer_org.place_all([(layer, ctx)]) (flat if none)
+        # plugins['dsh_qgis_driver'].layer_org.place_all([(layer, ctx)]) (flat if none)
         try:
             from .layer_org import LayerOrganizer
             self.layer_org = LayerOrganizer()
@@ -153,7 +153,7 @@ class GeoDriverPlugin:
             self.translator = None
 
     def _own_menu(self):
-        """Return the Plugins > QGIS Live Driver submenu (None if absent)."""
+        """Return the Plugins > dsh-qgis-driver submenu (None if absent)."""
         try:
             for top in self.iface.mainWindow().menuBar().actions():
                 tm = top.menu()
@@ -218,7 +218,7 @@ class GeoDriverPlugin:
         """
         for a in items.get("actions") or ():
             try:
-                self.iface.removePluginMenu("QGIS Live Driver", a)
+                self.iface.removePluginMenu("dsh-qgis-driver", a)
             except Exception:  # nosec B110  # acceptable by design
                 pass
             try:
@@ -229,7 +229,7 @@ class GeoDriverPlugin:
         if m is not None:
             try:
                 self.iface.removePluginMenu(
-                    "QGIS Live Driver", m.menuAction())
+                    "dsh-qgis-driver", m.menuAction())
             except Exception:  # nosec B110  # acceptable by design
                 pass
             try:
@@ -249,42 +249,42 @@ class GeoDriverPlugin:
         # The deferred sweep is safe because it excludes this instance's actions.
         self._defer_menu_cleanup({})
         self._ai_action = QAction(
-            QCoreApplication.translate("geo_driver", "AI Assistant"),
+            QCoreApplication.translate("dsh_qgis_driver", "AI Assistant"),
             self.iface.mainWindow())
         self._ai_action.triggered.connect(self._open_ai_panel)
-        self.iface.addPluginToMenu("QGIS Live Driver", self._ai_action)
+        self.iface.addPluginToMenu("dsh-qgis-driver", self._ai_action)
 
         self._action = QAction(
             QCoreApplication.translate(
-                "geo_driver", "Remote Control"),
+                "dsh_qgis_driver", "Remote Control"),
             self.iface.mainWindow())
         self._action.setCheckable(True)
         self._action.toggled.connect(self._on_toggle)
-        self.iface.addPluginToMenu("QGIS Live Driver", self._action)
+        self.iface.addPluginToMenu("dsh-qgis-driver", self._action)
 
         self._conn_action = QAction(
             QCoreApplication.translate(
-                "geo_driver", "Connection Info"),
+                "dsh_qgis_driver", "Connection Info"),
             self.iface.mainWindow())
         self._conn_action.triggered.connect(self._open_conn_info)
-        self.iface.addPluginToMenu("QGIS Live Driver", self._conn_action)
+        self.iface.addPluginToMenu("dsh-qgis-driver", self._conn_action)
 
         self._hot_menu = self._build_hot_menu()
-        self.iface.addPluginToMenu("QGIS Live Driver",
+        self.iface.addPluginToMenu("dsh-qgis-driver",
                                    self._hot_menu.menuAction())
 
         # The Deploy Mode dialog is also the supported way to point at the
         # harness repo, so always show it, even for a standalone install where
         # the repo is unresolved
         self._mode_action = QAction(
-            QCoreApplication.translate("geo_driver", "Deploy Mode"),
+            QCoreApplication.translate("dsh_qgis_driver", "Deploy Mode"),
             self.iface.mainWindow())
         self._mode_action.triggered.connect(self._open_mode_dialog)
-        self.iface.addPluginToMenu("QGIS Live Driver", self._mode_action)
+        self.iface.addPluginToMenu("dsh-qgis-driver", self._mode_action)
         self._init_geo_toolbar()
 
         live_base = os.environ.get("WEBENGINE_LIVE_DIR")
-        _log(f"geo_driver initGui: live_base={live_base!r}")
+        _log(f"dsh_qgis_driver initGui: live_base={live_base!r}")
         if live_base:
             self._start(live_base)  # dev path: env wins, start immediately
         elif self._settings_enabled():
@@ -299,7 +299,7 @@ class GeoDriverPlugin:
     def _build_hot_menu(self):
         from qgis.PyQt.QtWidgets import QMenu
         menu = QMenu(
-            QCoreApplication.translate("geo_driver", "Hot Reload"),
+            QCoreApplication.translate("dsh_qgis_driver", "Hot Reload"),
             self.iface.mainWindow())
         menu.aboutToShow.connect(self._rebuild_hot_menu)
         return menu
@@ -318,13 +318,13 @@ class GeoDriverPlugin:
             self._hot_menu.addSeparator()
             act = self._hot_menu.addAction(
                 QCoreApplication.translate(
-                    "geo_driver", "Reload All"))
+                    "dsh_qgis_driver", "Reload All"))
             act.triggered.connect(
                 lambda _checked=False: self._defer_hot_reload(ids))
         else:
             act = self._hot_menu.addAction(
                 QCoreApplication.translate(
-                    "geo_driver",
+                    "dsh_qgis_driver",
                     "(no development plugins)"))
             act.setEnabled(False)
 
@@ -343,7 +343,7 @@ class GeoDriverPlugin:
         Calling reloadPlugin directly inside a triggered handler makes unload()
         rewrite the popup menu hierarchy via removePluginMenu while Qt is still
         processing it, causing an access violation (observed when reloading
-        geo_driver itself through hot reload). Defer until the event completes.
+        dsh_qgis_driver itself through hot reload). Defer until the event completes.
         """
         try:
             from qgis.PyQt.QtCore import QTimer
@@ -364,7 +364,7 @@ class GeoDriverPlugin:
             lv = (Qgis.MessageLevel.Warning if level == "warn"
                   else Qgis.MessageLevel.Info)
             self.iface.messageBar().pushMessage(
-                "QGIS Live Driver", msg, level=lv, duration=4)
+                "dsh-qgis-driver", msg, level=lv, duration=4)
         except Exception:  # nosec B110  # acceptable by design
             pass
         _log(f"hot_reload {level}: {msg}")
@@ -446,7 +446,7 @@ class GeoDriverPlugin:
             self._ai_tb_button.setAutoRaise(True)
             self._ai_tb_button.setToolTip(
                 QCoreApplication.translate(
-                    "geo_driver", "AI Assistant"))
+                    "dsh_qgis_driver", "AI Assistant"))
             ai_icon = QIcon(os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "icon_ai.png"))
@@ -484,15 +484,15 @@ class GeoDriverPlugin:
             st = deploy_state(__file__)
             tr = QCoreApplication.translate
             label = {
-                "dev": tr("geo_driver", "Development mode"),
-                "use": tr("geo_driver", "Usage mode"),
-                "mixed": tr("geo_driver", "Mixed"),
-                "none": tr("geo_driver", "Not deployed"),
+                "dev": tr("dsh_qgis_driver", "Development mode"),
+                "use": tr("dsh_qgis_driver", "Usage mode"),
+                "mixed": tr("dsh_qgis_driver", "Mixed"),
+                "none": tr("dsh_qgis_driver", "Not deployed"),
             }.get(st["mode"], st["mode"] or "")
             from qgis.PyQt.QtGui import QIcon
             self._mode_badge.setToolTip(
                 "{0} — {1}".format(
-                    label, tr("geo_driver", "Deploy Mode")))
+                    label, tr("dsh_qgis_driver", "Deploy Mode")))
             if st["mode"] == "use":
                 # Usage mode shows only a gear icon to stay unobtrusive
                 self._mode_badge.setText("")
@@ -587,9 +587,9 @@ class GeoDriverPlugin:
         if checked and self.driver is None:
             from qgis.PyQt.QtWidgets import QMessageBox
             ret = QMessageBox.warning(
-                self.iface.mainWindow(), "QGIS Live Driver",
+                self.iface.mainWindow(), "dsh-qgis-driver",
                 QCoreApplication.translate(
-                    "geo_driver",
+                    "dsh_qgis_driver",
                     "Clients will be able to remotely "
                     "control this QGIS process.\n"
                     "pyeval executes arbitrary Python inside QGIS.\n\n"
@@ -622,9 +622,9 @@ class GeoDriverPlugin:
         try:
             from .live_driver import LiveDriver
             self.driver = LiveDriver(live_dir, iface=self.iface)
-            _log(f"geo_driver LiveDriver active: {live_dir}")
+            _log(f"dsh_qgis_driver LiveDriver active: {live_dir}")
         except Exception:
-            _log("geo_driver LiveDriver failed:\n"
+            _log("dsh_qgis_driver LiveDriver failed:\n"
                  + traceback.format_exc())
             return
 
@@ -648,11 +648,11 @@ class GeoDriverPlugin:
                 allowed=_http_allowed(), allow_remote=not is_loopback)
             self.driver.http_port = port
             self.driver.http_host = host
-            _log(f"geo_driver HTTP API: http://{host}:{port}/ "
+            _log(f"dsh_qgis_driver HTTP API: http://{host}:{port}/ "
                  f"remote={'yes' if not is_loopback else 'no'} "
                  f"tools={sorted(_http_allowed()) if _http_allowed() else 'all'}")
         except Exception:
-            _log("geo_driver HTTP failed:\n"
+            _log("dsh_qgis_driver HTTP failed:\n"
                  + traceback.format_exc())
             port = None
 
@@ -677,7 +677,7 @@ class GeoDriverPlugin:
             _restrict_file(self._reg_path)
             _restrict_file(os.path.join(live_dir, "token"))
         except Exception:
-            _log("geo_driver registry write failed:\n"
+            _log("dsh_qgis_driver registry write failed:\n"
                  + traceback.format_exc())
 
     def _stop(self):
@@ -742,7 +742,7 @@ class GeoDriverPlugin:
         # finishes. If unload runs from a menu triggered handler via
         # reloadPlugin, removePluginMenu rewrites the popup menu hierarchy while
         # Qt is processing it, causing an access violation inside Qt (observed
-        # when geo_driver was reloaded from another driver's hot reload).
+        # when dsh_qgis_driver was reloaded from another driver's hot reload).
         _menu_cleanup_items["actions"] = [
             a for a in (self._ai_action, self._action,
                         self._conn_action, self._mode_action)

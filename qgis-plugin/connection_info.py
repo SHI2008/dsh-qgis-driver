@@ -4,7 +4,7 @@ So that a user who enabled remote control is not left wondering "what next",
 it shows the REST connection details together with a copyable curl example,
 plus the session token, live dir and registry path.
 
-- Opened from the menu "Plugins > QGIS Live Driver > Connection Info"
+- Opened from the menu "Plugins > dsh-qgis-driver > Connection Info"
 - Also shown automatically right after the remote control toggle is turned ON
 - Opens even while remote control is OFF. In that case it shows only the
   enablement steps.
@@ -20,7 +20,7 @@ from qgis.PyQt.QtCore import QCoreApplication
 
 
 def _tr(s):
-    return QCoreApplication.translate("geo_driver", s)
+    return QCoreApplication.translate("dsh_qgis_driver", s)
 
 
 def _curl_example(host, port, token):
@@ -40,7 +40,7 @@ def _repo_status(plugin_dir):
 def _off_msg():
     return _tr(
         "Remote control is OFF.\\n"
-        "Enable it via Plugins > QGIS Live Driver > "
+        "Enable it via Plugins > dsh-qgis-driver > "
         "Remote Control, then press Refresh.")
 
 
@@ -62,7 +62,7 @@ def build_sections(plugin):
         "QGIS_LIVE_REGISTRY",
         os.path.join(os.path.expanduser("~"), ".qgis-live"))
     reg_path = getattr(plugin, "_reg_path", None) or os.path.join(
-        reg_dir, f"{os.getpid()}-geo_driver.json")
+        reg_dir, f"{os.getpid()}-dsh_qgis_driver.json")
     fields = {"reg": reg_path, "livedir": None, "token": None}
     snippets["reg"] = reg_path
 
@@ -101,7 +101,7 @@ def show_dialog(plugin):
     from qgis.PyQt.QtGui import QFontDatabase
 
     dlg = QDialog(plugin.iface.mainWindow())
-    dlg.setWindowTitle(_tr("QGIS Live Driver — Connection Info"))
+    dlg.setWindowTitle(_tr("dsh-qgis-driver — Connection Info"))
     lay = QVBoxLayout(dlg)
     fixed = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
 
@@ -232,7 +232,7 @@ def show_dialog(plugin):
             ok, msg = False, str(e)
         if not ok:
             QMessageBox.warning(
-                dlg, "QGIS Live Driver",
+                dlg, "dsh-qgis-driver",
                 _tr("Not a harness repository") + "\\n" + msg)
             return
         _notify(_tr("Harness repository set: {0}").format(d))

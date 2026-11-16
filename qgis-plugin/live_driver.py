@@ -95,17 +95,17 @@ def _audit_base_dir():
 
 
 def _audit_conf():
-    """(enabled, max_bytes, max_files). QSettings geo_driver/audit/*."""
+    """(enabled, max_bytes, max_files). QSettings dsh_qgis_driver/audit/*."""
     enabled = True
     max_bytes = _AUDIT_DEFAULT_MAX_BYTES
     max_files = _AUDIT_DEFAULT_MAX_FILES
     try:
         from qgis.PyQt.QtCore import QSettings
         s = QSettings()
-        enabled = str(s.value("geo_driver/audit/enabled", True)).lower() \
+        enabled = str(s.value("dsh_qgis_driver/audit/enabled", True)).lower() \
             not in ("0", "false", "no")
-        max_bytes = int(s.value("geo_driver/audit/max_bytes", max_bytes))
-        max_files = int(s.value("geo_driver/audit/max_files", max_files))
+        max_bytes = int(s.value("dsh_qgis_driver/audit/max_bytes", max_bytes))
+        max_files = int(s.value("dsh_qgis_driver/audit/max_files", max_files))
     except Exception:  # nosec B110  # default values where QSettings is unavailable
         pass
     return enabled, max(int(max_bytes), 1024), max(int(max_files), 1)
@@ -246,7 +246,7 @@ def reload_plugin_now(plugin_id):
 
     Shared by the reload_plugin command and the menu hot reload (hot_reload.py).
     The caller's code frame stays valid after the reload, so
-    plugin_id may be this plugin itself (geo_driver).
+    plugin_id may be this plugin itself (dsh_qgis_driver).
     """
     import sys
     import qgis.utils
@@ -703,7 +703,7 @@ class LiveDriver:
             return
         reply({
             "id": cid,
-            "error": f"type={ctype} unsupported: geo_driver has no WebEngine view. "
+            "error": f"type={ctype} unsupported: dsh_qgis_driver has no WebEngine view. "
             "pass plugin_id of a WebEngine plugin to route "
             "(eval/devreload/screenshot), or use "
             "pyeval/status/open_plugin/reload_plugin/bridge_call/"
@@ -869,7 +869,7 @@ class LiveDriver:
     def _reload_plugin(self, cid, pid, reply):
         """Clear the sys.modules cache, reloadPlugin, and reopen the dialog.
 
-        Reloading this plugin (geo_driver) itself is allowed: this driver is
+        Reloading this plugin (dsh_qgis_driver) itself is allowed: this driver is
         unloaded and re-created while running, but the caller's code frame stays
         valid, so the result can be written to results.jsonl after the reload.
         """

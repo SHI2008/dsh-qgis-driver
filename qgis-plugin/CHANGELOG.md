@@ -1,4 +1,4 @@
-# Changelog — geo_driver
+# Changelog — dsh-qgis-driver
 
 Change history of this plugin. Follows Keep a Changelog.
 Versions are kept in sync with `version` in `metadata.txt`.
@@ -29,7 +29,7 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ### Changed
 - Connection Info dialog now shows only the REST example, token and
   session details (MCP tab and stdio/HTTP client configs removed).
-- Devin/Copilot ACP sessions no longer receive geo_driver's `/mcp` as an
+- Devin/Copilot ACP sessions no longer receive dsh_qgis_driver's `/mcp` as an
   MCP server (`mcpServers: []`).
 - i18n catalogs: removed the `_McpDialog` context and all MCP keys.
 - Menu label "Remote Control (localhost only)" → "Remote Control", and the
@@ -83,7 +83,7 @@ Independent maintenance fork starts from upstream v0.16.2
   session token. Token mismatches arriving via files (unauthorized)
   are audited too. Forwarded commands to other plugins are recorded
   only once, at the forwarding source. In addition to daily rotation,
-  QSettings `geo_driver/audit/*` controls enabling, the file size cap
+  QSettings `dsh_qgis_driver/audit/*` controls enabling, the file size cap
   (default 5 MB, rolled over to a timestamped generation when
   exceeded) and the number of retained generations (default 14).
   Retrieval uses the new bridge methods `auditLog(n, filter)`
@@ -110,11 +110,11 @@ Independent maintenance fork starts from upstream v0.16.2
   model as agents/skills: bundled `<plugin>/prompts/*.md` plus user
   overrides in `~/.qgis-live/prompts/*.md`. The bundled canned
   instructions are six items: layer organization, standard line width,
-  image export and state diagnostics (geo_driver), legend creation
+  image export and state diagnostics (dsh_qgis_driver), legend creation
   (geo_legend) and feature search (geo_search)
 - ai_client.py: **bundled instructions (skills/agents) are now
   aggregated from all managed plugins**. Previously only
-  `geo_driver/skills|agents/` was scanned, but every plugin that has
+  `dsh_qgis_driver/skills|agents/` was scanned, but every plugin that has
   `qgis-plugin/<id>/skills|agents/*.md` (geo_legend/geo_webview etc.)
   is now scanned, so domain-specific procedure documents can be
   shipped with the plugin that owns that domain. `when` (the use_when
@@ -162,7 +162,7 @@ Independent maintenance fork starts from upstream v0.16.2
   chat engine, with Devin itself running the tool loop
   (devin_tasks.AcpSession: initialize→authenticate (shares IDE
   authentication)→session/new|load→session/prompt, interruption via
-  session/cancel, and geo_driver's own /mcp injected as an MCP server
+  session/cancel, and dsh_qgis_driver's own /mcp injected as an MCP server
   so Devin can operate QGIS too; the endpoint field = working dir,
   no API key needed). `devin_bridge` (Devin [Bridge]) is a
   pseudo-provider that injects qgis_devin_* tool delegation
@@ -208,7 +208,7 @@ Independent maintenance fork starts from upstream v0.16.2
   hot reload**. When `unload()` called `iface.removePluginMenu` inside
   a QMenu triggered handler, it rewrote the menu hierarchy while the
   popup was being processed and Qt crashed internally (observed:
-  reloading geo_driver from the "Reload all" of the old ID
+  reloading dsh_qgis_driver from the "Reload all" of the old ID
   `qgis_live_driver`'s hot reload). `_defer_hot_reload` now defers the
   reload itself with `QTimer.singleShot(0)` until after the event
   completes, and the plugin menu operations in `unload()`/`initGui`
@@ -235,9 +235,9 @@ Independent maintenance fork starts from upstream v0.16.2
   function_call_output) only when sending
 
 ### Changed
-- **Renamed the plugin ID from `qgis_live_driver` to `geo_driver`**
+- **Renamed the plugin ID from `qgis_live_driver` to `dsh_qgis_driver`**
   (unifying the `geo_` series). Folder name, metadata name, bridge
-  `pluginId`, the `<pid>-geo_driver.json` registry, hot reload
+  `pluginId`, the `<pid>-dsh_qgis_driver.json` registry, hot reload
   `CTRL_ID`, the `tr` context and the QSettings prefix were migrated to
   the new ID. No functional changes
 
@@ -283,7 +283,7 @@ Independent maintenance fork starts from upstream v0.16.2
   launching from the menu. The icon is the bundled `icon_ai.png`
   ("AI" glyph)
 - **Connection Info dialog** (new `connection_info.py`): opened from
-  `Plugins > QGIS Live Driver > Connection Info`. The topmost row
+  `Plugins > dsh-qgis-driver > Connection Info`. The topmost row
   always shows the Harness repository row (path display + copy +
   "Browse…" + "Refresh") and the remote control state, and the content
   is split into tabs: `MCP` (endpoint URL + stdio/Streamable HTTP
@@ -296,7 +296,7 @@ Independent maintenance fork starts from upstream v0.16.2
 - **Explicit harness repo path**: with a standalone install (no
   marker/junction) `repo_root()` could not resolve the repo and Deploy
   Mode was unusable, so explicit specification via QSettings
-  `geo_driver/harness_repo` was added (resolution order: QSettings >
+  `dsh_qgis_driver/harness_repo` was added (resolution order: QSettings >
   marker.repo > junction inference). The Deploy Mode dialog has a repo
   row + "Browse…" button at the top, and the Connection Info dialog
   also has a repo display + "Select…" button. Once specified, even a
@@ -386,7 +386,7 @@ Independent maintenance fork starts from upstream v0.16.2
 ### Added
 
 - **Deploy Mode dialog** (`mode_switch.py`): the deploy mode can be
-  switched explicitly from `Plugins > QGIS Live Driver > Deploy Mode`.
+  switched explicitly from `Plugins > dsh-qgis-driver > Deploy Mode`.
   Switching between development mode (junction=repo preferred) and use
   mode (copy=snapshot) is done by launching the harness-side
   `deploy-plugin.ps1`, and the script is resolved from the `repo` key
@@ -410,13 +410,13 @@ Independent maintenance fork starts from upstream v0.16.2
 
 - **Layer organization service `layer_org`** (`layer_org.py`): a shared
   service that standardizes the display of layers added across
-  plugins. `plugins['geo_driver'].layer_org.place_all([(layer, ctx)])`
+  plugins. `plugins['dsh_qgis_driver'].layer_org.place_all([(layer, ctx)])`
   groups, renames and applies .qml styles to layers according to the
   rules of a profile JSON. Profiles have two tiers,
   `<plugin>/layer_org/*.json` (bundled defaults) +
   `~/.qgis-live/layer_org/*.json` (per user/industry, same-name
   preferred), and the active one is QSettings
-  `geo_driver/layer_org/profile`. The match conditions
+  `dsh_qgis_driver/layer_org/profile`. The match conditions
   (format/ext/provider/layer_type/geom/plugin/name_re/dataset_re/
   url_re/tags) are evaluated first-match-wins with all keys ANDed, and
   `root`/`fallback`/`rename`/`style`/`top`/`collapsed` are applied.
@@ -443,7 +443,7 @@ Independent maintenance fork starts from upstream v0.16.2
 ### Added
 
 - Added translation catalogs for de/es/fr/hi/it/pt/ru/zh
-  (`i18n/geo_driver_<lang>.ts`/`.qm`) to match the adopted language set
+  (`i18n/dsh_qgis_driver_<lang>.ts`/`.qm`) to match the adopted language set
   (AGENTS.md) (164 messages each). Together with ja, all 9 languages
   are bundled.
 
@@ -453,7 +453,7 @@ Independent maintenance fork starts from upstream v0.16.2
 
 - **Internationalization (i18n) support**: unified UI strings to English
   sources and set up the Qt translation (`.ts`/`.qm`) path. Added
-  `i18n/geo_driver_ja.ts`/`.qm` (all 164 messages translated).
+  `i18n/dsh_qgis_driver_ja.ts`/`.qm` (all 164 messages translated).
   `__init__.py` loads `QTranslator` at startup and switches to Japanese
   display according to the UI locale. The AI panel, MCP settings dialog
   and menu items are also translatable (using
@@ -478,7 +478,7 @@ Independent maintenance fork starts from upstream v0.16.2
 
 - **Persisted AI panel visibility state** (`__init__.py`): if the AI
   panel is open, it reopens automatically after a hot reload (or a QGIS
-  restart). The state is stored in `geo_driver/ai_panel_open`, and if
+  restart). The state is stored in `dsh_qgis_driver/ai_panel_open`, and if
   the dock was closed it is restored closed. This removes the hassle of
   reopening the panel when iterating UI development of
   ai_panel.py/ai_client.py via hot reload
@@ -510,13 +510,13 @@ Independent maintenance fork starts from upstream v0.16.2
 
 - **"Hot Reload" submenu in the menu** (new `hot_reload.py`): lists
   development target plugins under
-  `Plugins > QGIS Live Driver > Hot Reload`, and manually reloads the
+  `Plugins > dsh-qgis-driver > Hot Reload`, and manually reloads the
   selected plugin with sys.modules cleanup + reloadPlugin (+ open_dialog
   re-display). No QGIS restart or deploy needed. Candidates are, with
   junction placement, the ids of plugin.config.json traced from the own
   plugin's realpath to the repo; in environments where that cannot be
   found, all loaded plugins. "Reload all" reloads them in one go (the
-  control-side geo_driver last; the plugin itself can also be
+  control-side dsh_qgis_driver last; the plugin itself can also be
   reloaded). The list is rebuilt every time the menu is opened, so it
   follows changes in plugin.config.json or the load state
 - `live_driver.reload_plugin_now()`: extracted the body of the
@@ -812,7 +812,7 @@ Independent maintenance fork starts from upstream v0.16.2
 ### Added
 
 - **AI assistant panel** (`ai_panel.py` + `ai_client.py`). A chat-type
-  agent dock opened from `Plugins > QGIS Live Driver > AI assistant`.
+  agent dock opened from `Plugins > dsh-qgis-driver > AI assistant`.
   It connects to OpenAI-compatible (`/chat/completions` + function
   calling) and Gemini (`generateContent` + functionDeclarations) and
   runs the same tool set as `mcp_http.TOOLS` in a loop through

@@ -1,5 +1,5 @@
 {
-  "component": "geo_driver",
+  "component": "dsh_qgis_driver",
   "component_type": "qgis_plugin",
   "version": "0.16.2",
   "driver": {
@@ -401,7 +401,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -422,7 +422,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -443,7 +443,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -464,7 +464,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -485,7 +485,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -506,7 +506,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -527,7 +527,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -548,7 +548,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -569,7 +569,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -590,7 +590,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -611,7 +611,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -632,7 +632,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -653,7 +653,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -674,7 +674,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -695,7 +695,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -716,7 +716,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -737,7 +737,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -758,7 +758,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -779,7 +779,7 @@
       "standalone_ok": false,
       "depends": [
         "QGIS plugin load",
-        "geo_driver"
+        "dsh_qgis_driver"
       ],
       "verify": {
         "standalone": "",
@@ -1225,7 +1225,7 @@
       "id": "ai.catalog",
       "kind": "ai_integration",
       "name": "describe_plugins registration",
-      "source": "via geo_driver",
+      "source": "via dsh_qgis_driver",
       "signature": "",
       "summary": "Listed in the catalog and callable",
       "needs_runtime": true,
@@ -3303,7 +3303,7 @@
       "depends": [],
       "verify": {
         "standalone": "",
-        "integrated": "bridge_call geo_driver auditLog → assert entries exist"
+        "integrated": "bridge_call dsh_qgis_driver auditLog → assert entries exist"
       },
       "last_result": "pending",
       "last_verified": "",
@@ -3321,7 +3321,7 @@
       "depends": [],
       "verify": {
         "standalone": "",
-        "integrated": "bridge_call geo_driver auditSettings → assert enabled/max_bytes exist"
+        "integrated": "bridge_call dsh_qgis_driver auditSettings → assert enabled/max_bytes exist"
       },
       "last_result": "pending",
       "last_verified": "",

@@ -1,6 +1,6 @@
 """AI assistant dock - connects to LLM APIs and drives QGIS interactively.
 
-Opened from `Plugins > QGIS Live Driver > AI Assistant`.
+Opened from `Plugins > dsh-qgis-driver > AI Assistant`.
 After configuring a provider (OpenAI-compatible / Anthropic / Gemini / Azure OpenAI /
 GitHub Copilot), the endpoint, API key and model, this driver's tool set
 (qgis_pyeval/qgis_screenshot/...) is run in a loop from the chat through
@@ -60,7 +60,7 @@ from qgis.PyQt.QtWidgets import (
 
 from . import ai_client, credential_store
 
-_SETTING = "geo_driver/ai_{}"
+_SETTING = "dsh_qgis_driver/ai_{}"
 # Display order is [API] -> [ACP] -> [Bridge] (ai_client.PROVIDER_ORDER).
 # Future providers missing from ORDER are appended at the end in definition order.
 _PROVIDER_IDS = (
@@ -68,7 +68,7 @@ _PROVIDER_IDS = (
     + [p for p in ai_client.PROVIDERS
        if p not in ai_client.PROVIDER_ORDER])
 _MODEL_HINT = QT_TRANSLATE_NOOP(
-    "geo_driver",
+    "dsh_qgis_driver",
     "Press \"Fetch\" to list models from the endpoint. "
     "Values in parentheses are prices (input/output, $/1M tokens, "
     "reference only).")
@@ -177,7 +177,7 @@ class AiPanel(QDockWidget):
     def __init__(self, iface, get_driver, parent=None):
         super().__init__(
             QCoreApplication.translate(
-                "geo_driver", "AI Assistant"),
+                "dsh_qgis_driver", "AI Assistant"),
             parent or iface.mainWindow())
         self.setObjectName("GeoDriverAiPanel")
         self.iface = iface
@@ -186,7 +186,7 @@ class AiPanel(QDockWidget):
         # Chat sessions. Index 0 is always the "current chat" (matches the combo index).
         # Past chats are stacked behind it as {"title","history","html"}
         self._sessions = [{"title": QCoreApplication.translate(
-            "geo_driver", "Current chat"),
+            "dsh_qgis_driver", "Current chat"),
             "history": self._history, "html": "",
             "agent": None}]
         self._open_chat = 0     # index of the session being displayed
@@ -245,7 +245,7 @@ class AiPanel(QDockWidget):
         mr.addWidget(self.cmb_model, 1)
         mr.addWidget(self.btn_models)
         self.lbl_model_info = QLabel(
-            QCoreApplication.translate("geo_driver", _MODEL_HINT),
+            QCoreApplication.translate("dsh_qgis_driver", _MODEL_HINT),
             box)
         self.lbl_model_info.setStyleSheet("color:#666; font-size:11px")
         self.lbl_model_info.setWordWrap(True)
@@ -880,7 +880,7 @@ class AiPanel(QDockWidget):
         if not info:
             self.lbl_model_info.setText(
                 QCoreApplication.translate(
-                    "geo_driver", _MODEL_HINT))
+                    "dsh_qgis_driver", _MODEL_HINT))
             self._update_ctx_label()
             return
         parts = [ai_client.tr_label(ai_client.MODEL_KIND_LABELS.get(
@@ -1475,7 +1475,7 @@ class AiPanel(QDockWidget):
                   "/prompt": "prompts", "/prompts": "prompts"}
 
     _CMD_USAGE = QT_TRANSLATE_NOOP(
-        "geo_driver",
+        "dsh_qgis_driver",
         "Instruction commands (run locally, not sent to the API):\n"
         "  /agent               Show the current agent and list\n"
         "  /agent <name>        Switch agent\n"
@@ -1500,7 +1500,7 @@ class AiPanel(QDockWidget):
         if toks[0].lower() in ("/help", "/?"):
             self._append("user", text)
             self._append("cmd", QCoreApplication.translate(
-                "geo_driver", self._CMD_USAGE))
+                "dsh_qgis_driver", self._CMD_USAGE))
             return True
         kind = self._CHAT_CMDS.get(toks[0].lower())
         if kind is None:
@@ -1795,11 +1795,11 @@ class _InstructionsDialog(QDialog):
     """
 
     _KINDS = [("agents",
-               QT_TRANSLATE_NOOP("geo_driver", "Agents")),
+               QT_TRANSLATE_NOOP("dsh_qgis_driver", "Agents")),
               ("skills",
-               QT_TRANSLATE_NOOP("geo_driver", "Skills")),
+               QT_TRANSLATE_NOOP("dsh_qgis_driver", "Skills")),
               ("prompts",
-               QT_TRANSLATE_NOOP("geo_driver", "Prompts"))]
+               QT_TRANSLATE_NOOP("dsh_qgis_driver", "Prompts"))]
 
     def __init__(self, parent, kind="agents", select=None):
         super().__init__(parent)
@@ -1810,7 +1810,7 @@ class _InstructionsDialog(QDialog):
         self.cmb_kind = QComboBox(self)
         for kid, label in self._KINDS:
             self.cmb_kind.addItem(
-                QCoreApplication.translate("geo_driver", label),
+                QCoreApplication.translate("dsh_qgis_driver", label),
                 kid)
         lay.addWidget(self.cmb_kind)
         self.cmb = QComboBox(self)

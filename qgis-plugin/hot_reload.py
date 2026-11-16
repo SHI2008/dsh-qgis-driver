@@ -1,6 +1,6 @@
 """Development hot reload (manual).
 
-From the menu "Plugins > QGIS Live Driver > Hot Reload", manually clean
+From the menu "Plugins > dsh-qgis-driver > Hot Reload", manually clean
 sys.modules for the plugin under development and run reloadPlugin
 (+ re-show open_dialog). No QGIS restart or deploy is needed.
 
@@ -16,7 +16,7 @@ try:
 except ImportError:
     QCoreApplication = None
 
-CTRL_ID = "geo_driver"
+CTRL_ID = "dsh_qgis_driver"
 
 
 def dev_plugin_ids(own_file):
@@ -47,7 +47,7 @@ def dev_plugin_ids(own_file):
 def reload_plugins(ids, notify=None):
     """Reload the plugin ids one by one.
 
-    The control side, geo_driver, goes last (so the send path is not killed
+    The control side, dsh_qgis_driver, goes last (so the send path is not killed
     first). Reloading the plugin itself is also possible (the calling frame
     stays valid). notify is a callback receiving (level, msg)
     (level="info"/"warn").
@@ -58,10 +58,10 @@ def reload_plugins(ids, notify=None):
             from .live_driver import reload_plugin_now
             res = reload_plugin_now(pid)
             notify("info", QCoreApplication.translate(
-                "geo_driver", "Hot Reload: {0}").format(pid)
+                "dsh_qgis_driver", "Hot Reload: {0}").format(pid)
                 + (QCoreApplication.translate(
-                    "geo_driver", " (dialog reopened)")
+                    "dsh_qgis_driver", " (dialog reopened)")
                    if res.get("opened") else ""))
         except Exception:
             notify("warn", QCoreApplication.translate(
-                "geo_driver", "Hot Reload failed: {0}").format(pid))
+                "dsh_qgis_driver", "Hot Reload failed: {0}").format(pid))

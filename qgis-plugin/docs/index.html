@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>geo_driver Documentation | QGIS Live Harness</title>
+<title>dsh-qgis-driver Documentation</title>
 <meta name="description" content="Localhost-only remote control driver for QGIS (token-authenticated MCP/REST/file API for local AI tools) plus a built-in AI assistant panel for OpenAI-compatible APIs and a hot-reload watcher for plugin development">
 <link rel="stylesheet" href="style.css">
 <script src="nav.js" defer></script>
@@ -11,7 +11,7 @@
 <body>
 <div class="container">
 <header>
-<h1>QGIS Live Driver (`geo_driver`)</h1>
+<h1>dsh-qgis-driver (`dsh_qgis_driver`)</h1>
 <p>Localhost-only remote control driver for QGIS (token-authenticated MCP/REST/file API for local AI tools) plus a built-in AI assistant panel for OpenAI-compatible APIs and a hot-reload watcher for plugin development</p>
 </header>
 <main>
@@ -36,17 +36,17 @@ HTTP REST <code>/api/*</code> / MCP Streamable HTTP <code>/mcp</code> / MCP stdi
 <pre><code class="language-powershell"># From this repository (deploy all plugins at once)
 powershell -ExecutionPolicy Bypass -File scripts/deploy-plugin.ps1 -Install
 
-# Or manually: copy this folder to python/plugins/geo_driver/
+# Or manually: copy this folder to python/plugins/dsh_qgis_driver/
 # and enable it in the QGIS plugin manager
 </code></pre>
 <h3 id="quick-start-first-run">Quick start (first run)</h3>
 <ol>
 <li>Install and enable the plugin (see above).</li>
-<li>Turn on <code>Plugins &gt; QGIS Live Driver &gt; Remote Control (localhost only)</code> and
+<li>Turn on <code>Plugins &gt; dsh-qgis-driver &gt; Remote Control (localhost only)</code> and
 accept the warning; a <strong>Connection Info</strong> dialog opens automatically with all the
 information needed to connect (MCP URL, token,
 registry path, live dir). Afterwards you can reopen it at any time from
-<code>Plugins &gt; QGIS Live Driver &gt; Connection Info</code>.</li>
+<code>Plugins &gt; dsh-qgis-driver &gt; Connection Info</code>.</li>
 <li>Paste the displayed settings into your MCP client:<ul>
 <li><strong>stdio</strong> (recommended): starts the bundled <code>mcp_stdio.py</code> and
 auto-detects the running QGIS session, so no port/token configuration is needed.</li>
@@ -58,12 +58,12 @@ to <code>http://127.0.0.1:&lt;port&gt;/mcp</code>.</li>
 <li>(Development only) To bind the plugin to the <code>qgis_live_harness</code> repository
 (required for Deploy Mode / hot reload), specify the repository folder via
 <strong>Select Harness repository…</strong> in the Connection Info dialog or, under
-<code>Plugins &gt; QGIS Live Driver &gt; Deploy Mode</code>, via <strong>Browse…</strong>.
+<code>Plugins &gt; dsh-qgis-driver &gt; Deploy Mode</code>, via <strong>Browse…</strong>.
 The path is saved to QSettings and takes precedence over marker/junction auto-detection.</li>
 </ol>
 <p>Enabling has 2 routes (OFF and harmless by default):</p>
 <ul>
-<li><strong>Menu toggle</strong>: <code>Plugins &gt; QGIS Live Driver &gt; Remote Control (localhost only)</code>.
+<li><strong>Menu toggle</strong>: <code>Plugins &gt; dsh-qgis-driver &gt; Remote Control (localhost only)</code>.
 A warning dialog is shown the first time it is turned on, and the setting is saved to QSettings,
 so it is enabled automatically from the next launch.</li>
 </ul>
@@ -76,7 +76,7 @@ Harness-managed plugins (geo_search, etc.) are also consolidated into this toolb
 <code>scripts/verify-in-qgis.ps1</code> sets it when launching).</li>
 </ul>
 <h2 id="ai-assistant-panel">AI assistant panel</h2>
-<p><code>Plugins &gt; QGIS Live Driver &gt; AI Assistant</code> opens a
+<p><code>Plugins &gt; dsh-qgis-driver &gt; AI Assistant</code> opens a
 <strong>chat dock that operates QGIS interactively by connecting to an LLM API</strong>
 (<code>ai_panel.py</code> + <code>ai_client.py</code>).</p>
 <ul>
@@ -142,7 +142,7 @@ OpenAI-compatible destination used by the delegating chat</li>
 into an OpenAI-compatible chat (same shape as Devin [Bridge])</li>
 <li><strong>Devin [ACP]</strong>: a provider that uses a Devin CLI (<code>devin acp</code>) session as the
 chat engine. Sends flow to <code>session/prompt</code>,
-and Devin itself runs the tool loop (geo_driver's <code>/mcp</code>
+and Devin itself runs the tool loop (dsh_qgis_driver's <code>/mcp</code>
 is passed as an MCP server, so QGIS can also be operated from Devin via <code>qgis_pyeval</code> etc.).
 <strong>No API key required</strong>; it shares the IDE's Devin credentials
 (windsurf_api_key in credentials.toml).
@@ -336,7 +336,7 @@ The current backend can be checked in the panel's "Key storage" field.
 <li><strong>127.0.0.1 binding only</strong> — unreachable from external networks</li>
 <li><strong>Session token required</strong> — auto-generated on each launch. HTTP compares
 <code>Authorization: Bearer</code> etc., and commands.jsonl compares the <code>token</code> field of each line.
-The token is written only to <code>~/.qgis-live/&lt;pid&gt;-geo_driver.json</code> (registry) and
+The token is written only to <code>~/.qgis-live/&lt;pid&gt;-dsh_qgis_driver.json</code> (registry) and
 <code>live_dir/token</code>, with user-only ACLs applied</li>
 <li><strong>Host/Origin validation</strong> — HTTP requests whose Host or Origin points anywhere other than loopback are rejected
 (protection against DNS rebinding and browser-based drive-by)</li>
@@ -361,11 +361,11 @@ We accept no responsibility for any damage resulting from its use.</p>
 <h2>Related links</h2>
 <ul>
   <li><a href="https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html">Plugin list (site)</a></li>
-  <li><a href="https://github.com/yamamoto-ryuzo/qgis_live_harness/blob/master/qgis-plugin/geo_driver/README.md">README (GitHub)</a></li>
-  <li><a href="https://github.com/yamamoto-ryuzo/qgis_live_harness/blob/master/qgis-plugin/geo_driver/CHANGELOG.md">CHANGELOG (GitHub)</a></li>
+  <li><a href="https://github.com/yamamoto-ryuzo/qgis_live_harness/blob/master/qgis-plugin/dsh_qgis_driver/README.md">README (GitHub)</a></li>
+  <li><a href="https://github.com/yamamoto-ryuzo/qgis_live_harness/blob/master/qgis-plugin/dsh_qgis_driver/CHANGELOG.md">CHANGELOG (GitHub)</a></li>
 </ul>
-<p><small>The canonical source is <code>qgis-plugin/geo_driver/docs/</code>.
-The site's <code>docs/geo_driver/</code> is
+<p><small>The canonical source is <code>qgis-plugin/dsh_qgis_driver/docs/</code>.
+The site's <code>docs/dsh_qgis_driver/</code> is
 a mirror generated by <code>scripts/build-plugin-docs.py</code>.</small></p>
 </main>
 </div>

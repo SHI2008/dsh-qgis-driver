@@ -64,19 +64,19 @@ except ImportError:
 def tr_label(src):
     """Runtime translation of UI labels. Stays English where Qt is absent (pytest)."""
     if QCoreApplication is not None:
-        return QCoreApplication.translate("geo_driver", src)
+        return QCoreApplication.translate("dsh_qgis_driver", src)
     return src
 
 
 _F_PRICE_TOKENS = QT_TRANSLATE_NOOP(
-    "geo_driver", "Input {0} / Output {1} /1M tokens")
+    "dsh_qgis_driver", "Input {0} / Output {1} /1M tokens")
 _F_PRICE_IMG = QT_TRANSLATE_NOOP(
-    "geo_driver", "{0} /image (image generation)")
-_F_KIND = QT_TRANSLATE_NOOP("geo_driver", "Kind: {0}")
-_F_PRICE = QT_TRANSLATE_NOOP("geo_driver", "Price: {0} ({1})")
-_F_CONTEXT = QT_TRANSLATE_NOOP("geo_driver", "Context: {0} tokens")
-_LBL_API_VALUE = QT_TRANSLATE_NOOP("geo_driver", "API value")
-_LBL_REFERENCE = QT_TRANSLATE_NOOP("geo_driver", "reference")
+    "dsh_qgis_driver", "{0} /image (image generation)")
+_F_KIND = QT_TRANSLATE_NOOP("dsh_qgis_driver", "Kind: {0}")
+_F_PRICE = QT_TRANSLATE_NOOP("dsh_qgis_driver", "Price: {0} ({1})")
+_F_CONTEXT = QT_TRANSLATE_NOOP("dsh_qgis_driver", "Context: {0} tokens")
+_LBL_API_VALUE = QT_TRANSLATE_NOOP("dsh_qgis_driver", "API value")
+_LBL_REFERENCE = QT_TRANSLATE_NOOP("dsh_qgis_driver", "reference")
 
 # Max number of tool round trips per user message (runaway protection)
 MAX_TOOL_ROUNDS = 25
@@ -136,15 +136,15 @@ GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"  # nosec
 
 PROVIDERS = {
     "openai": {
-        "label": QT_TRANSLATE_NOOP("geo_driver", "OpenAI-compatible"),
+        "label": QT_TRANSLATE_NOOP("dsh_qgis_driver", "OpenAI-compatible"),
         "tag": "【API】",
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "API key (may be empty for local servers)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "https://api.openai.com/v1  or  http://localhost:11434/v1"),
     },
     "anthropic": {
@@ -153,7 +153,7 @@ PROVIDERS = {
         "base": ANTHROPIC_DEFAULT_BASE,
         "model": ANTHROPIC_DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "Anthropic API key (issued in the Anthropic Console)"),
         "endpoint_hint": "https://api.anthropic.com",
     },
@@ -163,7 +163,7 @@ PROVIDERS = {
         "base": GEMINI_DEFAULT_BASE_URL,
         "model": GEMINI_DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "Gemini API key (issued in AI Studio)"),
         "endpoint_hint": "https://generativelanguage.googleapis.com/v1beta",
     },
@@ -174,7 +174,7 @@ PROVIDERS = {
                  "/openai/deployments/<deployment>"),
         "model": AZURE_DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "Azure OpenAI API key (KEY1/KEY2 of the resource)"),
         "endpoint_hint": ("https://<resource>.openai.azure.com"
                           "/openai/deployments/<deployment>"),
@@ -185,11 +185,11 @@ PROVIDERS = {
         "base": COPILOT_DEFAULT_BASE,
         "model": COPILOT_DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "GitHub token (Copilot subscription required; can be "
             "acquired automatically via \"Sign in with GitHub\")"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "https://api.githubcopilot.com  (URL of a compatible "
             "proxy such as copilot-api)"),
     },
@@ -199,10 +199,10 @@ PROVIDERS = {
         "base": "",
         "model": "default",
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "not required (uses the IDE's Devin sign-in)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "working directory for Devin sessions "
             "(default: user home)"),
     },
@@ -212,24 +212,24 @@ PROVIDERS = {
         "base": "",
         "model": "default",
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "not required (uses the Copilot CLI / gh sign-in)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "working directory for Copilot CLI sessions "
             "(default: user home)"),
     },
     "acp": {
-        "label": QT_TRANSLATE_NOOP("geo_driver", "Custom agent"),
+        "label": QT_TRANSLATE_NOOP("dsh_qgis_driver", "Custom agent"),
         "tag": "【ACP】",
         "base": "",
         "model": "default",
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "working directory for the agent session "
             "(default: user home)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "ACP launch command for an arbitrary agent CLI "
             "(e.g. my-agent acp)"),
     },
@@ -239,12 +239,12 @@ PROVIDERS = {
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "API key of the backing OpenAI-compatible endpoint "
             "(the chat LLM delegates work to Devin via the "
             "qgis_devin_* tools)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "OpenAI-compatible endpoint driving the delegation chat "
             "(e.g. https://api.openai.com/v1)"),
     },
@@ -254,25 +254,25 @@ PROVIDERS = {
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "API key of the backing OpenAI-compatible endpoint "
             "(the chat LLM delegates work to Copilot CLI via the "
             "qgis_copilot_* tools)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "OpenAI-compatible endpoint driving the delegation chat "
             "(e.g. https://api.openai.com/v1)"),
     },
     "agent": {
-        "label": QT_TRANSLATE_NOOP("geo_driver", "External agent"),
+        "label": QT_TRANSLATE_NOOP("dsh_qgis_driver", "External agent"),
         "tag": "【Bridge】",
         "base": "",
         "model": "default",
         "key_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "Bearer token for the agent endpoint (optional)"),
         "endpoint_hint": QT_TRANSLATE_NOOP(
-            "geo_driver",
+            "dsh_qgis_driver",
             "agent endpoint URL accepting POST {message,...} and "
             "replying {reply: ...} "
             "(e.g. http://127.0.0.1:8511/agent)"),
@@ -288,17 +288,17 @@ PROVIDER_ORDER = ["gemini", "copilot", "azure", "anthropic", "openai",
 # Provider category tag -> connection-method description (for tooltips/help)
 PROVIDER_TAGS = {
     "【API】": QT_TRANSLATE_NOOP(
-        "geo_driver",
+        "dsh_qgis_driver",
         "Direct LLM API — each message is sent to the model and the "
         "panel runs the tool loop itself"),
     "【ACP】": QT_TRANSLATE_NOOP(
-        "geo_driver",
+        "dsh_qgis_driver",
         "Agent session — a Devin/Copilot CLI session is the chat "
         "engine and runs its own tool loop (the panel is a chat UI; "
         "no API key needed — uses the CLI/IDE sign-in; the endpoint "
         "field is the working directory)"),
     "【Bridge】": QT_TRANSLATE_NOOP(
-        "geo_driver",
+        "dsh_qgis_driver",
         "Delegation chat — a normal API chat with injected "
         "instructions to hand substantial work to an agent CLI via "
         "the qgis_devin_* / qgis_copilot_* tools (the panel still "
@@ -310,11 +310,11 @@ PROVIDER_TAGS = {
 # Model kind -> display label. The combo box is grouped in this order.
 MODEL_KINDS = [
     ("chat_vision",
-     QT_TRANSLATE_NOOP("geo_driver", "Text (image input)")),
-    ("chat", QT_TRANSLATE_NOOP("geo_driver", "Text")),
-    ("image", QT_TRANSLATE_NOOP("geo_driver", "Image generation")),
-    ("embed", QT_TRANSLATE_NOOP("geo_driver", "Embedding")),
-    ("other", QT_TRANSLATE_NOOP("geo_driver", "Audio/Other")),
+     QT_TRANSLATE_NOOP("dsh_qgis_driver", "Text (image input)")),
+    ("chat", QT_TRANSLATE_NOOP("dsh_qgis_driver", "Text")),
+    ("image", QT_TRANSLATE_NOOP("dsh_qgis_driver", "Image generation")),
+    ("embed", QT_TRANSLATE_NOOP("dsh_qgis_driver", "Embedding")),
+    ("other", QT_TRANSLATE_NOOP("dsh_qgis_driver", "Audio/Other")),
 ]
 MODEL_KIND_LABELS = dict(MODEL_KINDS)
 
@@ -1453,9 +1453,9 @@ def _bundled_dir(kind):
 
 
 def _bundled_dirs(kind):
-    """All bundled <kind> directories (geo_driver + every loaded plugin).
+    """All bundled <kind> directories (dsh_qgis_driver + every loaded plugin).
 
-    Lets each plugin bundle its own <plugin>/<kind>/*.md, with geo_driver's
+    Lets each plugin bundle its own <plugin>/<kind>/*.md, with dsh_qgis_driver's
     first; on a name clash the earlier directory wins.
     """
     dirs = [_bundled_dir(kind)]

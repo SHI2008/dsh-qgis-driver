@@ -39,12 +39,12 @@ except ImportError:
 
 
 _LBL_DPAPI = QT_TRANSLATE_NOOP(
-    "geo_driver",
+    "dsh_qgis_driver",
     "Windows DPAPI (encrypted under the user account, "
     "same mechanism as browser password storage)")
-_LBL_KEYCHAIN = QT_TRANSLATE_NOOP("geo_driver", "macOS Keychain")
+_LBL_KEYCHAIN = QT_TRANSLATE_NOOP("dsh_qgis_driver", "macOS Keychain")
 _LBL_FILE = QT_TRANSLATE_NOOP(
-    "geo_driver",
+    "dsh_qgis_driver",
     "~/.qgis-live/ai-secrets.json (mode 600, plain text; "
     "no keyring available)")
 
@@ -188,7 +188,7 @@ def _secret_tool(*args, stdin=None):
 
 def _ss_set(name, secret):
     rc, _ = _secret_tool("store",
-                         "--label=QGIS Live Driver API key",
+                         "--label=dsh-qgis-driver API key",
                          "service", _SERVICE, "account", name,
                          stdin=secret.encode("utf-8"))
     return rc == 0
@@ -241,7 +241,7 @@ def backend_label():
         "file": _LBL_FILE,
     }[backend()]
     if QCoreApplication is not None:
-        return QCoreApplication.translate("geo_driver", src)
+        return QCoreApplication.translate("dsh_qgis_driver", src)
     return src
 
 

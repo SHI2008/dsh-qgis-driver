@@ -8,7 +8,7 @@ Placement (same bundled-default + user-override pattern as agents/skills):
   bundled : <plugin>/layer_org/*.json    (read-only defaults)
   user    : ~/.qgis-live/layer_org/*.json (honours QGIS_LIVE_REGISTRY, same name wins)
 
-The active profile is QSettings "geo_driver/layer_org/profile"
+The active profile is QSettings "dsh_qgis_driver/layer_org/profile"
 (stem name, default "default").
 
 Profile JSON schema:
@@ -43,7 +43,7 @@ import json
 import os
 import re
 
-_SETTING_PROFILE = "geo_driver/layer_org/profile"
+_SETTING_PROFILE = "dsh_qgis_driver/layer_org/profile"
 _DEFAULT_PROFILE = "default"
 
 
@@ -265,7 +265,7 @@ def render_template(tpl, attrs):
 class LayerOrganizer:
     """Organize added layers into the layer tree using the profile rules.
 
-    Other plugins call this as plugins['geo_driver'].layer_org.place_all().
+    Other plugins call this as plugins['dsh_qgis_driver'].layer_org.place_all().
     When the driver is absent or the profile is disabled, it quietly returns a
     no-op report so the caller can fall back to its previous behavior.
     """

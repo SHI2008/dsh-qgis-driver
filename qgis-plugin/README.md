@@ -1,10 +1,10 @@
-> **Core driver for QGIS Live Harness** — [QGIS Live Harness](https://yamamoto-ryuzo.github.io/qgis_live_harness/) · [Plugin list](https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html) · [Documentation](https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver/docs) · [Repository](https://github.com/yamamoto-ryuzo/qgis_live_harness)
+> **Core driver for QGIS Live Harness** — [QGIS Live Harness](https://yamamoto-ryuzo.github.io/qgis_live_harness/) · [Plugin list](https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html) · [Documentation](https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/dsh_qgis_driver/docs) · [Repository](https://github.com/yamamoto-ryuzo/qgis_live_harness)
 
-# QGIS Live Driver (`geo_driver`)
+# dsh-qgis-driver (`dsh_qgis_driver`)
 
 > **Fork notice:** This repository is an independent fork of
 > [yamamoto-ryuzo/qgis_live_harness](https://github.com/yamamoto-ryuzo/qgis_live_harness)
-> (`qgis-plugin/geo_driver`, upstream v0.16.2). It is maintained separately
+> (`qgis-plugin/dsh_qgis_driver`, upstream v0.16.2). It is maintained separately
 > from the upstream project, and changes here are not intended to be merged
 > upstream. The original author and GPL-3.0 licensing are preserved.
 
@@ -44,7 +44,7 @@ A remote client connects to `http://<host>:<port>/api/*` with
 `Authorization: Bearer <QGIS_LIVE_API_KEY>` (the "port + Key" form). When
 `QGIS_LIVE_HOST` is a non-loopback address, the plugin also drops the
 localhost Host/Origin guard. The effective host/port and token are written to
-the registry file `~/.qgis-live/<pid>-geo_driver.json`.
+the registry file `~/.qgis-live/<pid>-dsh_qgis_driver.json`.
 
 > The per-session token (in the registry) still works for the local machine;
 > `QGIS_LIVE_API_KEY` is the stable key to share with the second machine.

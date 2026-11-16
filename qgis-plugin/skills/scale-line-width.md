@@ -1,4 +1,4 @@
-# Scale-linked standard line widths (geo_driver scale_style)
+# Scale-linked standard line widths (dsh_qgis_driver scale_style)
 
 Procedure for suggesting a standard, appropriate line width from the layer's use (category) and the display scale, then applying it to the renderer.
 use_when: the user asks to decide line widths, line thickness by scale, the "appropriate line width", or scale-dependent styling
@@ -6,7 +6,7 @@ use_when: the user asks to decide line widths, line thickness by scale, the "app
 ## Principles
 
 - Line widths come from a **standard table** of "category (road/river/boundary, etc.) × scale band". Values live in profile JSON; never guess.
-- Call via `qgis_bridge_call` → `plugin_id="geo_driver"`. There are five methods:
+- Call via `qgis_bridge_call` → `plugin_id="dsh_qgis_driver"`. There are five methods:
   `scaleStyleProfiles` / `scaleStyleTable` / `setScaleStyleProfile` / `suggestScaleWidth` / `applyScaleWidth`
 - "Just show me suggestions" = `suggestScaleWidth` or `applyScaleWidth(dry=True)`; actual apply = `applyScaleWidth`
 
@@ -30,20 +30,20 @@ Defaults when omitted: layer_id=active layer, category=inferred from layer name/
 | `meters` | Draw in real-world metres (RenderMetersInMapUnits). Apparent thickness changes with zoom | Widths where real size matters (road width, river width, buffer representation) |
 | `rules` | Generate a rule-based renderer whose width switches per scale band | Standard finish for layers used across a wide scale range; the legend shows band names + widths |
 
-`rules` delegates to geo_legend's `applyRules` when loaded (the result gains `delegated`); when not loaded or on failure it falls back to geo_driver's internal implementation. The returned `rules[]` shows each band's `min_scale`/`max_scale`/`width`.
+`rules` delegates to geo_legend's `applyRules` when loaded (the result gains `delegated`); when not loaded or on failure it falls back to dsh_qgis_driver's internal implementation. The returned `rules[]` shows each band's `min_scale`/`max_scale`/`width`.
 
 ## Recipe
 
 ```text
 1. First look at the suggestion:
-   qgis_bridge_call geo_driver suggestScaleWidth [null, null, null]
+   qgis_bridge_call dsh_qgis_driver suggestScaleWidth [null, null, null]
    → check category/band/width_mm/real_width_m and present them to the user
 
 2. Apply (fixed width):
-   qgis_bridge_call geo_driver applyScaleWidth [null, null, null, "mm"]
+   qgis_bridge_call dsh_qgis_driver applyScaleWidth [null, null, null, "mm"]
 
 3. Switch to scale-band rules (recommended, standard finish):
-   qgis_bridge_call geo_driver applyScaleWidth [null, null, null, "rules"]
+   qgis_bridge_call dsh_qgis_driver applyScaleWidth [null, null, null, "rules"]
    → check the legend display with legendSpec (geo_legend)
 ```
 

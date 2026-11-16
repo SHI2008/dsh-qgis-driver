@@ -12,7 +12,7 @@ The standard width table is managed by profile JSON (the same two tiers as layer
   bundled : <plugin>/scale_style/*.json    (read-only defaults)
   user    : ~/.qgis-live/scale_style/*.json (honours QGIS_LIVE_REGISTRY, same name wins)
 
-The active profile is QSettings "geo_driver/scale_style/profile"
+The active profile is QSettings "dsh_qgis_driver/scale_style/profile"
 (stem name, default "default").
 
 Profile JSON schema:
@@ -42,7 +42,7 @@ import os
 
 from .layer_org import _match_all, layer_attrs
 
-_SETTING_PROFILE = "geo_driver/scale_style/profile"
+_SETTING_PROFILE = "dsh_qgis_driver/scale_style/profile"
 _DEFAULT_PROFILE = "default"
 
 
@@ -243,7 +243,7 @@ def _symbol_color(symbol):
 class ScaleStyler:
     """Shared service that derives layer line widths from the standard table plus scale.
 
-    Used from bridge and other plugins via plugins['geo_driver'].scale_style.
+    Used from bridge and other plugins via plugins['dsh_qgis_driver'].scale_style.
     Even with a disabled or missing profile it quietly returns an error dict.
     """
 

@@ -1,6 +1,6 @@
 """Deploy mode (dev/use) switch UI.
 
-From the menu "Plugins > QGIS Live Driver > Deploy Mode", explicitly switch
+From the menu "Plugins > dsh-qgis-driver > Deploy Mode", explicitly switch
 between development mode (junction = repo preferred) and use mode (real dir =
 restore the parked copy). The actual switch is performed by launching
 scripts/deploy-plugin.ps1 in the repository, and afterwards the plugin can
@@ -25,10 +25,10 @@ import json
 import os
 import subprocess  # nosec B404  # needed to launch deploy-plugin.ps1
 
-CTRL_ID = "geo_driver"
+CTRL_ID = "dsh_qgis_driver"
 _MARK = "qgis_live_mode.json"
 _REPARSE = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT
-SETTING_REPO = "geo_driver/harness_repo"
+SETTING_REPO = "dsh_qgis_driver/harness_repo"
 
 
 def _looks_like_repo(path):
@@ -242,7 +242,7 @@ def show_dialog(iface, own_file, notify=None):
         QVBoxLayout)
 
     def tr(s):
-        return QCoreApplication.translate("geo_driver", s)
+        return QCoreApplication.translate("dsh_qgis_driver", s)
 
     dlg = QDialog(iface.mainWindow())
     dlg.setWindowTitle(tr("Deploy Mode"))
@@ -267,7 +267,7 @@ def show_dialog(iface, own_file, notify=None):
     chk.setChecked(True)
     lay.addWidget(chk)
     note = QLabel(tr(
-        "geo_driver itself is reloaded via Hot Reload menu "
+        "dsh_qgis_driver itself is reloaded via Hot Reload menu "
         "or QGIS restart."), dlg)
     note.setWordWrap(True)
     lay.addWidget(note)
@@ -323,7 +323,7 @@ def show_dialog(iface, own_file, notify=None):
     def do_switch(mode):
         if not deploy_state(own_file)["repo"]:
             QMessageBox.warning(
-                dlg, "QGIS Live Driver",
+                dlg, "dsh-qgis-driver",
                 tr("Repository not found: cannot locate deploy-plugin.ps1"))
             return
         dev_btn.setEnabled(False)
@@ -336,7 +336,7 @@ def show_dialog(iface, own_file, notify=None):
             QApplication.restoreOverrideCursor()
         if not ok:
             QMessageBox.warning(
-                dlg, "QGIS Live Driver",
+                dlg, "dsh-qgis-driver",
                 tr("Mode switch failed") + "\n" + out[-2000:])
             inst_btn.setEnabled(True)
             refresh()
@@ -372,7 +372,7 @@ def show_dialog(iface, own_file, notify=None):
         ok, msg = set_repo_path(d)
         if not ok:
             QMessageBox.warning(
-                dlg, "QGIS Live Driver",
+                dlg, "dsh-qgis-driver",
                 tr("Not a harness repository") + "\n" + msg)
             return
         refresh()

@@ -1,4 +1,4 @@
-"""AI-facing bridge for geo_driver itself.
+"""AI-facing bridge for dsh_qgis_driver itself.
 
 The driver's own features are already callable from every route through the
 LiveDriver command surface (pyeval/status/bridge_call etc.), so this module only
@@ -9,7 +9,7 @@ status report.
 import json
 import os
 
-_PLUGIN_ID = "geo_driver"
+_PLUGIN_ID = "dsh_qgis_driver"
 
 _COMMANDS = [
     {"name": "pyeval", "signature": "pyeval(code)",
@@ -35,7 +35,7 @@ _COMMANDS = [
 
 
 class GeoDriverBridge:
-    """Self-description bridge for QGIS Live Driver.
+    """Self-description bridge for dsh-qgis-driver.
 
     Methods return JSON strings (same contract as other plugins' bridges).
     """
@@ -54,7 +54,7 @@ class GeoDriverBridge:
         """Standard self-description for the describe_plugins catalog."""
         return self._ok({
             "id": _PLUGIN_ID,
-            "name": "QGIS Live Driver",
+            "name": "dsh-qgis-driver",
             "summary": "Remote-control hub inside the QGIS process. Exposes "
                        "pyeval/status/bridge_call/describe_plugins and friends over file JSONL, "
                        "REST. The layer_org service standardizes grouping and naming of "
@@ -450,12 +450,12 @@ class GeoDriverBridge:
                 from qgis.PyQt.QtCore import QSettings
                 s = QSettings()
                 if enabled is not None:
-                    s.setValue("geo_driver/audit/enabled", bool(enabled))
+                    s.setValue("dsh_qgis_driver/audit/enabled", bool(enabled))
                 if max_bytes is not None:
-                    s.setValue("geo_driver/audit/max_bytes",
+                    s.setValue("dsh_qgis_driver/audit/max_bytes",
                                int(max_bytes))
                 if max_files is not None:
-                    s.setValue("geo_driver/audit/max_files",
+                    s.setValue("dsh_qgis_driver/audit/max_files",
                                int(max_files))
             on, mb, mf = _audit_conf()
             return self._ok({"enabled": on, "max_bytes": mb,

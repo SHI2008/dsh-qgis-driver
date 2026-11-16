@@ -1,4 +1,4 @@
-# geo_driver — Full Logic Sheet
+# dsh_qgis_driver — Full Logic Sheet
 
 - Type: qgis_plugin / Version: 0.16.1
 - Generated: 2026-11-15T22:33:28+09:00 / Features: 179
@@ -1290,7 +1290,7 @@ flowchart LR
 
 ### ai.catalog — Registered in describe_plugins
 
-- kind: `ai_integration` / source: `via geo_driver`
+- kind: `ai_integration` / source: `via dsh_qgis_driver`
 - signature: ``
 - Summary: Listed in the catalog and callable
 - needs_runtime=True / standalone_ok=False
