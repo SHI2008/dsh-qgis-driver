@@ -1,42 +1,42 @@
-"""レイヤ整理サービス(LayerOrganizer)。
+"""Layer organization service (LayerOrganizer).
 
-プラグインをまたいだ「追加レイヤの表示標準化」を担う。
-geo_import 等が追加したレイヤを、プロファイルJSONのルールに従って
-レイヤツリーのグループへ移動・リネーム・スタイル適用する。
+Provides cross-plugin "display standardization for added layers".
+Layers added by geo_import and others are moved into layer tree groups,
+renamed and styled according to the rules of a profile JSON.
 
-配置(agents/skills と同じ 同梱デフォルト+ユーザ上書き パターン):
-  同梱   : <plugin>/layer_org/*.json    (読み取り専用デフォルト)
-  ユーザ : ~/.qgis-live/layer_org/*.json (QGIS_LIVE_REGISTRY準拠、同名優先)
+Placement (same bundled-default + user-override pattern as agents/skills):
+  bundled : <plugin>/layer_org/*.json    (read-only defaults)
+  user    : ~/.qgis-live/layer_org/*.json (honours QGIS_LIVE_REGISTRY, same name wins)
 
-アクティブプロファイルは QSettings "geo_driver/layer_org/profile"
-(stem名、既定 "default")。
+The active profile is QSettings "geo_driver/layer_org/profile"
+(stem name, default "default").
 
-プロファイルJSONスキーマ:
+Profile JSON schema:
   {
-    "name": "default",              // 表示名(省略時=ファイルstem)
-    "description": "...",           // 用途メモ
-    "root": "取込データ",            // 全グループの親(省略時=ツリー直下)
-    "enabled": true,                // false で整理を無効化
-    "rules": [                      // 先勝ち。全キーAND一致
-      {"match": {"format": ["wms","wmts","xyz"],   // ctxのリソースformatまたは拡張子
-                 "ext": ["shp","gpkg"],            // レイヤソースの拡張子
+    "name": "default",              // display name (default = file stem)
+    "description": "...",           // purpose note
+    "root": "Imported Data",        // parent of every group (default = tree root)
+    "enabled": true,                // false disables organizing
+    "rules": [                      // first match wins; all keys ANDed
+      {"match": {"format": ["wms","wmts","xyz"],   // ctx resource format or extension
+                 "ext": ["shp","gpkg"],            // layer source extension
                  "provider": ["wms","ogr"],        // layer.providerType()
                  "layer_type": ["vector","raster","mesh","pointcloud"],
                  "geom": ["point","line","polygon","none","unknown"],
-                 "plugin": ["geo_import"],         // ctxの呼出元プラグインid
-                 "name_re": "正規表現",            // レイヤ名/リソース名にsearch
-                 "dataset_re": "正規表現",         // ctxのデータセット名にsearch
-                 "url_re": "正規表現"},            // リソースURL/レイヤソースにsearch
-       "group": "背景/サービス",     // '/'区切りのグループパス(root配下)
-       "rename": "{dataset} - {resource}",        // 省略可。{name}{format}{ext}{provider}も可
-       "style": "styles/foo.qml",   // 省略可。プロファイルdir相対または絶対.qml
-       "top": true}                 // 省略可。グループ先頭に挿入(既定=末尾)
+                 "plugin": ["geo_import"],         // calling plugin id from ctx
+                 "name_re": "regex",               // search layer/resource name
+                 "dataset_re": "regex",            // search ctx dataset name
+                 "url_re": "regex"},               // search resource URL/layer source
+       "group": "Background/Services",  // '/'-separated group path (under root)
+       "rename": "{dataset} - {resource}",   // optional. also {name}{format}{ext}{provider}
+       "style": "styles/foo.qml",   // optional. .qml relative to profile dir or absolute
+       "top": true}                 // optional. insert at group top (default = end)
     ],
-    "fallback": "その他"             // どのルールにも合わない時のgroup(省略時=移動しない)
+    "fallback": "Other"             // group when no rule matches (default = do not move)
   }
 
-GUIスレッド前提のQGIS操作は全てメソッド内importに閉じ込め、
-このモジュール自体は stdlib のみでimport可能(unit test対象)。
+Every QGIS operation that assumes the GUI thread is confined to imports inside
+methods, so this module itself imports with stdlib only (unit test target).
 """
 
 import json
@@ -54,12 +54,12 @@ def _registry_dir():
 
 
 def profiles_dir():
-    """ユーザ定義プロファイル置き場 ~/.qgis-live/layer_org/。"""
+    """Directory for user-defined profiles: ~/.qgis-live/layer_org/."""
     return os.path.join(_registry_dir(), "layer_org")
 
 
 def _bundled_dir():
-    """プラグイン同梱のデフォルトプロファイル dir。"""
+    """Directory of the plugin's bundled default profiles."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "layer_org")
 
@@ -69,9 +69,9 @@ def _as_list(v):
 
 
 def list_profiles():
-    """利用可能なプロファイル一覧。[{id,name,description,builtin,path}]。
+    """Available profiles. [{id,name,description,builtin,path}].
 
-    bundled→user の順に走査し、同名(stem)はユーザ側が上書き。
+    Scans bundled then user; a same stem is overridden by the user side.
     """
     out = {}
     for d, builtin in ((_bundled_dir(), True), (profiles_dir(), False)):
@@ -89,7 +89,7 @@ def list_profiles():
                         meta = json.load(fh)
                     name = meta.get("name") or stem
                     desc = meta.get("description") or ""
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
                 out[stem] = {"id": stem, "name": name, "description": desc,
                              "path": p, "builtin": builtin}
@@ -97,7 +97,7 @@ def list_profiles():
 
 
 def load_profile(name):
-    """プロファイルid → (dict, path)。見つからなければ (None, None)。"""
+    """Profile id -> (dict, path). (None, None) when not found."""
     for p in list_profiles():
         if p["id"] == name:
             try:
@@ -112,17 +112,17 @@ def load_profile(name):
     return None, None
 
 
-# ---- レイヤ属性の抽出(QGIS依存は関数内に閉じ込める) ----
+# ---- layer attribute extraction (QGIS dependencies kept inside functions) ----
 
 _SOURCE_SPLIT_RE = re.compile(r"[|?]")
 
 
 def _layer_ext(source):
-    """レイヤソース文字列から拡張子を推定する(先頭のパス部のみ見る)。"""
+    """Estimate the extension from a layer source string (leading path part only)."""
     if not source:
         return ""
     head = _SOURCE_SPLIT_RE.split(source, 1)[0]
-    # URIパラメータ型(url=...)はファイル拡張子を持たない
+    # URI-parameter forms (url=...) carry no file extension
     if "=" in os.path.basename(head):
         return ""
     ext = os.path.splitext(head)[1]
@@ -130,9 +130,9 @@ def _layer_ext(source):
 
 
 def layer_attrs(layer, ctx=None):
-    """ルール照合用の属性dictをレイヤ+コンテキストから作る。
+    """Build the attribute dict for rule matching from the layer plus context.
 
-    ctxキー(呼出元が付与): plugin_id / dataset / dataset_id /
+    ctx keys (supplied by the caller): plugin_id / dataset / dataset_id /
     resource / resource_id / format / url / file / tags
     """
     ctx = dict(ctx or {})
@@ -168,7 +168,7 @@ def layer_attrs(layer, ctx=None):
     src = ""
     try:
         src = layer.source() or ""
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
     attrs["source"] = src
     ext = _layer_ext(str(ctx.get("file") or "")) \
@@ -181,9 +181,9 @@ def layer_attrs(layer, ctx=None):
 
 
 def match_rule(rules, attrs):
-    """ルール配列を先頭から評価し、最初に一致したルールを返す。
+    """Evaluate the rule array from the top and return the first match.
 
-    rule["match"] の全キーが一致でAND。matchが空/欠落なら常時一致。
+    All keys of rule["match"] must match (AND). An empty/missing match always matches.
     """
     for i, rule in enumerate(rules or []):
         m = rule.get("match") or {}
@@ -236,12 +236,12 @@ def _match_all(m, attrs):
             if not {str(w).lower() for w in _as_list(want)} & tags:
                 return False
         else:
-            return False   # 未定義キーはマッチ失敗(設定ミスを沈黙させない)
+            return False   # unknown keys fail the match (do not silence config errors)
     return True
 
 
 def render_template(tpl, attrs):
-    """renameテンプレートの {token} を属性値で置換する。"""
+    """Substitute the {token}s of a rename template with attribute values."""
     ctx = attrs.get("ctx") or {}
     mapping = {
         "name": attrs.get("name", ""),
@@ -263,14 +263,14 @@ def render_template(tpl, attrs):
 
 
 class LayerOrganizer:
-    """追加レイヤをプロファイルのルールでレイヤツリーへ整理する。
+    """Organize added layers into the layer tree using the profile rules.
 
-    他プラグインからは plugins['geo_driver'].layer_org.place_all()
-    で呼ぶ。ドライバ不在・プロファイル無効時は呼び出し側が従来動作へ
-    フォールバックできるよう、ここでは静かにno-opレポートを返す。
+    Other plugins call this as plugins['geo_driver'].layer_org.place_all().
+    When the driver is absent or the profile is disabled, it quietly returns a
+    no-op report so the caller can fall back to its previous behavior.
     """
 
-    # ---------- プロファイル解決 ----------
+    # ---------- profile resolution ----------
 
     def active_profile_name(self):
         try:
@@ -289,21 +289,21 @@ class LayerOrganizer:
         try:
             from qgis.PyQt.QtCore import QSettings
             QSettings().setValue(_SETTING_PROFILE, str(name))
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         return {"ok": True, "active": str(name)}
 
     def profile(self, name=None):
-        """プロファイルdictを返す(未指定=アクティブ)。無効/不在はNone。"""
+        """Return the profile dict (omitted = active). None if disabled/missing."""
         prof, _ = load_profile(name or self.active_profile_name())
         if prof is None or prof.get("enabled") is False:
             return None
         return prof
 
-    # ---------- 整理本体 ----------
+    # ---------- the organizing itself ----------
 
     def place_all(self, items, profile_name=None, dry=False):
-        """items=[(layer, ctx)|layer, ...] をルール適用で配置する。
+        """Place items=[(layer, ctx)|layer, ...] by applying the rules.
 
         @returns {"profile": id, "enabled": bool,
                   "placed": [...], "skipped": [...]}
@@ -324,7 +324,7 @@ class LayerOrganizer:
                 "placed": entries, "skipped": skipped}
 
     def place(self, layer, ctx=None, prof=None, dry=False):
-        """1レイヤをルール適用で配置し、結果エントリを返す。"""
+        """Place one layer by applying the rules and return its result entry."""
         attrs = layer_attrs(layer, ctx)
         entry = {"layer": attrs.get("name"), "attrs": {
             k: attrs[k] for k in
@@ -351,7 +351,7 @@ class LayerOrganizer:
                 if rule and rule.get("collapsed"):
                     try:
                         group.setExpanded(False)
-                    except Exception:  # nosec B110  # 設計上の許容
+                    except Exception:  # nosec B110  # acceptable by design
                         pass
         else:
             entry["action"] = "no-match"
@@ -363,9 +363,9 @@ class LayerOrganizer:
                 if not dry:
                     try:
                         layer.setName(new_name)
-                        # 既に置かれたツリーノード側も追随
+                        # keep the already placed tree node in sync
                         self._rename_node(layer, new_name)
-                    except Exception:  # nosec B110  # 設計上の許容
+                    except Exception:  # nosec B110  # acceptable by design
                         pass
         if rule and rule.get("style"):
             style = rule["style"]
@@ -376,23 +376,23 @@ class LayerOrganizer:
                 try:
                     layer.loadNamedStyle(style)
                     layer.triggerRepaint()
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
         entry["action"] = "dry" if dry else "placed"
         return entry
 
     def organize_project(self, profile_name=None, dry=False):
-        """プロジェクト内の全レイヤを再整理する(冪等)。
+        """Re-organize every layer in the project (idempotent).
 
-        コンテキストが無いため format/plugin/tags 等のctxキーには
-        レイヤ由来の値だけが使われる。
+        There is no context, so ctx keys such as format/plugin/tags only get
+        values derived from the layer.
         """
         from qgis.core import QgsProject
         items = [(ly, {}) for ly in QgsProject.instance().mapLayers().values()]
         return self.place_all(items, profile_name=profile_name, dry=dry)
 
     def describe(self, name=None):
-        """bridge表示用のプロファイル要約。"""
+        """Profile summary for bridge display."""
         prof, path = load_profile(name or self.active_profile_name())
         if prof is None:
             return None
@@ -409,10 +409,10 @@ class LayerOrganizer:
                       for r in prof.get("rules") or []],
         }
 
-    # ---------- レイヤツリー操作(QGIS依存) ----------
+    # ---------- layer tree operations (QGIS-dependent) ----------
 
     def _ensure_group(self, path):
-        """'/'区切りのパスを辿ってグループを作成し末端を返す。"""
+        """Walk a '/'-separated path, creating groups, and return the leaf."""
         from qgis.core import QgsLayerTree, QgsProject
         parent = QgsProject.instance().layerTreeRoot()
         for part in [p for p in str(path).split("/") if p]:
@@ -428,11 +428,11 @@ class LayerOrganizer:
 
     @staticmethod
     def _move_to_group(layer, group, top=False):
-        """レイヤのツリーノードを指定グループへ移動する。
+        """Move the layer's tree node into the given group.
 
-        同一レイヤのノードは複数存在し得るため、元ノードのcloneを
-        グループへ挿入してから元ノードを除去する(所有権の問題を避ける)。
-        ノードが無い(addToLegend=False等)場合は直接追加する。
+        A layer may have several nodes, so clone the original node into the
+        group and then remove the original (avoiding ownership problems).
+        When there is no node (addToLegend=False, etc.), add it directly.
         """
         from qgis.core import QgsProject
         root = QgsProject.instance().layerTreeRoot()
@@ -454,5 +454,5 @@ class LayerOrganizer:
         if node is not None and QgsLayerTree.isLayer(node):
             try:
                 node.setName(new_name)
-            except Exception:  # nosec B110  # 設計上の許容
+            except Exception:  # nosec B110  # acceptable by design
                 pass

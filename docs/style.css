@@ -350,7 +350,7 @@ strong {
   margin: 10px 0;
 }
 
-/* ===== 4形態ナビ（各ガイドページ共通） ===== */
+/* ===== 4-form navigation (shared by all guide pages) ===== */
 .form-nav {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -418,7 +418,7 @@ strong {
   }
 }
 
-/* ===== 共通サイドバーナビゲーション（nav.js） ===== */
+/* ===== Shared sidebar navigation (nav.js) ===== */
 #site-nav {
   position: fixed;
   top: 0;

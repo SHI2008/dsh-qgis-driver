@@ -1,4 +1,4 @@
-> **QGIS Live Harness の中核ドライバ** — [QGIS Live Harness](https://yamamoto-ryuzo.github.io/qgis_live_harness/) · [プラグイン一覧](https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html) · [ドキュメント](https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver/docs) · [リポジトリ](https://github.com/yamamoto-ryuzo/qgis_live_harness)
+> **Core driver for QGIS Live Harness** — [QGIS Live Harness](https://yamamoto-ryuzo.github.io/qgis_live_harness/) · [Plugin list](https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html) · [Documentation](https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver/docs) · [Repository](https://github.com/yamamoto-ryuzo/qgis_live_harness)
 
 # QGIS Live Driver (`geo_driver`)
 
@@ -8,8 +8,8 @@
 > from the upstream project, and changes here are not intended to be merged
 > upstream. The original author and GPL-3.0 licensing are preserved.
 
-**📖 日本語ドキュメント: <https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver/docs>**
-（インストール・使い方・仕様の詳細はこちら）
+**📖 Documentation: [docs/index.html](docs/index.html)**
+(installation, usage, and specification details)
 
 ## Overview
 
@@ -31,7 +31,7 @@ over file-JSONL, REST (`/api/*`) and MCP (`/mcp`).
 
 ## Links
 
-- Documentation (JA): <https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver/docs>
+- Documentation: [docs/index.html](docs/index.html)
 - Changelog: [CHANGELOG.md](CHANGELOG.md)
 - License: GPL-3.0 ([LICENSE](LICENSE))
 

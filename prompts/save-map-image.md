@@ -1,4 +1,4 @@
-# 表示範囲を画像保存
-現在のマップキャンバスの表示範囲をPNGとして書き出す指示
+# Save the current view as an image
+Export the current map canvas extent as a PNG
 
-現在の表示範囲をPNG画像として保存して。保存先とファイル名は内容が分かるものを適切に決めて、保存したパスを教えて
+Save the current view as a PNG image. Choose an appropriate destination and file name that reflects the content, and tell me the saved path.

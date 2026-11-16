@@ -1,12 +1,12 @@
-// 自動生成: scripts/build-plugin-docs.py(再実行で上書きされます)
+// Auto-generated: scripts/build-plugin-docs.py (regenerated on each run)
 (function () {
   var TITLE = 'geo_driver';
   var PAGES = [
-    { href: 'index.html', text: '概要', },
+    { href: 'index.html', text: 'Overview', },
   ];
   var LINKS = [
-    { href: 'https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html', text: 'プラグイン一覧(サイト)' },
-    { href: 'https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver', text: 'GitHub(プラグイン)' }
+    { href: 'https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html', text: 'Plugin list (site)' },
+    { href: 'https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/geo_driver', text: 'GitHub (plugin)' }
   ];
   var here = location.pathname.split('/').pop() || 'index.html';
   var nav = document.createElement('aside');
@@ -37,7 +37,7 @@
   document.body.classList.add('has-nav');
   var btn = document.createElement('button');
   btn.className = 'nav-toggle'; btn.type = 'button';
-  btn.setAttribute('aria-label', 'メニュー'); btn.textContent = '☰';
+  btn.setAttribute('aria-label', 'Menu'); btn.textContent = '☰';
   btn.addEventListener('click', function () {
     document.body.classList.toggle('nav-open'); });
   document.body.prepend(btn);

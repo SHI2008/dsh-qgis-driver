@@ -1,12 +1,12 @@
-"""開発用ホットリロード(手動)。
+"""Development hot reload (manual).
 
-メニュー「プラグイン > QGIS Live Driver > ホットリロード」から、
-開発対象のプラグインを手動で sys.modules 掃除+reloadPlugin
-(+open_dialog再表示)する。QGIS再起動・deployは不要。
+From the menu "Plugins > QGIS Live Driver > Hot Reload", manually clean
+sys.modules for the plugin under development and run reloadPlugin
+(+ re-show open_dialog). No QGIS restart or deploy is needed.
 
-候補のプラグインidは、deploy先の各プラグインのrealpathが
-<repo>/qgis-plugin/<id> に解決されるもの(junction配置)のみ。
-実体配置(利用モード)やサードパーティプラグインは対象にしない。
+Candidate plugin ids are only those whose deployed realpath resolves to
+<repo>/qgis-plugin/<id> (junction placement). Real-copy placement (user mode)
+and third-party plugins are not targeted.
 """
 
 import os
@@ -20,10 +20,10 @@ CTRL_ID = "geo_driver"
 
 
 def dev_plugin_ids(own_file):
-    """ホットリロード候補のプラグインid一覧を返す。
+    """Return the list of plugin ids eligible for hot reload.
 
-    deploy先の各プラグインのrealpathが <repo>/qgis-plugin/ 配下に
-    解決されるもの(junction配置)のid順。該当なしなら空。
+    The ids of deployed plugins whose realpath resolves under
+    <repo>/qgis-plugin/ (junction placement), in id order. Empty if none.
     """
     deployed_dir = os.path.dirname(os.path.abspath(own_file))
     plugins_root = os.path.dirname(deployed_dir)
@@ -35,21 +35,22 @@ def dev_plugin_ids(own_file):
                 continue
             try:
                 src = os.path.dirname(os.path.realpath(p))
-            except Exception:  # nosec B112  # 設計上の許容
+            except Exception:  # nosec B112  # acceptable by design
                 continue
             if os.path.basename(src) == "qgis-plugin":
                 ids.append(d)
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
     return sorted(ids)
 
 
 def reload_plugins(ids, notify=None):
-    """プラグインid群を順にリロードする。
+    """Reload the plugin ids one by one.
 
-    制御面の geo_driver は最後(送信経路を先に殺さないため)。
-    自プラグイン自身のリロードも可能(呼出中フレームは有効なまま)。
-    notify は (level, msg) を受けるコールバック(level="info"/"warn")。
+    The control side, geo_driver, goes last (so the send path is not killed
+    first). Reloading the plugin itself is also possible (the calling frame
+    stays valid). notify is a callback receiving (level, msg)
+    (level="info"/"warn").
     """
     notify = notify or (lambda level, msg: None)
     for pid in sorted(ids, key=lambda p: (p == CTRL_ID, p)):

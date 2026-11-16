@@ -1,18 +1,18 @@
-"""QGISプロセスをファイル経由で外部制御するドライバ(スタンドアロン版)。
+"""Driver that controls the QGIS process externally through files (standalone version).
 
-WebEngineを持たない任意のプラグイン/QGIS環境で使える制御面だけの実装。
-viewを持たないため eval/devreload は未対応(plugin_idでviewを持つ
-他プラグインへ転送は可)。代わりに screenshot は iface.mapCanvas() の
-地図キャンバスをPNG化する。
+A control-surface-only implementation that works in any plugin/QGIS environment
+without WebEngine. It has no view, so eval/devreload are unsupported (forwarding
+to another plugin that has a view via plugin_id is possible). Instead,
+screenshot renders iface.mapCanvas() to PNG.
 
-環境変数 WEBENGINE_LIVE_DIR 設定時のみ有効。
-live dir は WEBENGINE_LIVE_DIR/qgis-<pid>/<plugin_id>/。
+Active only when the WEBENGINE_LIVE_DIR environment variable is set.
+The live dir is WEBENGINE_LIVE_DIR/qgis-<pid>/<plugin_id>/.
 
-コマンド形式(1行1JSON):
+Command format (one JSON object per line):
   {"id": 1, "type": "pyeval", "code": "iface.activeLayer().name()",
-   "token": "<live_dir>/token の内容"}
+      "token": "contents of <live_dir>/token"}
   {"id": 2, "type": "screenshot", "path": "C:/.../shot.png",
-   "token": "..."}  ← 地図キャンバス
+      "token": "..."}  <- map canvas
   {"id": 3, "type": "status", "token": "..."}
   {"id": 4, "type": "open_plugin", "plugin_id": "<plugin_id>",
    "token": "..."}
@@ -21,22 +21,22 @@ live dir は WEBENGINE_LIVE_DIR/qgis-<pid>/<plugin_id>/。
   {"id": 6, "type": "bridge_call", "plugin_id": "<plugin_id>",
    "method": "pluginInfo", "args": [], "token": "..."}
   {"id": 7, "type": "describe_plugins", "token": "..."}
-   ← 全プラグインのAI利用可能機能カタログ(bridge+pluginInfo集約)
+      <- AI-usable capability catalog of all plugins (bridge + pluginInfo merged)
   {"id": 8, "type": "devin_run", "prompt": "...",
    "cwd": "C:/repo", "token": "..."}
-   ← Devin CLI(devin -p)の非同期起動。devin_status/devin_result/
-   devin_abort で追跡・取得・中断する(devin_tasks.py)
+      <- asynchronous start of the Devin CLI (devin -p). Tracked, fetched and
+      aborted with devin_status/devin_result/devin_abort (devin_tasks.py)
 
-認証: 起動ごとにセッショントークンを生成し live_dir/token と
-レジストリJSONに書き出す(どちらもユーザ限定ACL)。ファイル経由
-コマンドは token 一致を必須とし、同一マシンの他ユーザや
-無関係なプロセスからの書き込みを拒否する。HTTP面も同じ
-トークンでBearer認証する(mcp_http.py参照)。
+Auth: a session token is generated at startup and written to live_dir/token and
+the registry JSON (both with user-only ACLs). File-based
+commands require a matching token; writes from other users on the same
+machine or from unrelated processes are rejected. The HTTP surface uses the
+same token for Bearer auth (see mcp_http.py).
 
-plugin_id を「ルーティング」として使うコマンド(eval/pyeval/screenshot/
-devreload)は、plugin_id が他プラグインを指す場合そのプラグインの
-LiveDriverに転送され、結果は呼び出し元の results.jsonl に返る
-(このドライバが全プラグインの統一制御点になる)。
+Commands that use plugin_id as a "route" (eval/pyeval/screenshot/
+devreload) are forwarded to that plugin's LiveDriver when plugin_id points at
+another plugin, and the result returns to the caller's results.jsonl
+(so this driver is the unified control point for all plugins).
 """
 
 import datetime
@@ -56,12 +56,12 @@ from qgis.PyQt.QtCore import QTimer
 
 POLL_MS = 200
 
-# id無しコマンド(HTTPの/api/*等)用の自動採番。転送先のevalではcidが
-# JS報告との照合キーになるため、Noneのままでは結果報告が全て破棄される
+# Auto-numbering for commands without an id (HTTP /api/* etc.). In the target eval
+# cid is the key matched against JS reports, so leaving it None drops all results
 _AUTO_IDS = itertools.count(1)
 
-# plugin_id をルーティングではなくコマンド自身の引数として使う種別。
-# これらは常にこのドライバ自身が処理する。
+# Kinds that use plugin_id as their own command argument, not as a route.
+# These are always handled by this driver itself.
 _LOCAL_TYPES = {"status", "open_plugin", "reload_plugin", "bridge_call",
                 "describe_plugins", "instruction"}
 
@@ -76,9 +76,9 @@ def _to_jsonable(v):
     return repr(v)
 
 
-# ---- 監査ログ(~/.qgis-live/audit-<date>.jsonl) ----
-# _handle を通る全コマンド(ファイルJSONL/REST/MCP/AIパネル)を永続化する。
-# secrets系キーは "***" にマスクし、セッショントークンは記録しない。
+# ---- Audit log (~/.qgis-live/audit-<date>.jsonl) ----
+# Persists every command that goes through _handle (file JSONL/REST/MCP/AI panel).
+# secrets keys are masked as "***" and the session token is never recorded.
 _AUDIT_MASK_KEYS = re.compile(
     r"token|secret|passw|api[-_]?key|authorization|credential", re.I)
 _AUDIT_SUMMARY_LIMIT = 800
@@ -88,14 +88,14 @@ _AUDIT_DEFAULT_MAX_FILES = 14
 
 
 def _audit_base_dir():
-    """監査ログの置き場所(接続情報・指示書と同じレジストリdir)。"""
+    """Where the audit log lives (same registry dir as connection info and instructions)."""
     return os.environ.get(
         "QGIS_LIVE_REGISTRY",
         os.path.join(os.path.expanduser("~"), ".qgis-live"))
 
 
 def _audit_conf():
-    """(enabled, max_bytes, max_files)。QSettings geo_driver/audit/*。"""
+    """(enabled, max_bytes, max_files). QSettings geo_driver/audit/*."""
     enabled = True
     max_bytes = _AUDIT_DEFAULT_MAX_BYTES
     max_files = _AUDIT_DEFAULT_MAX_FILES
@@ -106,7 +106,7 @@ def _audit_conf():
             not in ("0", "false", "no")
         max_bytes = int(s.value("geo_driver/audit/max_bytes", max_bytes))
         max_files = int(s.value("geo_driver/audit/max_files", max_files))
-    except Exception:  # nosec B110  # QSettings非依存環境は既定値
+    except Exception:  # nosec B110  # default values where QSettings is unavailable
         pass
     return enabled, max(int(max_bytes), 1024), max(int(max_files), 1)
 
@@ -122,12 +122,12 @@ def _audit_mask(v, key=None):
 
 
 def _audit_summary(cmd):
-    """ログに残す引数要約。内部キー(_*)は除き、secretsはマスクする。"""
+    """Argument summary kept in the log. Internal keys (_*) are dropped, secrets masked."""
     body = {k: _audit_mask(v, k) for k, v in cmd.items()
             if k not in ("id", "type") and not k.startswith("_")}
     try:
         s = json.dumps(body, ensure_ascii=False, default=repr)
-    except Exception:  # nosec B110  # 要約不能時はreprで縮退
+    except Exception:  # nosec B110  # fall back to repr when no summary is possible
         s = repr(body)
     if len(s) > _AUDIT_SUMMARY_LIMIT:
         s = s[:_AUDIT_SUMMARY_LIMIT] + "…"
@@ -135,7 +135,7 @@ def _audit_summary(cmd):
 
 
 def _audit_record(driver_pkg, cmd, obj, ms):
-    """1コマンド分の監査レコードをaudit-<date>.jsonlへ追記する。"""
+    """Append the audit record for one command to audit-<date>.jsonl."""
     enabled, max_bytes, max_files = _audit_conf()
     if not enabled:
         return
@@ -159,7 +159,7 @@ def _audit_record(driver_pkg, cmd, obj, ms):
         rec["error"] = str(obj.get("error"))[:_AUDIT_ERROR_LIMIT]
     line = json.dumps(rec, ensure_ascii=False) + "\n"
     os.makedirs(base, exist_ok=True)
-    # サイズ上限超過時は時刻付き世代へ退避して新規に開始
+    # When the size limit is exceeded, rotate to a timestamped generation and start new
     if os.path.exists(path) and os.path.getsize(path) > max_bytes:
         stamp = datetime.datetime.now().strftime("%H%M%S")
         try:
@@ -168,7 +168,7 @@ def _audit_record(driver_pkg, cmd, obj, ms):
             pass
     with open(path, "a", encoding="utf-8") as f:
         f.write(line)
-    # 世代数上限: ファイル名降順(新しい順)で max_files だけ残す
+    # Generation cap: keep only max_files, in descending filename order (newest first)
     names = sorted((n for n in os.listdir(base)
                     if n.startswith("audit-") and n.endswith(".jsonl")),
                    reverse=True)
@@ -180,7 +180,7 @@ def _audit_record(driver_pkg, cmd, obj, ms):
 
 
 def _audit_match(rec, filt):
-    """auditLog のフィルタ。dict=フィールド一致、str=主要項目の部分一致。"""
+    """Filter for auditLog. dict = field match, str = substring match on key fields."""
     if filt in (None, ""):
         return True
     if isinstance(filt, dict):
@@ -198,7 +198,7 @@ def _audit_match(rec, filt):
 
 
 def _audit_recent(n, filt=None):
-    """audit-*.jsonl から新しい順に最大n件を返す(auditLog bridge用)。"""
+    """Return up to n entries from audit-*.jsonl, newest first (for the auditLog bridge)."""
     try:
         names = sorted(
             (x for x in os.listdir(_audit_base_dir())
@@ -217,7 +217,7 @@ def _audit_recent(n, filt=None):
         for line in reversed(lines):
             try:
                 rec = json.loads(line)
-            except Exception:  # nosec B110  # 壊れ行は読み飛ばす
+            except Exception:  # nosec B110  # skip corrupt lines
                 continue
             if _audit_match(rec, filt):
                 out.append(rec)
@@ -232,7 +232,7 @@ def _loaded_plugins():
 
 
 def _plugin_metadata(pid, key):
-    """プラグインのmetadata.txtから値を読む(失敗時None)。"""
+    """Read a value from the plugin's metadata.txt (None on failure)."""
     try:
         import qgis.utils
         v = qgis.utils.pluginMetadata(pid, key)
@@ -242,11 +242,11 @@ def _plugin_metadata(pid, key):
 
 
 def reload_plugin_now(plugin_id):
-    """sys.modulesキャッシュを掃除してreloadPluginし、open_dialogを開き直す。
+    """Clear the sys.modules cache, reloadPlugin, and reopen open_dialog.
 
-    reload_pluginコマンドとメニューのホットリロード(hot_reload.py)の
-    共通処理。呼び出し中のコードフレームはreload後も有効なままなので、
-    plugin_id に自分自身(geo_driver)を渡してもよい。
+    Shared by the reload_plugin command and the menu hot reload (hot_reload.py).
+    The caller's code frame stays valid after the reload, so
+    plugin_id may be this plugin itself (geo_driver).
     """
     import sys
     import qgis.utils
@@ -272,16 +272,16 @@ def reload_plugin_now(plugin_id):
 
 
 class _GenericBridge:
-    """bridgeを持たないプラグイン向けの汎用アダプタ。
+    """Generic adapter for plugins without a bridge.
 
-    repo管理外のサードパーティプラグイン(mmqgis等)は個別bridge.pyを
-    持てないため、ドライバ側で最低限の共通制御面を提供する。
-    メソッドは専用bridgeと同じくJSON文字列を返す。
+    Third-party plugins outside the repo (mmqgis etc.) cannot have their own
+    bridge.py, so the driver provides a minimal common control surface.
+    Methods return JSON strings like a dedicated bridge.
 
     - `pluginInfo` / `status` / `actions` / `trigger` / `run` /
       `openDialog` / `closeDialog`
-    - `run`/`trigger` はQTimer.singleShot(0, ...)で非同期発火するため、
-      対象がmodalダイアログを開いてもコマンド応答はブロックされない
+    - `run`/`trigger` fire asynchronously through QTimer.singleShot(0, ...), so a
+        command reply is not blocked even when the target opens a modal dialog
     """
 
     _DLG_ATTRS = ("dialog", "dlg", "dockwidget", "dock_widget", "dock")
@@ -314,10 +314,10 @@ class _GenericBridge:
         acts = getattr(self._plugin, "actions", None) or []
         return [a for a in acts if isinstance(a, QAction)]
 
-    # ---------- メソッド(JSON文字列を返す) ----------
+    # ---------- Methods (return JSON strings) ----------
 
     def pluginInfo(self):
-        """metadata由来の自己記述+汎用メソッド一覧。"""
+        """Self-description from metadata plus the generic method list."""
         return self._ok({
             "id": self._pid,
             "name": _plugin_metadata(self._pid, "name") or self._pid,
@@ -352,7 +352,7 @@ class _GenericBridge:
         })
 
     def status(self):
-        """プラグインの状態(ダイアログ有無・アクション数・版)を返す。"""
+        """Return the plugin state (dialog present, action count, version)."""
         dlg = self._find_dialog()
         return self._ok({
             "id": self._pid,
@@ -364,7 +364,7 @@ class _GenericBridge:
         })
 
     def actions(self):
-        """プラグインのQAction一覧を返す。"""
+        """Return the plugin's QAction list."""
         out = []
         for i, a in enumerate(self._actions()):
             try:
@@ -376,7 +376,7 @@ class _GenericBridge:
         return self._ok({"actions": out})
 
     def trigger(self, action):
-        """アクションを非同期で実行する(index/テキスト指定)。"""
+        """Run an action asynchronously (by index/text)."""
         acts = self._actions()
         target = None
         if isinstance(action, bool):
@@ -403,7 +403,7 @@ class _GenericBridge:
         return self._ok({"triggered": target.text(), "async": True})
 
     def run(self):
-        """plugin.run()を非同期で実行する。"""
+        """Run plugin.run() asynchronously."""
         fn = getattr(self._plugin, "run", None)
         if not callable(fn):
             return self._err("plugin has no run()")
@@ -411,14 +411,14 @@ class _GenericBridge:
         return self._ok({"started": True, "async": True})
 
     def openDialog(self):
-        """dialog/dlg/dockwidget属性のウィジェットを表示する。"""
+        """Show the widget held in the dialog/dlg/dockwidget attribute."""
         dlg = self._find_dialog()
         if dlg is not None:
             dlg.show()
             try:
                 dlg.raise_()
                 dlg.activateWindow()
-            except Exception:  # nosec B110  # 設計上の許容
+            except Exception:  # nosec B110  # acceptable by design
                 pass
             return self._ok({"opened": True,
                              "widget": dlg.__class__.__name__})
@@ -429,7 +429,7 @@ class _GenericBridge:
         return self._err("no dialog/dockwidget attribute and no run()")
 
     def closeDialog(self):
-        """dialog/dlg/dockwidget属性のウィジェットを閉じる。"""
+        """Close the widget held in the dialog/dlg/dockwidget attribute."""
         dlg = self._find_dialog()
         if dlg is None:
             return self._err("no dialog/dockwidget attribute")
@@ -442,7 +442,7 @@ class _GenericBridge:
 
 
 def _find_plugin_driver(plugin_id):
-    """他プラグインのLiveDriverを返す(無ければNone)。"""
+    """Return another plugin's LiveDriver (None if absent)."""
     p = _loaded_plugins().get(plugin_id)
     if p is None:
         return None
@@ -456,36 +456,36 @@ def _find_plugin_driver(plugin_id):
 class LiveDriver:
     def __init__(self, live_dir, iface):
         self.iface = iface
-        self.view = None  # WebEngineなし。ns経由でクライアントがUI有無を判定できる
+        self.view = None  # no WebEngine; clients can check UI presence through ns
         self.dir = live_dir
         self.cmd_path = os.path.join(live_dir, "commands.jsonl")
         self.res_path = os.path.join(live_dir, "results.jsonl")
-        self.http_port = None  # __init__.py が start_http 後に設定する
-        # ドライバ再生成時に過去のコマンドを再実行しないよう末尾までスキップ
+        self.http_port = None  # set by __init__.py after start_http
+        # Skip to the end so past commands are not re-executed when the driver is rebuilt
         self.offset = os.path.getsize(self.cmd_path) if os.path.exists(self.cmd_path) else 0
-        # 全チャネル共通の認証トークン。commands.jsonl は同じマシンの
-        # 誰でもappendし得るため、ファイル経由のコマンド受付はこの
-        # 一致を必須とする。クライアントは live_dir/token または
-        # レジストリJSONから読む(いずれもユーザ限定ACLを目指す)
+        # Auth token shared by all channels. commands.jsonl can be appended by
+        # anyone on the same machine, so file-based commands require this
+        # match. Clients read it from live_dir/token or the registry
+        # JSON (both aim for user-only ACLs)
         self.token = secrets.token_hex(24)
         self._ns = {"iface": iface, "view": None, "driver": self}
-        # pyeval内で頻出のQGIS APIを事前importしておく(利便性のため)
+        # Pre-import the QGIS APIs frequently used in pyeval (for convenience)
         try:
             from qgis.core import QgsProject, QgsApplication
             self._ns.update({"QgsProject": QgsProject,
                              "QgsApplication": QgsApplication})
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
-        # ファイル以外の命令入力(HTTPサーバ等の別スレッドからの投入)。
-        # GUIスレッド以外から iface/QgsProject に触れないため、
-        # 実行は必ずこのドライバの_poll(GUIスレッド)内で行う
+        # Non-file command input (injected from other threads such as the HTTP server).
+        # iface/QgsProject must not be touched off the GUI thread, so
+        # execution always happens inside this driver's _poll (GUI thread)
         self._queue = queue.Queue()
         os.makedirs(live_dir, exist_ok=True)
         try:
             with open(os.path.join(live_dir, "token"), "w",
                       encoding="ascii") as f:
                 f.write(self.token)
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
 
         self.timer = QTimer()
@@ -493,7 +493,7 @@ class LiveDriver:
         self.timer.start(POLL_MS)
 
     def submit(self, cmd, timeout=180.0, origin=None):
-        """別スレッドからコマンドを投入し、GUIスレッドでの実行結果を待って返す。
+        """Inject a command from another thread, wait for GUI-thread execution, return it.
 
         @returns {"id":..., "result": v} or {"id":..., "error": e}
         """
@@ -509,19 +509,19 @@ class LiveDriver:
 
     def stop(self):
         self.timer.stop()
-        # timer.timeout.connect(bound method) がselfへの参照を保持し、
-        # リロードごとにドライバ+QTimerが滞留するためC++側も解放する
+        # timer.timeout.connect(bound method) holds a reference to self,
+        # so the driver and QTimer linger across reloads; also release the C++ side
         self.timer.deleteLater()
 
     def _poll(self):
-        # メモリキュー(HTTP等)の命令を先に処理
+        # Handle the in-memory queue (HTTP etc.) first
         while True:
             try:
                 cmd, box, done = self._queue.get_nowait()
             except queue.Empty:
                 break
-            # replyが呼ばれた時点で完了。_handleが"async"を返した(eval転送等)は
-            # replyが非同期的に後で呼ばれるため、ここでdone.set()しない
+            # Complete once reply is called. If _handle returned "async" (eval forwarding etc.),
+            # reply is called later asynchronously, so do not done.set() here
 
             def _reply_once(obj, _box=box, _done=done):
                 _box["reply"] = obj
@@ -537,15 +537,15 @@ class LiveDriver:
 
         if not os.path.exists(self.cmd_path):
             return
-        # ファイルが作り直されるとoffsetが実サイズを超えて読み飛ばすため補正
+        # If the file is recreated, offset may exceed the real size and skip lines, so fix it up
         if os.path.getsize(self.cmd_path) < self.offset:
             self.offset = 0
         with open(self.cmd_path, "r", encoding="utf-8") as f:
             f.seek(self.offset)
             data = f.read()
-        # クライアントが書き込み中の部分行を処理するとJSONDecodeErrorで
-        # コマンド喪失するため、改行で終端された行だけ処理し、
-        # 未完の末尾はoffsetを進めず次ポーリングに残す
+        # Processing a partial line while the client is writing causes JSONDecodeError
+        # and command loss, so only process newline-terminated lines and
+        # leave an unfinished tail in place (offset does not advance) for the next poll
         end = data.rfind("\n")
         if end < 0:
             return
@@ -559,8 +559,8 @@ class LiveDriver:
             except Exception as e:
                 self._reply({"id": None, "error": repr(e)})
                 continue
-            # ファイル経由コマンドはトークン必須。submit()(HTTP経由)や
-            # _forward()(他ドライバ経由)は呼び出し元で認証済みのため対象外
+            # File-based commands require the token. submit() (via HTTP) and
+            # _forward() (via another driver) are already authenticated by the caller
             cmd["_origin"] = "file"
             if not hmac.compare_digest(str(cmd.get("token") or ""),
                                        self.token):
@@ -574,10 +574,10 @@ class LiveDriver:
                 self._reply({"id": None, "error": repr(e)})
 
     def _handle(self, cmd, reply=None):
-        """コマンドの入口。監査ログを記録してから _dispatch へ渡す。
+        """Entry point for commands. Records the audit log, then hands over to _dispatch.
 
-        _audit_off 指定時(他ドライバからの転送)は監査を記録しない
-        ——転送元ドライバ側で既に記録されるため二重記録を防ぐ。
+        With _audit_off set (forwarding from another driver) no audit is recorded
+        -- the forwarding driver already recorded it, avoiding duplicates.
         """
         reply = reply or self._reply
         if cmd.get("_audit_off"):
@@ -596,23 +596,23 @@ class LiveDriver:
             raise
 
     def _audit(self, cmd, obj, ms):
-        """dispatch結果を監査jsonlへ記録(失敗しても呼出は妨げない)。"""
+        """Record the dispatch result in the audit jsonl (failures do not block the call)."""
         try:
             _audit_record(__package__, cmd, obj, ms)
-        except Exception:  # nosec B110  # 監査失敗で制御面を止めない
+        except Exception:  # nosec B110  # an audit failure must not stop the control surface
             pass
 
     def _dispatch(self, cmd, reply):
         cid = cmd.get("id") or f"auto-{next(_AUTO_IDS)}"
         ctype = cmd.get("type", "eval")
         pid = cmd.get("plugin_id")
-        # devin_*/copilot_* は常にこのドライバが処理する
-        # (他プラグインへ転送しない)
+        # devin_*/copilot_* are always handled by this driver
+        # (never forwarded to other plugins)
         if ctype.startswith("devin_") or ctype.startswith("copilot_"):
             self._agent_task(cid, ctype, cmd, reply)
             return
-        # plugin_id が他プラグインを指すコマンドはそのドライバへ転送。
-        # 結果は注入したreply経由でこのlive dirのresults.jsonlに返る。
+        # Commands whose plugin_id points at another plugin are forwarded to that driver.
+        # Results return to this live dir's results.jsonl through the injected reply.
         if pid and pid != __package__ and ctype not in _LOCAL_TYPES:
             return self._forward(cid, pid, cmd, reply)
         if ctype == "pyeval":
@@ -649,7 +649,7 @@ class LiveDriver:
         })
 
     def _forward(self, cid, pid, cmd, reply):
-        """他プラグインのドライバへコマンドを転送し、結果を呼び出し元へ返す。"""
+        """Forward a command to another plugin's driver and return the result to the caller."""
         drv = _find_plugin_driver(pid)
         if drv is None:
             reply({"id": cid, "error":
@@ -662,7 +662,7 @@ class LiveDriver:
                    "redeploy+reload it to update live_driver.py"})
             return
         fwd = {k: v for k, v in cmd.items() if k != "plugin_id"}
-        # 監査は転送元(このドライバ)が記録するため転送先では抑制
+        # The forwarding driver records the audit, so suppress it at the destination
         fwd["_audit_off"] = True
         try:
             return drv._handle(fwd, reply=reply)
@@ -670,10 +670,10 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _instruction(self, cid, cmd, reply):
-        """指示書(agents/skills)の操作。qgis_instructionツールの実体。
+        """Instruction (agents/skills) operations. The body of the qgis_instruction tool.
 
-        GUI依存を持たないファイルI/Oだが、他コマンドと同じく
-        GUIスレッドのdispatchで処理する(ai_clientは同プラグイン内)。
+        Pure file I/O with no GUI dependency, but handled through the GUI-thread
+        dispatch like other commands (ai_client is in this plugin).
         """
         try:
             from . import ai_client
@@ -715,11 +715,11 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _agent_task(self, cid, ctype, cmd, reply):
-        """qgis_devin_*/qgis_copilot_* ツールの実体。
-        エージェントCLI(devin -p / copilot -p / acp)の非同期タスク管理。
+        """Body of the qgis_devin_*/qgis_copilot_* tools.
+        Async task management for the agent CLIs (devin -p / copilot -p / acp).
 
-        起動・状態確認ともブロックしない(Popen/ログ読みのみ)ため、
-        他コマンドと同じくGUIスレッドのdispatchで処理してよい。
+        Startup and status checks do not block (Popen/log reads only), so
+        they may be handled through the GUI-thread dispatch like other commands.
         """
         from . import devin_tasks
         try:
@@ -753,7 +753,7 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _status(self):
-        """ドライバ自身と全プラグインの状態を返す(生存確認・一覧用)。"""
+        """Return the state of the driver itself and all plugins (liveness check/list)."""
         plugs = {}
         try:
             for pid, p in _loaded_plugins().items():
@@ -769,7 +769,7 @@ class LiveDriver:
                                  and getattr(drv, "view", None) is not None),
                     "bridge": getattr(p, "bridge", None) is not None,
                 }
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         return {
             "pid": os.getpid(),
@@ -781,7 +781,7 @@ class LiveDriver:
         }
 
     def _open_plugin(self, cid, pid, reply):
-        """プラグインをload/startし、open_dialogがあれば開く。"""
+        """Load/start a plugin and open open_dialog if present."""
         if not pid:
             reply({"id": cid, "error": "plugin_id required"})
             return
@@ -804,11 +804,11 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _reload_plugin(self, cid, pid, reply):
-        """sys.modulesキャッシュを掃除してreloadPluginし、ダイアログを開き直す。
+        """Clear the sys.modules cache, reloadPlugin, and reopen the dialog.
 
-        自分自身(geo_driver)のreloadも可能: 実行中はこのドライバが
-        unload→再生成されるが、呼び出し中のコードフレームは有効なままなので
-        reload完了後に結果をresults.jsonlへ書き込める。
+        Reloading this plugin (geo_driver) itself is allowed: this driver is
+        unloaded and re-created while running, but the caller's code frame stays
+        valid, so the result can be written to results.jsonl after the reload.
         """
         if not pid:
             reply({"id": cid, "error": "plugin_id required"})
@@ -820,15 +820,15 @@ class LiveDriver:
 
     @staticmethod
     def _bridge_args(fn, args):
-        """bridge_call の args を (位置引数, kwargs) に正規化する。
+        """Normalize bridge_call args into (positional args, kwargs).
 
-        モデルが kwargs 形式で渡すケースを吸収する:
-        - args={"k": v, ...}      (リストでなく辞書)
-        - args=[{"k": v, ...}]    (辞書1個だけのリスト)
-        - args=[pos..., {"k": v}] (末尾辞書=残パラメータへの kwargs)
-        末尾辞書のキーが未バインドのパラメータ名に収まる場合のみ
-        kwargs 化し、収まらない辞書(普通のdict引数)は従来通り
-        位置引数として渡す。
+        Absorb cases where the model passes kwargs:
+        - args={"k": v, ...}      (a dict, not a list)
+        - args=[{"k": v, ...}]    (a list with a single dict)
+        - args=[pos..., {"k": v}] (trailing dict = kwargs for the remaining params)
+        Only when the trailing dict's keys fit the unbound parameter names is it
+        turned into kwargs; otherwise the dict (a normal dict argument) is passed
+        as a positional argument as before.
         """
         if isinstance(args, dict):
             pos, cand = [], dict(args)
@@ -852,12 +852,12 @@ class LiveDriver:
         return args, {}
 
     def _bridge_call(self, cid, cmd, reply):
-        """プラグインのbridgeオブジェクトのメソッドをプロセス内で直接呼ぶ。
+        """Call a method of a plugin's bridge object directly in-process.
 
-        JSのBridgeClient.callJsonと違いWebChannelを経由しないため、
-        レンダラー飢餓中でもbridgeメソッドを検証できる。
-        bridgeメソッドがJSON文字列を返す慣例に合わせ、パース可能なら
-        構造化して返す。plugin_id省略時はbridgeを持つ最初のプラグイン。
+        Unlike JS's BridgeClient.callJson it does not go through WebChannel, so
+        bridge methods can be verified even while the renderer is starved.
+        Following the convention that bridge methods return JSON strings, parse and
+        return them structured when possible. plugin_id defaults to the first bridge plugin.
         """
         pid = cmd.get("plugin_id")
         method = cmd.get("method")
@@ -874,7 +874,7 @@ class LiveDriver:
                        f"plugin '{pid}' not loaded "
                        f"(loaded: {sorted(plugins.keys())})"})
                 return
-            # 専用bridgeが無いプラグインは汎用アダプタで最低限の制御面を提供
+            # Plugins without a dedicated bridge get a minimal control surface via the adapter
             bridge = getattr(target, "bridge", None)
             if bridge is None:
                 gpid = next((k for k, v in plugins.items() if v is target),
@@ -891,19 +891,19 @@ class LiveDriver:
             if isinstance(res, str):
                 try:
                     res = json.loads(res)
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
             reply({"id": cid, "result": _to_jsonable(res)})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _describe_plugins(self, cid, reply):
-        """AIから利用可能なプラグインのカタログを返す。
+        """Return a catalog of the plugins available to the AI.
 
-        ロード済み全プラグインを列挙し、bridgeを持つものは
-        pluginInfo() を呼んで自己記述(id/name/summary/when_to_use/
-        methods)を集約する。「どのプラグインをいつどう使うか」を
-        AIが発見するための入口。
+        Enumerates all loaded plugins and, for those with a bridge, calls
+        pluginInfo() to aggregate the self-description (id/name/summary/when_to_use/
+        methods). The entry point through which the AI discovers "which plugin to use
+        when and how".
         """
         try:
             out = []
@@ -912,8 +912,8 @@ class LiveDriver:
                 bridge = getattr(p, "bridge", None)
                 entry["bridge"] = bridge is not None
                 if bridge is None:
-                    # 汎用アダプタ経由でmetadata由来の自己記述を載せ、
-                    # bridge未搭載プラグインもAIが発見・操作できるようにする
+                    # Carry the metadata-derived self-description through the generic adapter
+                    # so the AI can also discover and operate plugins without a bridge
                     bridge = _GenericBridge(pid, p)
                     entry["generic"] = True
                 if bridge is not None:
@@ -924,7 +924,7 @@ class LiveDriver:
                             if isinstance(res, str):
                                 try:
                                     res = json.loads(res)
-                                except Exception:  # nosec B110  # 設計上の許容
+                                except Exception:  # nosec B110  # acceptable by design
                                     pass
                             entry["info"] = _to_jsonable(res)
                         except Exception:
@@ -943,7 +943,7 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _screenshot(self, cid, cmd, reply):
-        """地図キャンバス(既定)またはメインウィンドウをPNG保存する。"""
+        """Save the map canvas (default) or the main window as PNG."""
         path = cmd.get("path") or os.path.join(self.dir, f"shot-{cid}.png")
         target = cmd.get("target", "canvas")
         try:
@@ -968,13 +968,13 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _pyeval(self, cid, code, reply=None):
-        """QGISプロセス内でPythonを実行する。
+        """Run Python inside the QGIS process.
 
-        式としてコンパイルできればeval、その結果を返す。文の場合はexecで実行し、
-        名前空間の `result` 変数の値を返す(未設定ならNone)。
-        同期的に実行するため長いコードはイベントループをブロックする点に注意。
-        plugin_id付きで転送された場合、そのプラグインのドライバの
-        名前空間(view等)で実行される。
+        If it compiles as an expression, eval it and return the result. For statements
+        exec them and return the value of `result` in the namespace (None if unset).
+        Runs synchronously, so long code blocks the event loop.
+        When forwarded with a plugin_id, it runs in that plugin driver's
+        namespace (view etc.).
         """
         reply = reply or self._reply
         self._ns.pop("result", None)
@@ -983,7 +983,7 @@ class LiveDriver:
                 code_obj = compile(code, "<pyeval>", "eval")
             except SyntaxError:
                 code_obj = compile(code, "<pyeval>", "exec")
-            res = eval(code_obj, self._ns)  # nosec B307  # 任意Python実行が本プラグインの主目的
+            res = eval(code_obj, self._ns)  # nosec B307  # arbitrary Python execution is intended
             if res is None:
                 res = self._ns.pop("result", None)
             reply({"id": cid, "result": _to_jsonable(res)})

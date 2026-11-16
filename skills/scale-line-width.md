@@ -1,63 +1,61 @@
-# スケール連動の標準線幅(geo_driver scale_style)
+# Scale-linked standard line widths (geo_driver scale_style)
 
-レイヤの用途(カテゴリ)と表示縮尺から標準的に適切な線幅を提案し、レンダラへ適用する手順。
-use_when: ユーザーが線幅の決定・縮尺に応じた線の太さ・「適切な線幅」・スケール依存のスタイル設定を依頼したとき
+Procedure for suggesting a standard, appropriate line width from the layer's use (category) and the display scale, then applying it to the renderer.
+use_when: the user asks to decide line widths, line thickness by scale, the "appropriate line width", or scale-dependent styling
 
-## 基本方針
+## Principles
 
-- 線幅は「カテゴリ(道路/河川/境界等)×縮尺帯」の**標準テーブル**から決める。値はプロファイルJSON管理で、勘で決めない
-- 呼出しは `qgis_bridge_call` → `plugin_id="geo_driver"`。メソッドは5つ:
+- Line widths come from a **standard table** of "category (road/river/boundary, etc.) × scale band". Values live in profile JSON; never guess.
+- Call via `qgis_bridge_call` → `plugin_id="geo_driver"`. There are five methods:
   `scaleStyleProfiles` / `scaleStyleTable` / `setScaleStyleProfile` / `suggestScaleWidth` / `applyScaleWidth`
-- 「提案だけ見せて」= `suggestScaleWidth` or `applyScaleWidth(dry=True)`、実適用 = `applyScaleWidth`
+- "Just show me suggestions" = `suggestScaleWidth` or `applyScaleWidth(dry=True)`; actual apply = `applyScaleWidth`
 
-## メソッド
+## Methods
 
-| メソッド | args | 返すもの |
+| Method | args | Returns |
 |---|---|---|
-| `scaleStyleProfiles` | なし | プロファイル一覧 + active。同梱`default` + ユーザ`~/.qgis-live/scale_style/*.json` |
-| `scaleStyleTable` | `[profile]` | アクティブ(または指定)プロファイルの縮尺帯・カテゴリ別base_mm/real_width_m全量 |
-| `setScaleStyleProfile` | `[name]` | アクティブプロファイル切替(QSettings永続化) |
+| `scaleStyleProfiles` | none | Profile list + active. Bundled `default` + user `~/.qgis-live/scale_style/*.json` |
+| `scaleStyleTable` | `[profile]` | Full scale-band / category base_mm and real_width_m for the active (or given) profile |
+| `setScaleStyleProfile` | `[name]` | Switch the active profile (persisted in QSettings) |
 | `suggestScaleWidth` | `[layer_id, category, scale, profile]` | `{category, scale, band, base_mm, factor, width_mm, real_width_m, width_m_equiv}` |
-| `applyScaleWidth` | `[layer_id, category, scale, mode, profile, dry]` | 適用結果。mode=`mm`/`meters`/`rules`、dry=trueで予定のみ |
+| `applyScaleWidth` | `[layer_id, category, scale, mode, profile, dry]` | Apply result. mode=`mm`/`meters`/`rules`; dry=true returns the plan only |
 
-省略時の既定: layer_id=アクティブレイヤ、category=レイヤ名/geomから推定、scale=現在のキャンバス縮尺。
+Defaults when omitted: layer_id=active layer, category=inferred from layer name/geom, scale=current canvas scale.
 
-## mode の選び方(applyScaleWidth)
+## Choosing a mode (applyScaleWidth)
 
-| mode | 意味 | 向く用途 |
+| mode | Meaning | Good for |
 |---|---|---|
-| `mm` | 現在縮尺に適した紙面幅(mm)を固定 | 単一縮尺で使うレイヤ・手早い体裁整え |
-| `meters` | 実世界幅(m)で描く(RenderMetersInMapUnits)。ズームで見た目の太さが変わる | 実寸が意味を持つ幅(道路幅員・河川幅・バッファ表現) |
-| `rules` | 縮尺帯ごとに幅が切替わるルールベースレンダラを生成 | 広い縮尺域で使うレイヤの標準仕上げ。凡例にも帯名+幅が出る |
+| `mm` | Fix a paper width (mm) suited to the current scale | Layers used at a single scale; quick cleanup |
+| `meters` | Draw in real-world metres (RenderMetersInMapUnits). Apparent thickness changes with zoom | Widths where real size matters (road width, river width, buffer representation) |
+| `rules` | Generate a rule-based renderer whose width switches per scale band | Standard finish for layers used across a wide scale range; the legend shows band names + widths |
 
-`rules` は geo_legend ロード時はその `applyRules` へ委譲(結果に `delegated` が付く)、
-未ロード/失敗時は geo_driver 内部実装へ自動フォールバックする。戻りの `rules[]` で
-各帯の `min_scale`/`max_scale`/`width` を確認できる。
+`rules` delegates to geo_legend's `applyRules` when loaded (the result gains `delegated`); when not loaded or on failure it falls back to geo_driver's internal implementation. The returned `rules[]` shows each band's `min_scale`/`max_scale`/`width`.
 
-## 手順レシピ
+## Recipe
 
 ```text
-1. まず提案を見る:
+1. First look at the suggestion:
    qgis_bridge_call geo_driver suggestScaleWidth [null, null, null]
-   → category/band/width_mm/real_width_m を確認しユーザーへ提示
+   → check category/band/width_mm/real_width_m and present them to the user
 
-2. 適用(固定幅):
+2. Apply (fixed width):
    qgis_bridge_call geo_driver applyScaleWidth [null, null, null, "mm"]
 
-3. 縮尺帯ルールにする(推奨・標準仕上げ):
+3. Switch to scale-band rules (recommended, standard finish):
    qgis_bridge_call geo_driver applyScaleWidth [null, null, null, "rules"]
-   → legendSpec(geo_legend)で凡例表示を確認
+   → check the legend display with legendSpec (geo_legend)
 ```
 
-- カテゴリ推定が外れたら `category` を明示(例 `"road_major"`)。一覧は `scaleStyleTable` の `categories[].key`
-- プロファイル切替が要望されたら `scaleStyleProfiles` → `setScaleStyleProfile`
-- ユーザ独自の標準は `~/.qgis-live/scale_style/<name>.json` を作れば同梱`default`を同名で上書き/別名追加できる(qgis_pyevalでファイル出力)
+- If category inference is wrong, pass `category` explicitly (e.g. `"road_major"`). The list is `categories[].key` in `scaleStyleTable`
+- If the user asks to switch profiles: `scaleStyleProfiles` → `setScaleStyleProfile`
+- For user-defined standards, create `~/.qgis-live/scale_style/<name>.json` to override the bundled `default` under the same name or add an alias (write the file with qgis_pyeval)
 
-## 同梱 default プロファイルの構造
+## Structure of the bundled default profile
 
 ```json
 {
-  "scale_bands": [{"max": 2500, "label": "1:2,500迄", "factor": 1.5}, ...],
+  "scale_bands": [{"max": 2500, "label": "up to 1:2,500", "factor": 1.5}, ...],
   "categories": [
     {"key": "road_major", "match": {"name_re": "国道|主要|..."},
      "base_mm": 0.55, "real_width_m": 13.0}, ...
@@ -65,12 +63,12 @@ use_when: ユーザーが線幅の決定・縮尺に応じた線の太さ・「�
 }
 ```
 
-- `width_mm = base_mm × 帯factor`(0.05〜10に丸め)。基準帯(1:5,000〜25,000)はfactor=1.0
-- `match` は `name_re`(レイヤ名正規表現)または `geom`(line/polygon)。先勝ち、`default` が兜底
-- `real_width_m` が null のカテゴリ(境界/等高線等)は mode=`meters` を適用できない→`mm`か`rules`を選ぶ
+- `width_mm = base_mm × band factor` (rounded to 0.05–10). The base band (1:5,000–25,000) has factor=1.0
+- `match` is `name_re` (layer-name regex) or `geom` (line/polygon). First match wins; `default` is the fallback
+- Categories whose `real_width_m` is null (boundaries, contours, etc.) cannot use mode=`meters` → choose `mm` or `rules`
 
-## 注意
+## Notes
 
-- 対象はライン/ポリゴンのベクターレイヤ(ストローク幅のあるもの)。ポイント/ラスタは `layer is not a line/polygon vector layer` で失敗する
-- rules 適用後に単一シンボルへ戻す場合は geo_legend `applySingleSymbol`
-- 縮尺帯ルールの active 範囲は `min_scale < 縮尺分母 <= max_scale`(QGIS仕様)
+- Targets are line/polygon vector layers (with a stroke width). Points/rasters fail with `layer is not a line/polygon vector layer`
+- To return to a single symbol after applying rules, use geo_legend `applySingleSymbol`
+- A scale-band rule's active range is `min_scale < scale denominator <= max_scale` (QGIS behaviour)
