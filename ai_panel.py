@@ -197,8 +197,6 @@ class AiPanel(QDockWidget):
         self._signin_abort = False
         self._confirm_event = threading.Event()
         self._confirm_result = False
-        self._mcp_done = False       # whether external MCP discovery has run
-        self._mcp_sessions = {}      # {name: McpSession} kept for disconnecting
         self._plugins = []           # plugin list at the last send (for ctx estimation)
         self._instr_dlg = None       # open instruction editor dialog
         self._attachments = []       # pending attachment image paths (PNG)
@@ -291,21 +289,6 @@ class AiPanel(QDockWidget):
         sk.addWidget(self.cmb_skill, 1)
         sk.addWidget(self.btn_skill_edit)
         form.addRow(self.tr("Skill"), skill_row)
-        # External MCP servers (~/.qgis-live/mcp_servers.json)
-        mcp_row = QWidget(box)
-        mk = QHBoxLayout(mcp_row)
-        mk.setContentsMargins(0, 0, 0, 0)
-        self.lbl_mcp = QLabel(self.tr("Not configured"), mcp_row)
-        self.lbl_mcp.setStyleSheet("color:#666")
-        self.btn_mcp = QPushButton(self.tr("Configure"), mcp_row)
-        self.btn_mcp.setToolTip(self.tr(
-            "Edit external MCP server settings (mcp_servers.json).\n"
-            "command=launch via stdio / url=Streamable HTTP.\n"
-            "Discovered tools become usable as "
-            "mcp_<server>__<tool>."))
-        mk.addWidget(self.lbl_mcp, 1)
-        mk.addWidget(self.btn_mcp)
-        form.addRow("MCP", mcp_row)
         # OAuth device-flow row, shown only when Copilot is selected
         self.w_signin = QWidget(box)
         sr = QHBoxLayout(self.w_signin)
@@ -484,7 +467,6 @@ class AiPanel(QDockWidget):
         self.btn_agent_edit.clicked.connect(self._edit_agent)
         self.cmb_agent.activated.connect(self._on_agent_activated)
         self.btn_skill_edit.clicked.connect(self._edit_skills)
-        self.btn_mcp.clicked.connect(self._edit_mcp)
         self.input.sig_submit.connect(self._send)
         self.input.sig_images.connect(self._on_pasted_images)
         self.btn_attach.clicked.connect(self._attach_files)
@@ -541,7 +523,6 @@ class AiPanel(QDockWidget):
         self._refresh_agents(s.value(_SETTING.format("agent"), ""))
         self._refresh_skills()
         self._refresh_prompts()
-        self._update_mcp_label()
 
     def _on_settings_toggled(self, on):
         self.box_api.setVisible(on)
@@ -693,73 +674,6 @@ class AiPanel(QDockWidget):
         self.cmb_agent.setCurrentIndex(idx if idx >= 0 else 0)
         QSettings().setValue(_SETTING.format("agent"), aid or "")
         self._update_ctx_label()
-
-    # ---- External MCP servers ----
-
-    def _update_mcp_label(self):
-        """Reflect the MCP configuration state in the row label."""
-        try:
-            n = len(ai_client.mcp_servers_config())
-        except ai_client.ApiError as e:
-            self.lbl_mcp.setText(
-                self.tr("Config error: {0}").format(e))
-            return
-        self.lbl_mcp.setText(
-            self.tr("{0} server(s)").format(n) if n
-            else self.tr("Not configured"))
-
-    def _edit_mcp(self):
-        dlg = _McpDialog(self)
-        dlg.exec()
-        self._update_mcp_label()
-        if dlg.saved:
-            self._reset_mcp()      # re-discover on the next send
-
-    def _reset_mcp(self):
-        """Close the connected MCP sessions and return to the undiscovered state."""
-        for s in self._mcp_sessions.values():
-            try:
-                s.close()
-            except Exception:  # nosec B110  # acceptable by design
-                pass
-        self._mcp_sessions = {}
-        self._mcp_done = False
-        ai_client.register_extra_tools([], {})
-
-    def _ensure_mcp(self):
-        """Connect to external MCP servers and register their tools (worker thread).
-
-        Runs only once, on the first send. Configuration changes reset it in _edit_mcp.
-        """
-        if self._mcp_done:
-            return
-        self._mcp_done = True
-        if not ai_client.mcp_servers_config():
-            self._emit(self.sig_append, "tool",
-                       self.tr("MCP server not configured"))
-            return
-        self._emit(self.sig_status,
-                   self.tr("Connecting to MCP servers…"))
-        r = ai_client.mcp_discover(
-            on_status=lambda m: self._emit(
-                self.sig_append, "tool", m),
-            is_aborted=lambda: self._abort)
-        ai_client.register_extra_tools(r["tools"], r["callers"])
-        self._mcp_sessions = r["sessions"]
-        if self._abort:
-            # Aborted while unconnected. Re-discover on the next send
-            self._mcp_done = False
-            return
-        for name, err in r["errors"].items():
-            self._emit(self.sig_append, "error",
-                       self.tr("MCP '{0}' connection failed: {1}")
-                       .format(name, err))
-        ok = {n: len(s.tools) for n, s in r["sessions"].items()}
-        if ok:
-            self._emit(self.sig_append, "tool",
-                       self.tr("MCP connected: ") + ", ".join(
-                           self.tr("{0} ({1} tools)").format(n, c)
-                           for n, c in ok.items()))
 
     def _load_provider_fields(self):
         """Load the saved values of the current provider (defaults if none) into the fields."""
@@ -1317,7 +1231,6 @@ class AiPanel(QDockWidget):
     def _on_destroyed(self):
         self._alive = False
         self._signin_abort = True
-        self._reset_mcp()
         ai_client.close_acp_sessions()
 
     def _emit(self, sig, *args):
@@ -1697,7 +1610,6 @@ class AiPanel(QDockWidget):
             "{0}: {1}".format(
                 ai_client.tr_label(prov.label),
                 u.get("title") or kind or "…"))
-        self._ensure_mcp()
         system = self._build_system(plugins, cfg.get("agent"))
         msgs = prov.build_messages(
             system, ai_client.trim_history(self._history),
@@ -1784,8 +1696,6 @@ class AiPanel(QDockWidget):
             return {"text": "SKIPPED: user denied", "image": None}
         if name in ai_client.INSTRUCTION_TOOL_NAMES:
             return self._run_instruction_tool(name, args)
-        if (name or "").startswith("mcp_"):
-            return self._run_extra_tool(name, args)
         try:
             cmd = ai_client.tool_to_command(name, args)
         except ai_client.ApiError as e:
@@ -1847,23 +1757,6 @@ class AiPanel(QDockWidget):
                    + ("…" if len(text) > 2000 else ""))
         return r
 
-    def _run_extra_tool(self, name, args):
-        """Run an external MCP tool (mcp_<server>__<tool>) through its session."""
-        self._emit(self.sig_append, "tool",
-                   f"{name} {json.dumps(args or {}, ensure_ascii=False)}")
-        self._emit(self.sig_status,
-                   self.tr("{0} running…").format(name))
-        try:
-            text = ai_client.run_extra_tool(name, args)
-        except ai_client.ApiError as e:
-            text = f"ERROR: {e}"
-        except Exception as e:
-            text = f"ERROR: {type(e).__name__}: {e}"
-        self._emit(self.sig_append, "tool",
-                   f"→ {text[:2000]}"
-                   + ("…" if len(text) > 2000 else ""))
-        return {"text": text, "image": None}
-
     # ---- Tool execution confirmation (confirmation mode) ----
 
     def _confirm_tool(self, name, args):
@@ -1891,114 +1784,6 @@ class AiPanel(QDockWidget):
         ) == QMessageBox.StandardButton.Yes
         self._confirm_result = ok
         self._confirm_event.set()
-
-
-class _McpDialog(QDialog):
-    """Editor for the external MCP server config (~/.qgis-live/mcp_servers.json).
-
-    Edits a Claude Desktop-compatible JSON directly.
-    """
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setWindowTitle(
-            self.tr("External MCP server settings"))
-        self.resize(560, 420)
-        self.saved = False
-        lay = QVBoxLayout(self)
-        lbl = QLabel(
-            self.tr(
-                "Configure external MCP servers in "
-                "{\"mcpServers\": {...}} format.\n"
-                "command=launch via stdio / url=Streamable HTTP. "
-                "Discovered tools are usable as "
-                "mcp_<server>__<tool>.\n"
-                "oauth.client_secret is moved to the OS credential "
-                "store on save, leaving only a $store: reference in "
-                "the config file.\n"
-                "Saving an empty field disables MCP servers, and "
-                "saving reconnects on the next send."), self)
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet("color:#666; font-size:11px")
-        lay.addWidget(lbl)
-        self.ed = QPlainTextEdit(self)
-        try:
-            with open(ai_client.mcp_config_path(), "r",
-                      encoding="utf-8") as f:
-                text = f.read()
-        except Exception:
-            text = json.dumps(ai_client.MCP_CONFIG_TEMPLATE,
-                              ensure_ascii=False, indent=2)
-        self.ed.setPlainText(text)
-        lay.addWidget(self.ed, 1)
-        # Connection examples (read-only). Click to merge-insert into the editor
-        grp = QGroupBox(self.tr("Connection examples"), self)
-        gl = QVBoxLayout(grp)
-        gl.setContentsMargins(4, 4, 4, 4)
-        self.ed_sample = QPlainTextEdit(grp)
-        self.ed_sample.setReadOnly(True)
-        self.ed_sample.setPlainText(
-            json.dumps(ai_client.MCP_CONFIG_TEMPLATE,
-                       ensure_ascii=False, indent=2))
-        self.ed_sample.setMaximumHeight(120)
-        self.ed_sample.setStyleSheet(
-            "font-family:Consolas,monospace; font-size:11px;"
-            "background:#f6f6f6")
-        gl.addWidget(self.ed_sample)
-        btn_insert = QPushButton(
-            self.tr("Insert example into editor"), grp)
-        gl.addWidget(btn_insert)
-        lay.addWidget(grp)
-        row = QHBoxLayout()
-        btn_save = QPushButton(self.tr("Save"), self)
-        btn_close = QPushButton(self.tr("Close"), self)
-        row.addWidget(btn_save)
-        row.addStretch(1)
-        row.addWidget(btn_close)
-        lay.addLayout(row)
-        btn_save.clicked.connect(self._save)
-        btn_insert.clicked.connect(self._insert_sample)
-        btn_close.clicked.connect(self.reject)
-
-    def _insert_sample(self):
-        """Merge-insert a connection example into the editor's mcpServers."""
-        try:
-            d = json.loads(self.ed.toPlainText() or "{}")
-        except Exception as e:
-            QMessageBox.warning(self, self.tr("MCP settings"),
-                                self.tr("Cannot read JSON: {0}")
-                                .format(e))
-            return
-        if not isinstance(d, dict):
-            d = {}
-        sv = d.setdefault("mcpServers", {})
-        for name, conf in ai_client.MCP_CONFIG_TEMPLATE[
-                "mcpServers"].items():
-            if name not in sv:
-                sv[name] = conf
-        self.ed.setPlainText(
-            json.dumps(d, ensure_ascii=False, indent=2))
-
-    def _save(self):
-        text = self.ed.toPlainText()
-        try:
-            saved = ai_client.mcp_save_config(text)
-        except ai_client.ApiError as e:
-            QMessageBox.warning(self, self.tr("MCP settings"), str(e))
-            return
-        if saved != text:
-            self.ed.setPlainText(saved)
-            # $store: notify the client_secret migration only when refs increase
-            # (not for normalization such as blank -> {"mcpServers": {}})
-            if (saved.count(ai_client.MCP_SECRET_REF)
-                    > text.count(ai_client.MCP_SECRET_REF)):
-                QMessageBox.information(
-                    self, self.tr("MCP settings"),
-                    self.tr("Moved client_secret to the OS credential "
-                            "store; only a $store: reference remains "
-                            "in the config file."))
-        self.saved = True
-        self.accept()
 
 
 class _InstructionsDialog(QDialog):

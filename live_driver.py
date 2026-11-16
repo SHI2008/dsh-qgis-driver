@@ -31,7 +31,7 @@ Auth: a session token is generated at startup and written to live_dir/token and
 the registry JSON (both with user-only ACLs). File-based
 commands require a matching token; writes from other users on the same
 machine or from unrelated processes are rejected. The HTTP surface uses the
-same token for Bearer auth (see mcp_http.py).
+same token for Bearer auth (see http_api.py).
 
 Commands that use plugin_id as a "route" (eval/pyeval/screenshot/
 devreload) are forwarded to that plugin's LiveDriver when plugin_id points at
@@ -77,7 +77,7 @@ def _to_jsonable(v):
 
 
 # ---- Audit log (~/.qgis-live/audit-<date>.jsonl) ----
-# Persists every command that goes through _handle (file JSONL/REST/MCP/AI panel).
+# Persists every command that goes through _handle (file JSONL/REST/AI panel).
 # secrets keys are masked as "***" and the session token is never recorded.
 _AUDIT_MASK_KEYS = re.compile(
     r"token|secret|passw|api[-_]?key|authorization|credential", re.I)
@@ -453,6 +453,60 @@ def _find_plugin_driver(plugin_id):
     return None
 
 
+class TaskRegistry:
+    """Registry of background pyeval tasks for the async channel.
+
+    Pure Python (no QGIS objects). A daemon thread runs the code in a fresh
+    namespace and writes the result here; a finished task is popped on its
+    first read so it is returned exactly once. Stale running tasks are dropped
+    by cleanup() after ttl seconds.
+    """
+
+    def __init__(self, ttl=3600.0):
+        self._tasks = {}
+        self._lock = threading.Lock()
+        self._ttl = ttl
+
+    def new(self):
+        task_id = secrets.token_hex(12)
+        with self._lock:
+            self._tasks[task_id] = {
+                "task_id": task_id,
+                "status": "running",
+                "result": None,
+                "error": None,
+                "created": time.monotonic(),
+            }
+        return task_id
+
+    def finish(self, task_id, result=None, error=None):
+        with self._lock:
+            t = self._tasks.get(task_id)
+            if t is not None:
+                t["status"] = "error" if error else "done"
+                t["result"] = result
+                t["error"] = error
+
+    def get(self, task_id):
+        """Return a running task's snapshot, or pop a finished task (one read)."""
+        with self._lock:
+            t = self._tasks.get(task_id)
+            if t is None:
+                return None
+            if t["status"] in ("done", "error"):
+                return self._tasks.pop(task_id)
+            return dict(t)
+
+    def cleanup(self):
+        now = time.monotonic()
+        with self._lock:
+            stale = [k for k, v in self._tasks.items()
+                     if now - v["created"] > self._ttl
+                     and v["status"] == "running"]
+            for k in stale:
+                self._tasks.pop(k, None)
+
+
 class LiveDriver:
     def __init__(self, live_dir, iface):
         self.iface = iface
@@ -480,6 +534,7 @@ class LiveDriver:
         # iface/QgsProject must not be touched off the GUI thread, so
         # execution always happens inside this driver's _poll (GUI thread)
         self._queue = queue.Queue()
+        self.tasks = TaskRegistry()
         os.makedirs(live_dir, exist_ok=True)
         try:
             with open(os.path.join(live_dir, "token"), "w",
@@ -617,6 +672,12 @@ class LiveDriver:
             return self._forward(cid, pid, cmd, reply)
         if ctype == "pyeval":
             self._pyeval(cid, cmd.get("code", ""), reply)
+            return
+        if ctype == "pyeval_async":
+            self._pyeval_async(cid, cmd.get("code", ""), reply)
+            return
+        if ctype == "task_status":
+            self._task_status(cid, cmd.get("task_id", ""), reply)
             return
         if ctype == "screenshot":
             self._screenshot(cid, cmd, reply)
@@ -989,6 +1050,60 @@ class LiveDriver:
             reply({"id": cid, "result": _to_jsonable(res)})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
+
+    def _pyeval_async(self, cid, code, reply):
+        """Start a background pyeval task and return its task_id immediately.
+
+        The code runs in a fresh pure-Python namespace (no QGIS objects), so it
+        cannot touch iface/QgsProject and never blocks the GUI thread. Poll the
+        result with task_status (GET /api/tasks/<id>).
+        """
+        try:
+            task_id = self.submit_pyeval_async(code)
+            reply({"id": cid, "result": {"task_id": task_id,
+                                         "status": "running"}})
+        except Exception:
+            reply({"id": cid, "error": traceback.format_exc()})
+
+    def _task_status(self, cid, task_id, reply):
+        """Return one background task's state (popping a finished task)."""
+        try:
+            if not task_id:
+                reply({"id": cid, "error": "task_id required"})
+                return
+            self.tasks.cleanup()
+            t = self.tasks.get(task_id)
+            if t is None:
+                reply({"id": cid, "error": f"task not found: {task_id}"})
+                return
+            reply({"id": cid, "result": t})
+        except Exception:
+            reply({"id": cid, "error": traceback.format_exc()})
+
+    def submit_pyeval_async(self, code):
+        """Run code in a daemon thread (pure Python) and return its task_id.
+
+        Returns the task_id immediately; the caller polls task_status. The
+        async namespace is isolated from the QGIS process (no iface/QgsProject).
+        """
+        task_id = self.tasks.new()
+
+        def _run(_tid=task_id):
+            local_ns = {}
+            try:
+                try:
+                    code_obj = compile(code, "<pyeval_async>", "eval")
+                except SyntaxError:
+                    code_obj = compile(code, "<pyeval_async>", "exec")
+                res = eval(code_obj, {}, local_ns)  # nosec B307  # arbitrary execution is intended
+                if res is None:
+                    res = local_ns.get("result")
+                self.tasks.finish(_tid, result=_to_jsonable(res))
+            except Exception:
+                self.tasks.finish(_tid, error=traceback.format_exc())
+
+        threading.Thread(target=_run, daemon=True).start()
+        return task_id
 
     def _reply(self, obj):
         os.makedirs(os.path.dirname(self.res_path), exist_ok=True)

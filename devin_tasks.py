@@ -609,7 +609,7 @@ class AcpSession:
     _ACP_MODES = {"dangerous": "bypass", "smart": "smart",
                   "accept-edits": "accept-edits"}
 
-    def __init__(self, cwd, exe=None, mcp_servers=None, mode="bypass",
+    def __init__(self, cwd, exe=None, mode="bypass",
                  on_update=None, session_id=None, model=None,
                  engine="devin"):
         self.cwd = cwd
@@ -682,25 +682,17 @@ class AcpSession:
                                  timeout=15.0)
                     except TaskError:
                         pass
-            mcp = list(mcp_servers or [])
             if session_id and caps.get("loadSession"):
                 try:
                     s = self.rpc("session/load", {
                         "sessionId": session_id, "cwd": cwd,
-                        "mcpServers": mcp}, timeout=60.0)
+                        "mcpServers": []}, timeout=60.0)
                     self.session_id = session_id
                 except TaskError:
                     session_id = None
             if not self.session_id:
-                try:
-                    s = self.rpc("session/new", {
-                        "cwd": cwd, "mcpServers": mcp}, timeout=60.0)
-                except TaskError:
-                    if not mcp:
-                        raise
-                    # may be caused by the MCP definitions, so retry with an empty list
-                    s = self.rpc("session/new", {
-                        "cwd": cwd, "mcpServers": []}, timeout=60.0)
+                s = self.rpc("session/new", {
+                    "cwd": cwd, "mcpServers": []}, timeout=60.0)
                 self.session_id = s.get("sessionId")
             self.modes = (s or {}).get("modes")
             self.config_options = (s or {}).get("configOptions")

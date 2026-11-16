@@ -273,7 +273,7 @@ def show_dialog(iface, own_file, notify=None):
     lay.addWidget(note)
     human_note = QLabel(tr(
         "[UI only] Mode switching is a manual operation — it cannot be "
-        "invoked by AI or automation (no API/MCP path). "
+        "invoked by AI or automation (no API path). "
         "deployMode() is read-only."), dlg)
     human_note.setWordWrap(True)
     lay.addWidget(human_note)

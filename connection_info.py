@@ -1,65 +1,26 @@
 """Connection info dialog (first-run guidance).
 
 So that a user who enabled remote control is not left wondering "what next",
-it shows the MCP/REST connection details together with the client config JSON
-that can be pasted straight into an MCP client, all in copyable form.
+it shows the REST connection details together with a copyable curl example,
+plus the session token, live dir and registry path.
 
 - Opened from the menu "Plugins > QGIS Live Driver > Connection Info"
 - Also shown automatically right after the remote control toggle is turned ON
 - Opens even while remote control is OFF. In that case it shows only the
-  enablement steps and the stdio shim config (which contains no connection
-  details, since the session is auto-detected)
+  enablement steps.
 
 The layout is "top Harness repository row (always visible) + tabs by content":
 the repo is the first thing needed for initial setup, so it stays visible,
-while MCP/REST/session details are separated into tabs for readability.
+while REST/session details are separated into tabs for readability.
 """
 
-import json
 import os
-import sys
 
 from qgis.PyQt.QtCore import QCoreApplication
 
 
 def _tr(s):
     return QCoreApplication.translate("geo_driver", s)
-
-
-def _python_exe():
-    """Guess a Python executable path able to run the stdio shim.
-
-    Inside QGIS, sys.executable points at qgis-bin.exe and cannot be used.
-    The bundled Python lives at sys.exec_prefix/python.exe (verified).
-    If it is not found, return "python" and leave it to PATH resolution.
-    """
-    name = "python.exe" if os.name == "nt" else "python"
-    for base in (sys.exec_prefix, sys.base_prefix):
-        cand = os.path.join(base, name)
-        if os.path.isfile(cand):
-            return cand
-    return "python"
-
-
-def _stdio_config(plugin_dir):
-    """Return the stdio config for an MCP client (a JSON string).
-
-    The shim auto-detects the running session from the registry, so the same
-    config can be produced even while remote control is OFF.
-    """
-    shim = os.path.join(plugin_dir, "mcp_stdio.py")
-    return json.dumps(
-        {"mcpServers": {"qgis-live": {
-            "command": _python_exe(), "args": [shim]}}},
-        ensure_ascii=False, indent=2)
-
-
-def _http_config(port, token):
-    return json.dumps(
-        {"mcpServers": {"qgis-live": {
-            "url": f"http://127.0.0.1:{port}/mcp",
-            "headers": {"Authorization": f"Bearer {token}"}}}},
-        ensure_ascii=False, indent=2)
 
 
 def _curl_example(port, token):
@@ -78,7 +39,7 @@ def _repo_status(plugin_dir):
 
 def _off_msg():
     return _tr(
-        "Remote control is OFF.\n"
+        "Remote control is OFF.\\n"
         "Enable it via Plugins > QGIS Live Driver > "
         "Remote Control (localhost only), then press Refresh.")
 
@@ -86,14 +47,14 @@ def _off_msg():
 def build_sections(plugin):
     """Build and return the per-tab display data.
 
-    {"repo": str|None, "status": str, "mcp": str, "rest": str,
+    {"repo": str|None, "status": str, "rest": str,
      "fields": {"reg": str, "livedir": str|None, "token": str|None},
      "snippets": {key: text}}
     """
     plugin_dir = os.path.dirname(os.path.abspath(__file__))
     drv = plugin.driver
     repo = _repo_status(plugin_dir)
-    snippets = {"stdio": _stdio_config(plugin_dir)}
+    snippets = {}
     if repo:
         snippets["repo"] = repo
 
@@ -105,14 +66,9 @@ def build_sections(plugin):
     fields = {"reg": reg_path, "livedir": None, "token": None}
     snippets["reg"] = reg_path
 
-    stdio_block = ("--- " + _tr(
-        "MCP client config (stdio shim; auto-discovers this session)")
-        + " ---\n" + snippets["stdio"])
-
     if drv is None:
         off = _off_msg()
         status = off
-        mcp = off + "\n\n" + stdio_block
         rest = off
     else:
         port = drv.http_port
@@ -123,21 +79,15 @@ def build_sections(plugin):
         status = _tr("Remote control is enabled.")
         if port:
             status += f"  (http://127.0.0.1:{port})"
-            snippets["http"] = _http_config(port, drv.token)
             snippets["curl"] = _curl_example(port, drv.token)
-            mcp = (f"MCP (Streamable HTTP): http://127.0.0.1:{port}/mcp"
-                   "\n\n" + stdio_block + "\n\n--- " + _tr(
-                       "MCP client config (Streamable HTTP)") + " ---\n"
-                   + snippets["http"])
             rest = (f"REST API base: http://127.0.0.1:{port}/api"
-                    "\n\n--- " + _tr("REST example (curl)") + " ---\n"
+                    "\\n\\n--- " + _tr("REST example (curl)") + " ---\\n"
                     + snippets["curl"])
         else:
-            mcp = stdio_block
             rest = _tr(
-                "(HTTP server is not listening; stdio MCP and the "
-                "registry file still work)")
-    return {"repo": repo, "status": status, "mcp": mcp, "rest": rest,
+                "(HTTP server is not listening; the registry file "
+                "still works)")
+    return {"repo": repo, "status": status, "rest": rest,
             "fields": fields, "snippets": snippets}
 
 
@@ -212,10 +162,6 @@ def show_dialog(plugin):
         tabs.addTab(w, title)
         return edit, row
 
-    mcp_edit, mcp_row = _text_tab("MCP")
-    _copy_btn(mcp_row, _tr("Copy MCP config (stdio)"), "stdio")
-    _copy_btn(mcp_row, _tr("Copy MCP config (HTTP)"), "http")
-
     rest_edit, rest_row = _text_tab("REST")
     _copy_btn(rest_row, _tr("Copy REST example"), "curl")
     _copy_btn(rest_row, _tr("Copy token"), "token")
@@ -258,7 +204,6 @@ def show_dialog(plugin):
             "" if repo else _tr("(not configured)"))
         state["snippets"] = secs["snippets"]
         status_lbl.setText(secs["status"])
-        mcp_edit.setPlainText(secs["mcp"])
         rest_edit.setPlainText(secs["rest"])
         for key, lab, holder, e in sess_rows:
             val = secs["fields"].get(key)
@@ -287,7 +232,7 @@ def show_dialog(plugin):
         if not ok:
             QMessageBox.warning(
                 dlg, "QGIS Live Driver",
-                _tr("Not a harness repository") + "\n" + msg)
+                _tr("Not a harness repository") + "\\n" + msg)
             return
         _notify(_tr("Harness repository set: {0}").format(d))
         _refresh()

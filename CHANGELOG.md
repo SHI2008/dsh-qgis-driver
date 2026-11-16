@@ -3,6 +3,33 @@
 Change history of this plugin. Follows Keep a Changelog.
 Versions are kept in sync with `version` in `metadata.txt`.
 
+## [Unreleased]
+
+### Added
+- REST async execution channel: `POST /api/pyeval_async` returns a
+  `task_id` immediately and `GET /api/tasks/<task_id>` polls the result
+  (live_driver.py `TaskRegistry` + `submit_pyeval_async`; http_api.py
+  routes). Async code runs in a fresh namespace on a background thread.
+
+### Removed
+- The entire MCP surface: the `/mcp` Streamable HTTP endpoint and its
+  `_mcp`/`_tool_call`/`_tool_screenshot` handlers, the bundled stdio
+  shim `mcp_stdio.py`, the outbound MCP client in ai_client.py
+  (`McpSession`/`_McpHttp`/`_McpStdio`/`mcp_discover`/`_oauth_*` and the
+  `mcp_<server>__<tool>` extra tools), the AI panel "MCP" settings row
+  and `_McpDialog`, and the connection-info dialog's MCP tab and client
+  configs. `mcp_http.py` was renamed to `http_api.py`.
+
+### Changed
+- Connection Info dialog now shows only the REST example, token and
+  session details (MCP tab and stdio/HTTP client configs removed).
+- Devin/Copilot ACP sessions no longer receive geo_driver's `/mcp` as an
+  MCP server (`mcpServers: []`).
+- i18n catalogs: removed the `_McpDialog` context and all MCP keys.
+
+### Notes
+- This fork is not intended to be merged upstream.
+
 ## [Fork] - 2026-11-16
 
 Independent maintenance fork starts from upstream v0.16.2

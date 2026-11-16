@@ -37,7 +37,7 @@ def _http_allowed():
 
 
 def _registry_dir():
-    # The spawned side (MCP client shims etc.) has no env vars, so write the
+    # The spawned side has no env vars, so write the
     # discovery info to a fixed path ~/.qgis-live/
     return os.environ.get(
         "QGIS_LIVE_REGISTRY",
@@ -75,7 +75,7 @@ class GeoDriverPlugin:
 
     Exposed surfaces:
       - File JSONL (commands.jsonl/results.jsonl) — language-neutral base
-      - HTTP 127.0.0.1:<auto port> (/mcp = MCP Streamable HTTP, /api/* = REST)
+      - HTTP 127.0.0.1:<auto port> (/api/* = REST)
       - ~/.qgis-live/<pid>-geo_driver.json — connection info + token (discovery)
     """
 
@@ -630,7 +630,7 @@ class GeoDriverPlugin:
             api_keys.add(env_key)
         port = None
         try:
-            from .mcp_http import start_http
+            from .http_api import start_http
             self._http, port = start_http(
                 self.driver, api_keys=api_keys,
                 allowed=_http_allowed())
@@ -652,8 +652,6 @@ class GeoDriverPlugin:
                     "plugin_id": __package__,
                     "live_dir": live_dir,
                     "http_port": port,
-                    "mcp_url": (f"http://127.0.0.1:{port}/mcp"
-                                if port else None),
                     "token": self.driver.token,
                     "http_tools": (sorted(_http_allowed())
                                    if _http_allowed() else "all"),

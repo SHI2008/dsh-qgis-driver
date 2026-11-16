@@ -27,7 +27,7 @@ Supported providers:
     response is used as the API host. Requires a Copilot subscription.
     The "Sign in with GitHub" button gets a token via the OAuth device flow)
 
-Tool definitions are mcp_http.TOOLS (same as MCP/REST), converted to each
+Tool definitions are http_api.TOOLS (REST), converted to each
 provider's schema. Execution is delegated to LiveDriver.submit(), so this
 module never touches QGIS itself.
 
@@ -37,15 +37,11 @@ parse / append_exchange; ai_panel's agent loop is provider-agnostic.
 """
 
 import base64
-import hashlib
 import inspect
-import itertools
 import json
 import os
 import re
-import secrets
 import shutil
-import subprocess  # nosec B404  # needed to launch MCP servers
 import tempfile
 import threading
 import time
@@ -53,10 +49,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-import webbrowser
 
-from . import credential_store
-from .mcp_http import TOOLS
+from .http_api import TOOLS
 
 try:
     from qgis.PyQt.QtCore import QCoreApplication, QT_TRANSLATE_NOOP
@@ -614,8 +608,6 @@ Guidelines:
     body after the header becomes the text inserted into the input.
   If the intent is genuinely ambiguous, ask the user which they want
   before saving.
-- `mcp_<server>__<tool>` tools (if present) are provided by external
-  MCP servers configured on this machine.
 - Keep each step small and verify the result before moving on.
 - Answer in the user's language.
 """
@@ -834,10 +826,10 @@ def _tool_short(name):
 
 
 def openai_tools(allowed=None):
-    """Convert mcp_http.TOOLS + INSTRUCTION_TOOLS + external MCP tools into
+    """Convert http_api.TOOLS + INSTRUCTION_TOOLS into
     the OpenAI function calling schema."""
     out = []
-    for t in TOOLS + INSTRUCTION_TOOLS + _EXTRA_TOOLS:
+    for t in TOOLS + INSTRUCTION_TOOLS:
         if allowed is not None and _tool_short(t["name"]) not in allowed:
             continue
         out.append({
@@ -1085,10 +1077,10 @@ def _gemini_schema(s):
 
 
 def gemini_tools(allowed=None):
-    """Convert mcp_http.TOOLS + INSTRUCTION_TOOLS + external MCP tools into
+    """Convert http_api.TOOLS + INSTRUCTION_TOOLS into
     Gemini functionDeclarations."""
     decls = []
-    for t in TOOLS + INSTRUCTION_TOOLS + _EXTRA_TOOLS:
+    for t in TOOLS + INSTRUCTION_TOOLS:
         if allowed is not None and _tool_short(t["name"]) not in allowed:
             continue
         decls.append({
@@ -1164,10 +1156,10 @@ def anthropic_headers(api_key):
 
 
 def anthropic_tools(allowed=None):
-    """Convert mcp_http.TOOLS + INSTRUCTION_TOOLS + external MCP tools into
+    """Convert http_api.TOOLS + INSTRUCTION_TOOLS into
     Anthropic tools (input_schema)."""
     out = []
-    for t in TOOLS + INSTRUCTION_TOOLS + _EXTRA_TOOLS:
+    for t in TOOLS + INSTRUCTION_TOOLS:
         if allowed is not None and _tool_short(t["name"]) not in allowed:
             continue
         out.append({
@@ -1269,7 +1261,7 @@ def azure_resource_url(base, tail):
 def tool_to_command(name, args):
     """Convert a tool call (qgis_<type>) into a driver command dict.
 
-    Same rule as mcp_http._tool_call: strip the qgis_ prefix to get the
+    Strip the qgis_ prefix to get the
     type, then merge the arguments as-is. Arguments that are None are not sent.
     """
     if not (name or "").startswith("qgis_"):
@@ -1701,7 +1693,7 @@ def delete_instruction(kind, item_id):
 # The qgis_* tools are driver commands, but the ai_* tools run locally
 # in the panel and delegate to this file layer.
 # They use the same {name, description, inputSchema} shape as
-# mcp_http.TOOLS so they can be mixed into openai_tools()/gemini_tools().
+# http_api.TOOLS so they can be mixed into openai_tools()/gemini_tools().
 
 _KIND_PROP = {"type": "string",
               "enum": ["agents", "skills", "prompts"],
@@ -1826,700 +1818,6 @@ def run_instruction_tool(name, args):
             f"cannot delete {kind} '{a.get('id')}'"
             "(does not exist or is bundled)")
     raise ApiError(f"Unknown tool: {name}")
-
-
-# ---- External MCP client (outbound connections) ----
-# Connection layer that lets the AI panel use tools of external MCP servers.
-# Config lives in ~/.qgis-live/mcp_servers.json (Claude Desktop compatible):
-#   {"mcpServers": {"fs":  {"command": "npx", "args": [...]},
-#                   "api": {"url": "http://localhost:3000/mcp"}}}
-# command = stdio launch / url = Streamable HTTP. Discovered tools are
-# mangled to mcp_<server>__<tool>, mixed into function calling, and run
-# locally by the panel through _EXTRA_TOOL_CALLERS.
-# Secret values (client_secret, headers, env) resolve from the OS
-# credential store (credential_store) when written as "$store:<key>".
-# A plaintext oauth.client_secret is moved to the store automatically
-# when mcp_save_config saves, leaving only the reference in the file.
-
-MCP_PROTOCOL_VERSION = "2025-03-26"
-
-
-def mcp_config_path():
-    """Configuration file for external MCP servers."""
-    return os.path.join(_registry_dir(), "mcp_servers.json")
-
-
-# Credential-store reference prefix used inside config values
-MCP_SECRET_REF = "$store:"  # nosec B105  # reference prefix (not a credential)
-
-
-def _mcp_secret_key(server, field):
-    """Key name in the credential store (server name + field name)."""
-    return f"mcp:{server}:{field}"
-
-
-def _resolve_secret_ref(v):
-    """Resolve a value from the credential store when it is a '$store:<key>' ref."""
-    if isinstance(v, str) and v.startswith(MCP_SECRET_REF):
-        key = v[len(MCP_SECRET_REF):]
-        s = credential_store.get_secret(key)
-        if s is None:
-            raise ApiError(
-                f"'{key}' not found in credential store"
-                "($store: reference in mcp_servers.json)")
-        return s
-    return v
-
-
-MCP_CONFIG_TEMPLATE = {
-    "mcpServers": {
-        "example-stdio": {
-            "command": "npx",
-            "args": ["-y", "@modelcontextprotocol/server-filesystem",
-                     "C:\\work"],
-        },
-        "example-http": {
-            "url": "http://localhost:3000/mcp",
-            "headers": {"Authorization": "Bearer <static token>"},
-        },
-        "box-http-oauth": {
-            "url": "https://mcp.box.com",
-            "oauth": {
-                "authorize_url":
-                    "https://account.box.com/api/oauth2/authorize",
-                "token_url": "https://api.box.com/oauth2/token",  # nosec B105  # public API URL
-                "client_id": "<Box app Client ID>",
-                "client_secret": "<Client Secret>",  # nosec B105  # template placeholder
-                "redirect_uri": "http://127.0.0.1:8020/callback",
-            },
-        },
-        "example-http-ccg": {
-            "url": "https://example.com/mcp",
-            "oauth": {
-                "token_url": "https://example.com/oauth/token",  # nosec B105  # example URL
-                "client_id": "<client_id>",
-                "client_secret": "<client_secret>",  # nosec B105  # template placeholder
-                "extra": {"box_subject_type": "enterprise",
-                          "box_subject_id": "<id>"},
-            },
-        },
-    },
-}
-
-
-def mcp_servers_config():
-    """Read mcp_servers.json and return {name: {command|url, ...}}."""
-    try:
-        with open(mcp_config_path(), "r", encoding="utf-8") as f:
-            d = json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        raise ApiError(f"cannot read mcp_servers.json: {e}")
-    servers = d.get("mcpServers") if isinstance(d, dict) else None
-    if not isinstance(servers, dict):
-        return {}
-    return {str(n): c for n, c in servers.items()
-            if isinstance(c, dict) and (c.get("command") or c.get("url"))}
-
-
-def mcp_save_config(text):
-    """Validate the config JSON text and save it to mcp_servers.json.
-
-    A plaintext oauth.client_secret is moved to the OS credential store
-    (credential_store) and only the '$store:<key>' reference is kept in
-    the config file (same policy as API keys: if storing fails, nothing
-    is saved in plaintext). Returns the JSON text that was actually
-    saved. An empty text means "no MCP servers" and normalizes to
-    {"mcpServers": {}}.
-    """
-    if not (text or "").strip():
-        text = '{"mcpServers": {}}'
-    try:
-        d = json.loads(text)
-    except Exception as e:
-        raise ApiError(f"invalid JSON: {e}")
-    if not isinstance(d, dict) \
-            or not isinstance(d.get("mcpServers"), dict):
-        raise ApiError('use {"mcpServers": {...}} format')
-    migrated = False
-    for name, conf in d["mcpServers"].items():
-        oc = conf.get("oauth") if isinstance(conf, dict) else None
-        sec = oc.get("client_secret") if isinstance(oc, dict) else None
-        if not isinstance(sec, str) or not sec \
-                or sec.startswith(MCP_SECRET_REF) \
-                or (sec.startswith("<") and sec.endswith(">")):
-            continue                      # already a reference or unfilled template
-        key = _mcp_secret_key(name, "client_secret")
-        if not credential_store.set_secret(key, sec):
-            raise ApiError(
-                f"could not save client_secret for '{name}' to the "
-                f"credential store (backend={credential_store.backend()}); "
-                "not saved in plain text.")
-        oc["client_secret"] = MCP_SECRET_REF + key
-        migrated = True
-    out = (json.dumps(d, ensure_ascii=False, indent=2)
-           if migrated else text)
-    os.makedirs(os.path.dirname(mcp_config_path()), exist_ok=True)
-    with open(mcp_config_path(), "w", encoding="utf-8") as f:
-        f.write(out)
-    return out
-
-
-def _loads_rpc(text):
-    """Enumerate the JSON-RPC messages (single message or batch)."""
-    try:
-        d = json.loads(text)
-    except Exception:
-        return
-    for m in (d if isinstance(d, list) else [d]):
-        if isinstance(m, dict):
-            yield m
-
-
-def _iter_rpc_msgs(raw, ctype=""):
-    """Enumerate JSON-RPC messages from an HTTP response body.
-
-    application/json is a single message or batch as-is; for
-    text/event-stream each SSE event's data: payload (multi-line
-    allowed) is one message.
-    """
-    if "text/event-stream" in (ctype or ""):
-        data_lines = []
-        for line in raw.splitlines():
-            if line.startswith("data:"):
-                data_lines.append(line[5:].lstrip())
-            elif not line.strip() and data_lines:
-                yield from _loads_rpc("\n".join(data_lines))
-                data_lines = []
-        if data_lines:
-            yield from _loads_rpc("\n".join(data_lines))
-    else:
-        yield from _loads_rpc(raw)
-
-
-def _mcp_error(m):
-    e = m.get("error")
-    if isinstance(e, dict):
-        e = e.get("message", e)
-    return f"MCP error: {e}"
-
-
-def _oauth_request(oc, body, timeout=30.0):
-    """Form-encoded POST to the token endpoint (RFC 6749 Basic auth).
-
-    @returns dict of {"access_token","refresh_token"?,"expires_at"}
-    """
-    turl = oc.get("token_url") or ""
-    if not turl:
-        raise ApiError("oauth.token_url is empty")
-    cid = _resolve_secret_ref(oc.get("client_id")) or ""
-    csec = _resolve_secret_ref(oc.get("client_secret")) or ""
-    body = dict(body)
-    headers = {"Content-Type": "application/x-www-form-urlencoded",
-               "Accept": "application/json"}
-    if csec:
-        # confidential client: RFC 6749 Basic auth
-        cred = (f"{urllib.parse.quote(cid)}:"
-                f"{urllib.parse.quote(csec)}")
-        headers["Authorization"] = (
-            "Basic " + base64.b64encode(cred.encode()).decode())
-    elif cid:
-        body.setdefault("client_id", cid)   # public client
-    _require_http_scheme(turl)
-    req = urllib.request.Request(
-        turl, data=urllib.parse.urlencode(body).encode("utf-8"),
-        headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https only
-            d = json.loads(r.read().decode("utf-8", "replace"))
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", "replace")[:300]
-        except Exception:  # nosec B110  # acceptable by design
-            pass
-        raise ApiError(
-            f"token fetch HTTP {e.code}: {detail or e.reason}") from e
-    except urllib.error.URLError as e:
-        raise ApiError(f"token fetch connection failed: {e.reason}") from e
-    tok = d.get("access_token")
-    if not tok:
-        raise ApiError(f"Invalid token response: {str(d)[:200]}")
-    # compute the expiry from expires_in with a 60-second margin
-    return {"access_token": tok,
-            "refresh_token": d.get("refresh_token"),
-            "expires_at": (time.time()
-                           + float(d.get("expires_in") or 3600) - 60)}
-
-
-def _oauth_token(oc, timeout=30.0):
-    """Get a token via client_credentials -> (access_token, expires_at)."""
-    body = {"grant_type": "client_credentials"}
-    if oc.get("scope"):
-        body["scope"] = oc["scope"]
-    for k, v in (oc.get("extra") or {}).items():
-        body[str(k)] = str(v)
-    t = _oauth_request(oc, body, timeout)
-    return t["access_token"], t["expires_at"]
-
-
-def _mcp_tokens_path():
-    """Where OAuth tokens are persisted."""
-    return os.path.join(_registry_dir(), "mcp_tokens.json")
-
-
-def _mcp_token_load(name):
-    try:
-        with open(_mcp_tokens_path(), "r", encoding="utf-8") as f:
-            d = json.load(f)
-        t = d.get(name) if isinstance(d, dict) else None
-        return t if isinstance(t, dict) else None
-    except Exception:
-        return None
-
-
-def _mcp_token_save(name, tok):
-    """Save {access_token, refresh_token?, expires_at}."""
-    try:
-        try:
-            with open(_mcp_tokens_path(), "r", encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception:
-            d = {}
-        if not isinstance(d, dict):
-            d = {}
-        d[name] = tok
-        os.makedirs(os.path.dirname(_mcp_tokens_path()), exist_ok=True)
-        with open(_mcp_tokens_path(), "w", encoding="utf-8") as f:
-            json.dump(d, f, indent=1)
-    except Exception:  # nosec B110  # acceptable by design
-        pass                       # a failed save is not fatal
-
-
-def _mcp_token_delete(name):
-    try:
-        with open(_mcp_tokens_path(), "r", encoding="utf-8") as f:
-            d = json.load(f)
-        if isinstance(d, dict) and name in d:
-            del d[name]
-            with open(_mcp_tokens_path(), "w",
-                      encoding="utf-8") as f:
-                json.dump(d, f, indent=1)
-    except Exception:  # nosec B110  # acceptable by design
-        pass
-
-
-def _oauth_authorize(oc, timeout=180.0, on_status=None, is_aborted=None):
-    """Get a user-consent token via authorization_code + PKCE.
-
-    Starts a local HTTP listener (default http://127.0.0.1:8020/callback),
-    opens the browser, and exchanges the callback code for a token.
-    oauth.authorize_url is required; client_secret enables Basic auth.
-    If is_aborted() returns True the wait is cut short with an ApiError.
-    @returns the dict from _oauth_request()
-    """
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-    aurl = oc.get("authorize_url") or ""
-    if not aurl:
-        raise ApiError("oauth.authorize_url is empty")
-    redir = oc.get("redirect_uri") or "http://127.0.0.1:8020/callback"
-    got = {}
-
-    class _H(BaseHTTPRequestHandler):
-        def do_GET(self):
-            q = urllib.parse.parse_qs(
-                urllib.parse.urlparse(self.path).query)
-            got.update({k: v[0] for k, v in q.items()})
-            body = ("<html><body><h3>Authentication completed. "
-                    "You can return to QGIS.</h3></body></html>"
-                    ).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type",
-                             "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *a):
-            pass
-
-    try:
-        httpd = HTTPServer(
-            ("127.0.0.1", urllib.parse.urlparse(redir).port or 8020),
-            _H)
-    except OSError:
-        # fall back to an ephemeral port if taken; redirect_uri follows
-        # (RFC 8252 allows loopback on any port)
-        httpd = HTTPServer(("127.0.0.1", 0), _H)
-        redir = (f"http://127.0.0.1:{httpd.server_address[1]}"
-                 "/callback")
-    state = secrets.token_urlsafe(16)
-    ver = secrets.token_urlsafe(64)
-    chal = base64.urlsafe_b64encode(
-        hashlib.sha256(ver.encode()).digest()).rstrip(b"=").decode()
-    q = {"response_type": "code",
-         "client_id": oc.get("client_id") or "",
-         "redirect_uri": redir,
-         "state": state,
-         "code_challenge": chal,
-         "code_challenge_method": "S256"}
-    if oc.get("scope"):
-        q["scope"] = oc["scope"]
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    try:
-        webbrowser.open(aurl + "?" + urllib.parse.urlencode(q))
-        host = urllib.parse.urlparse(aurl).netloc
-        hint = (f"If it still fails, check the app settings:"
-                f" ①Redirect URI '{redir}' is registered"
-                " ②OAuth2 standard (authorization_code) is enabled"
-                " ③client_id/secret match")
-        if on_status:
-            on_status(
-                f"Complete OAuth sign-in in the browser: {host}."
-                + hint)
-        deadline = time.time() + timeout
-        while "code" not in got and "error" not in got:
-            if is_aborted and is_aborted():
-                raise ApiError("OAuth sign-in aborted")
-            if time.time() > deadline:
-                raise ApiError(
-                    "OAuth sign-in timed out "
-                    "(consent was not completed in the browser). " + hint)
-            time.sleep(0.3)
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-    if got.get("error"):
-        raise ApiError(f"OAuth error: {got['error']} "
-                       f"{got.get('error_description') or ''}. " + hint)
-    if got.get("state") != state:
-        raise ApiError("OAuth state mismatch (CSRF check)")
-    try:
-        return _oauth_request(oc, {
-            "grant_type": "authorization_code",
-            "code": got["code"],
-            "redirect_uri": redir,
-            "code_verifier": ver}, timeout)
-    except ApiError as e:
-        raise ApiError(f"{e}. {hint}") from e
-
-
-class _McpHttp:
-    """MCP Streamable HTTP client (POST -> JSON or SSE).
-
-    With cfg.oauth a token is obtained and sent as Authorization: Bearer.
-    With authorize_url it uses authorization_code+PKCE (user consent in
-    the browser, tokens persisted to ~/.qgis-live/mcp_tokens.json and
-    refreshed via refresh_token); otherwise client_credentials.
-    """
-
-    def __init__(self, cfg, name="", on_status=None, is_aborted=None):
-        self.url = (cfg.get("url") or "").rstrip("/")
-        if not self.url:
-            raise ApiError("MCP server url is empty")
-        self.headers = {str(k): str(_resolve_secret_ref(v) or "")
-                        for k, v in (cfg.get("headers") or {}).items()}
-        self.oauth = cfg.get("oauth") or None
-        self.name = name
-        self._status = on_status or (lambda m: None)
-        self._aborted = is_aborted or (lambda: False)
-        self._tok, self._tok_exp = None, 0.0
-        self._stale = False       # a 401 makes us distrust the saved token
-        self.session_id = None
-        self._next = itertools.count(1)
-
-    def _obtain_token(self, timeout):
-        """Resolve an access_token: saved -> refresh -> fresh request."""
-        oc = self.oauth
-        st = _mcp_token_load(self.name)
-        if st and st.get("access_token"):
-            if not self._stale \
-                    and time.time() < st.get("expires_at", 0):
-                return st["access_token"], st["expires_at"]
-            if st.get("refresh_token"):
-                try:
-                    t = _oauth_request(oc, {
-                        "grant_type": "refresh_token",
-                        "refresh_token": st["refresh_token"]},
-                        timeout)
-                    _mcp_token_save(self.name, t)
-                    self._stale = False
-                    return t["access_token"], t["expires_at"]
-                except ApiError:
-                    _mcp_token_delete(self.name)   # re-authorize
-        if oc.get("authorize_url"):
-            self._status(
-                f"MCP '{self.name}': complete OAuth sign-in in the browser")
-            t = _oauth_authorize(oc, on_status=self._status,
-                                 is_aborted=self._aborted)
-            _mcp_token_save(self.name, t)
-        else:
-            tok, exp = _oauth_token(oc, timeout)
-            t = {"access_token": tok, "expires_at": exp}
-            _mcp_token_save(self.name, t)
-        self._stale = False
-        return t["access_token"], t["expires_at"]
-
-    def _auth_headers(self, timeout):
-        if not self.oauth:
-            return {}
-        if not self._tok or time.time() >= self._tok_exp:
-            self._tok, self._tok_exp = self._obtain_token(timeout)
-        return {"Authorization": f"Bearer {self._tok}"}
-
-    def _post(self, msg, timeout):
-        # with OAuth, a 401 drops the token and retries exactly once
-        for attempt in range(2 if self.oauth else 1):
-            hdrs = {"Content-Type": "application/json",
-                    "Accept": "application/json, text/event-stream",
-                    **self._auth_headers(timeout), **self.headers}
-            if self.session_id:
-                hdrs["Mcp-Session-Id"] = self.session_id
-            _require_http_scheme(self.url)
-            req = urllib.request.Request(
-                self.url, data=json.dumps(msg).encode("utf-8"),
-                headers=hdrs, method="POST")
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https
-                    sid = r.headers.get("Mcp-Session-Id")
-                    if sid:
-                        self.session_id = sid
-                    ctype = r.headers.get("Content-Type", "")
-                    raw = r.read().decode("utf-8", "replace")
-                    status = r.status
-            except urllib.error.HTTPError as e:
-                if e.code == 401 and self.oauth and attempt == 0:
-                    # token expired -> distrust the saved one; retry via refresh
-                    self._tok = None
-                    self._stale = True
-                    continue
-                detail = ""
-                try:
-                    detail = e.read().decode("utf-8", "replace")[:300]
-                except Exception:  # nosec B110  # acceptable by design
-                    pass
-                raise ApiError(
-                    f"HTTP {e.code}: {detail or e.reason}") from e
-            except urllib.error.URLError as e:
-                raise ApiError(f"Connection failed: {e.reason}") from e
-            if status == 202 or not raw.strip():
-                return []                    # notification response (empty)
-            return list(_iter_rpc_msgs(raw, ctype))
-
-    def request(self, method, params, timeout=30.0):
-        mid = next(self._next)
-        msgs = self._post({"jsonrpc": "2.0", "id": mid, "method": method,
-                           "params": params or {}}, timeout)
-        for m in msgs:
-            if m.get("id") == mid:
-                if "error" in m:
-                    raise ApiError(_mcp_error(m))
-                return m.get("result")
-        raise ApiError(f"MCP {method}: no response returned")
-
-    def notify(self, method, params):
-        try:
-            self._post({"jsonrpc": "2.0", "method": method,
-                        "params": params or {}}, 15.0)
-        except ApiError:  # nosec B110  # acceptable by design
-            pass
-
-    def close(self):
-        pass
-
-
-class _McpStdio:
-    """MCP stdio client (newline-delimited JSON-RPC to a child process)."""
-
-    def __init__(self, cfg):
-        command = cfg.get("command") or ""
-        if not command:
-            raise ApiError("MCP server command is empty")
-        exe = shutil.which(command) or command
-        env = dict(os.environ)
-        env.update({str(k): str(_resolve_secret_ref(v) or "")
-                    for k, v in (cfg.get("env") or {}).items()})
-        kw = {}
-        cf = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if cf:
-            kw["creationflags"] = cf      # do not show a console window (Windows)
-        try:
-            self._p = subprocess.Popen(  # nosec B603  # launches the user-configured MCP server
-                [exe] + [str(a) for a in cfg.get("args") or []],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, env=env, **kw)
-        except OSError as e:
-            raise ApiError(f"failed to start MCP server: {e}") from e
-        self._pending = {}
-        self._next = itertools.count(1)
-        threading.Thread(target=self._reader, daemon=True).start()
-
-    def _reader(self):
-        while True:
-            line = self._p.stdout.readline()
-            if not line:
-                break
-            try:
-                m = json.loads(line.decode("utf-8", "replace"))
-            except Exception:  # nosec B112  # acceptable by design
-                continue
-            slot = self._pending.get(m.get("id"))
-            if slot:
-                slot[1]["res"] = m
-                slot[0].set()
-        for ev, box in self._pending.values():   # process exited -> fail all
-            box["res"] = {"error": "MCP server exited"}
-            ev.set()
-
-    def _send(self, msg):
-        try:
-            self._p.stdin.write(
-                (json.dumps(msg, ensure_ascii=False) + "\n")
-                .encode("utf-8"))
-            self._p.stdin.flush()
-        except Exception as e:
-            raise ApiError(f"failed to write to MCP server: {e}") from e
-
-    def request(self, method, params, timeout=30.0):
-        mid = next(self._next)
-        ev = threading.Event()
-        box = {}
-        self._pending[mid] = (ev, box)
-        try:
-            self._send({"jsonrpc": "2.0", "id": mid, "method": method,
-                        "params": params or {}})
-            if not ev.wait(timeout):
-                raise ApiError(f"MCP {method}: timeout ({timeout}s)")
-            m = box.get("res") or {}
-            if "error" in m:
-                raise ApiError(_mcp_error(m))
-            return m.get("result")
-        finally:
-            self._pending.pop(mid, None)
-
-    def notify(self, method, params):
-        try:
-            self._send({"jsonrpc": "2.0", "method": method,
-                        "params": params or {}})
-        except ApiError:  # nosec B110  # acceptable by design
-            pass
-
-    def close(self):
-        try:
-            self._p.terminate()
-        except Exception:  # nosec B110  # acceptable by design
-            pass
-
-
-def _mcp_result_text(r):
-    """Turn a tools/call result into text. isError raises ApiError."""
-    if not isinstance(r, dict):
-        return str(r)
-    parts = [c.get("text", "") for c in r.get("content") or []
-             if isinstance(c, dict) and c.get("type") == "text"]
-    text = "\n".join(p for p in parts if p)
-    if not text:
-        text = json.dumps(r, ensure_ascii=False)
-    if r.get("isError"):
-        raise ApiError(text[:500])
-    return text
-
-
-class McpSession:
-    """A connected MCP server. tools = list in TOOL shape, call() runs.
-
-    The transport comes from cfg: command -> stdio / url -> Streamable HTTP.
-    """
-
-    def __init__(self, name, cfg, timeout=30.0, on_status=None,
-                 is_aborted=None):
-        self.name = name
-        self._io = (_McpStdio(cfg) if cfg.get("command")
-                    else _McpHttp(cfg, name=name, on_status=on_status,
-                                  is_aborted=is_aborted))
-        self._io.request("initialize", {
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": {"name": "qgis-live-driver",
-                           "version": "0.6"},
-        }, timeout)
-        self._io.notify("notifications/initialized", {})
-        r = self._io.request("tools/list", {}, timeout) or {}
-        self.tools = [t for t in r.get("tools") or [] if t.get("name")]
-
-    def call(self, tool, args, timeout=120.0):
-        r = self._io.request("tools/call",
-                             {"name": tool, "arguments": args or {}},
-                             timeout)
-        return _mcp_result_text(r)
-
-    def close(self):
-        self._io.close()
-
-
-def _safe_name(s):
-    """Coerce to the OpenAI tool-name charset ([A-Za-z0-9_-])."""
-    return re.sub(r"[^A-Za-z0-9_-]", "_", s or "")
-
-
-def mcp_discover(timeout=30.0, on_status=None, is_aborted=None):
-    """Connect to every MCP server in the config and collect their tools.
-
-    @param on_status: progress callback (e.g. waiting for OAuth consent)
-    @param is_aborted: callback returning True to abort connecting
-    @returns {"tools": [mangled TOOL shape], "callers": {name: fn},
-              "sessions": {name: McpSession}, "errors": {name: str}}
-    """
-    out = {"tools": [], "callers": {}, "sessions": {}, "errors": {}}
-    for name, cfg in mcp_servers_config().items():
-        if is_aborted and is_aborted():
-            break
-        try:
-            sess = McpSession(name, cfg, timeout, on_status=on_status,
-                              is_aborted=is_aborted)
-        except ApiError as e:
-            out["errors"][name] = str(e)
-            continue
-        except Exception as e:
-            out["errors"][name] = f"{type(e).__name__}: {e}"
-            continue
-        out["sessions"][name] = sess
-        for t in sess.tools:
-            mangled = ("mcp_" + _safe_name(name)
-                       + "__" + _safe_name(t["name"]))[:64]
-            out["tools"].append({
-                "name": mangled,
-                "description":
-                    f"[{name}] {t.get('description') or ''}".strip(),
-                "inputSchema": t.get("inputSchema")
-                or {"type": "object", "properties": {}},
-            })
-            out["callers"][mangled] = (
-                lambda a, _s=sess, _t=t["name"]: _s.call(_t, a))
-    return out
-
-
-_EXTRA_TOOLS = []
-_EXTRA_TOOL_CALLERS = {}
-
-
-def register_extra_tools(tools, callers):
-    """Expose external MCP tools through openai_tools/gemini_tools.
-
-    Calls are executed on the panel worker thread.
-    """
-    _EXTRA_TOOLS[:] = list(tools or [])
-    _EXTRA_TOOL_CALLERS.clear()
-    _EXTRA_TOOL_CALLERS.update(callers or {})
-
-
-def run_extra_tool(name, args):
-    """Run an external MCP tool and return its text."""
-    fn = _EXTRA_TOOL_CALLERS.get(name)
-    if fn is None:
-        raise ApiError(f"Unknown external tool: {name}")
-    return fn(args or {})
 
 
 # ---- Provider abstraction ----
@@ -2941,8 +2239,7 @@ class AzureOpenAIProvider(OpenAIProvider):
 # the qgis_devin_* tools. The tool loop stays on the panel side.
 # "devin_acp" ([ACP]): a real provider that uses a Devin CLI `devin acp`
 # session as the chat engine. Prompts go to session/prompt and Devin
-# runs its own tool loop (geo_driver's /mcp is injected as an MCP
-# server, so Devin can drive QGIS too). No API key; it shares the IDE
+# runs its own tool loop. No API key; it shares the IDE
 # login. History lives in the Devin session, so each turn sends only
 # the latest user message.
 
@@ -2965,28 +2262,6 @@ _COPILOT_BRIDGE_HINT = _DEVIN_BRIDGE_HINT.replace(
 # devin_acp sessions are kept per cwd at module level and reused on every
 # send (provider instances are recreated for each send)
 _ACP_SESSIONS = {}
-
-
-def _acp_mcp_servers():
-    """Return the definition that hands geo_driver's own /mcp to Devin.
-
-    Lets Devin's tool loop use qgis_pyeval and friends directly.
-    Returns an empty list when the driver is not running or outside QGIS.
-    """
-    try:
-        import qgis.utils  # noqa: PLC0415
-        plug = qgis.utils.plugins.get("geo_driver")
-        drv = getattr(plug, "driver", None)
-        port = getattr(drv, "http_port", None)
-        tok = getattr(drv, "token", None)
-        if port and tok:
-            return [{"type": "http", "name": "qgis-live",
-                     "url": f"http://127.0.0.1:{port}/mcp",
-                     "headers": [{"name": "Authorization",
-                                  "value": f"Bearer {tok}"}]}]
-    except Exception:  # nosec B110  # acceptable by design
-        pass
-    return []
 
 
 def close_acp_sessions():
@@ -3030,8 +2305,7 @@ class DevinAcpProvider:
 
     Endpoint field = working directory of the session (cwd);
     API-key field = unused (the IDE login is shared); model field = the
-    Devin-side model ("default" or empty for unspecified). geo_driver's
-    /mcp is passed as an MCP server, so Devin can drive QGIS.
+    Devin-side model ("default" or empty for unspecified).
     """
 
     id = "devin_acp"
@@ -3066,7 +2340,7 @@ class DevinAcpProvider:
             s = None  # recreate it if the process has died
         if s is None:
             s = devin_tasks.AcpSession(
-                cwd, mcp_servers=_acp_mcp_servers(), mode="bypass",
+                cwd, mode="bypass",
                 model=None if model in (None, "", "default") else model,
                 engine=self.ENGINE)
             _ACP_SESSIONS[skey] = s
@@ -3213,8 +2487,7 @@ class CustomAcpProvider(DevinAcpProvider):
             s = None  # recreate it if the process has died
         if s is None:
             s = devin_tasks.AcpSession(
-                cwd, exe=argv, mcp_servers=_acp_mcp_servers(),
-                mode="bypass",
+                cwd, exe=argv, mode="bypass",
                 model=None if model in (None, "", "default") else model,
                 engine="custom")
             _ACP_SESSIONS[skey] = s
