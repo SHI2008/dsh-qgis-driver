@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>dsh-qgis-driver Documentation</title>
-<meta name="description" content="Localhost-only remote control driver for QGIS (token-authenticated MCP/REST/file API for local AI tools) plus a built-in AI assistant panel for OpenAI-compatible APIs and a hot-reload watcher for plugin development">
+<meta name="description" content="Cross-machine remote control driver for QGIS (token-authenticated REST/file API with host/port/Key) plus a built-in AI assistant panel for OpenAI-compatible APIs and a hot-reload watcher for plugin development">
 <link rel="stylesheet" href="style.css">
 <script src="nav.js" defer></script>
 </head>
@@ -12,7 +12,7 @@
 <div class="container">
 <header>
 <h1>dsh-qgis-driver (`dsh_qgis_driver`)</h1>
-<p>Localhost-only remote control driver for QGIS (token-authenticated MCP/REST/file API for local AI tools) plus a built-in AI assistant panel for OpenAI-compatible APIs and a hot-reload watcher for plugin development</p>
+<p>Cross-machine remote control driver for QGIS (token-authenticated REST/file API with host/port/Key) plus a built-in AI assistant panel for OpenAI-compatible APIs and a hot-reload watcher for plugin development</p>
 </header>
 <main>
 
@@ -27,8 +27,8 @@ can also be provided with a <code>pyeval</code>-based remote control surface.</p
 <ul>
 <li>Commands: <code>pyeval</code> (arbitrary Python execution) / <code>screenshot</code> / <code>status</code> /
 <code>open_plugin</code> / <code>reload_plugin</code> / <code>bridge_call</code> + <code>plugin_id</code> forwarding (hub)</li>
-<li>Connection surfaces (4 channels, all to the same dispatch): file JSONL /
-HTTP REST <code>/api/*</code> / MCP Streamable HTTP <code>/mcp</code> / MCP stdio (<code>mcp_stdio.py</code>)</li>
+<li>Connection surfaces (2 channels, all to the same dispatch): file JSONL /
+HTTP REST <code>/api/*</code></li>
 </ul>
 <p><strong>Detailed documentation (command list, control scope, REST endpoints, etc.):</strong>
 <a href="https://yamamoto-ryuzo.github.io/qgis_live_harness/driver.html">https://yamamoto-ryuzo.github.io/qgis_live_harness/driver.html</a></p>
@@ -42,19 +42,15 @@ powershell -ExecutionPolicy Bypass -File scripts/deploy-plugin.ps1 -Install
 <h3 id="quick-start-first-run">Quick start (first run)</h3>
 <ol>
 <li>Install and enable the plugin (see above).</li>
-<li>Turn on <code>Plugins &gt; dsh-qgis-driver &gt; Remote Control (localhost only)</code> and
+<li>Turn on <code>Plugins &gt; dsh-qgis-driver &gt; Remote Control</code> and
 accept the warning; a <strong>Connection Info</strong> dialog opens automatically with all the
-information needed to connect (MCP URL, token,
+information needed to connect (host, port, token,
 registry path, live dir). Afterwards you can reopen it at any time from
 <code>Plugins &gt; dsh-qgis-driver &gt; Connection Info</code>.</li>
-<li>Paste the displayed settings into your MCP client:<ul>
-<li><strong>stdio</strong> (recommended): starts the bundled <code>mcp_stdio.py</code> and
-auto-detects the running QGIS session, so no port/token configuration is needed.</li>
-<li><strong>Streamable HTTP</strong>: add the displayed <code>Authorization: Bearer &lt;token&gt;</code>
-to <code>http://127.0.0.1:&lt;port&gt;/mcp</code>.</li>
-<li>Plain REST is also shown as a <code>curl</code> example.</li>
-</ul>
-</li>
+<li>Connect from the DSH bundle (<code>dsh-qgis-driver</code>) or any REST client using the
+<code>Authorization: Bearer &lt;token&gt;</code> header. For a remote machine, set
+<code>QGIS_LIVE_HOST</code> / <code>QGIS_LIVE_PORT</code> / <code>QGIS_LIVE_API_KEY</code>
+(or the Settings dialog) and connect with <code>host:port</code> + the Key.</li>
 <li>(Development only) To bind the plugin to the <code>qgis_live_harness</code> repository
 (required for Deploy Mode / hot reload), specify the repository folder via
 <strong>Select Harness repository…</strong> in the Connection Info dialog or, under
@@ -63,7 +59,7 @@ The path is saved to QSettings and takes precedence over marker/junction auto-de
 </ol>
 <p>Enabling has 2 routes (OFF and harmless by default):</p>
 <ul>
-<li><strong>Menu toggle</strong>: <code>Plugins &gt; dsh-qgis-driver &gt; Remote Control (localhost only)</code>.
+<li><strong>Menu toggle</strong>: <code>Plugins &gt; dsh-qgis-driver &gt; Remote Control</code>.
 A warning dialog is shown the first time it is turned on, and the setting is saved to QSettings,
 so it is enabled automatically from the next launch.</li>
 </ul>
@@ -142,8 +138,7 @@ OpenAI-compatible destination used by the delegating chat</li>
 into an OpenAI-compatible chat (same shape as Devin [Bridge])</li>
 <li><strong>Devin [ACP]</strong>: a provider that uses a Devin CLI (<code>devin acp</code>) session as the
 chat engine. Sends flow to <code>session/prompt</code>,
-and Devin itself runs the tool loop (dsh_qgis_driver's <code>/mcp</code>
-is passed as an MCP server, so QGIS can also be operated from Devin via <code>qgis_pyeval</code> etc.).
+and Devin itself runs the tool loop (QGIS is operated through the <code>qgis_devin_*</code> tools).
 <strong>No API key required</strong>; it shares the IDE's Devin credentials
 (windsurf_api_key in credentials.toml).
 The endpoint field is the session's working directory
@@ -207,7 +202,7 @@ not sent to the API but executed as a local command. <code>/agent</code> (list +
 <code>/skill</code> (list), <code>/skill &lt;name&gt;</code> (show body), <code>/skill &lt;name&gt; &lt;body&gt;</code>
 (save). The body can be written on the second line and beyond. <code>/help</code> shows the list</li>
 <li><strong>Can also be operated from external AI</strong>: the <code>qgis_instruction</code>
-tool on the MCP/REST side (op=list|read|save|delete) lets an orchestrator discover and edit
+tool on the REST side (op=list|read|save|delete) lets an orchestrator discover and edit
 instruction files (allowed via <code>QGIS_LIVE_TOOLS</code>)</li>
 </ul>
 </li>
@@ -246,71 +241,16 @@ and the 📎 button is also disabled (manually entered models are estimated from
 for approval each time a tool is called (for when you do not want pyeval arbitrary code execution
 to run automatically)</p>
 </li>
-<li><p><strong>Tools</strong>: the same set as <code>mcp_http.TOOLS</code>
+<li><p><strong>Tools</strong>: the same set as <code>http_api.TOOLS</code>
 (<code>qgis_pyeval</code> / <code>qgis_screenshot</code> / <code>qgis_status</code> /
 <code>qgis_eval</code> / <code>qgis_devreload</code> / <code>qgis_open_plugin</code> /
 <code>qgis_reload_plugin</code> / <code>qgis_bridge_call</code> /
 <code>qgis_instruction</code> / <code>qgis_devin_*</code> / <code>qgis_copilot_*</code>), plus
 panel-local tools <code>ai_*</code> for
-reading and writing instruction files, and tools <code>mcp_*</code> from external MCP servers,
+reading and writing instruction files,
 are passed to the model, and returned tool_calls are
-processed with <code>driver.submit()</code> (for qgis_<em>) or local execution (ai_</em>/mcp_*)
+processed with <code>driver.submit()</code> (for qgis_<em>) or local execution (ai_</em>)
 in an agent loop (max 25 round trips)</p>
-</li>
-<li><p><strong>External MCP server connection</strong>: API settings "MCP" row → "Configure"
-edits <code>~/.qgis-live/mcp_servers.json</code> (Claude Desktop-compatible format):</p>
-<pre><code class="language-json">{&quot;mcpServers&quot;: {
-  &quot;fs&quot;:  {&quot;command&quot;: &quot;npx&quot;,
-          &quot;args&quot;: [&quot;-y&quot;, &quot;@modelcontextprotocol/server-filesystem&quot;, &quot;C:/work&quot;]},
-  &quot;api&quot;: {&quot;url&quot;: &quot;http://localhost:3000/mcp&quot;,
-          &quot;headers&quot;: {&quot;Authorization&quot;: &quot;Bearer ...&quot;}},
-  &quot;box&quot;: {&quot;url&quot;: &quot;https://mcp.box.com&quot;,
-          &quot;oauth&quot;: {&quot;authorize_url&quot;:
-                      &quot;https://account.box.com/api/oauth2/authorize&quot;,
-                    &quot;token_url&quot;: &quot;https://api.box.com/oauth2/token&quot;,
-                    &quot;client_id&quot;: &quot;...&quot;, &quot;client_secret&quot;: &quot;...&quot;,
-                    &quot;redirect_uri&quot;: &quot;http://127.0.0.1:8020/callback&quot;}},
-  &quot;ccg&quot;: {&quot;url&quot;: &quot;https://example.com/mcp&quot;,
-          &quot;oauth&quot;: {&quot;token_url&quot;: &quot;https://example.com/oauth/token&quot;,
-                    &quot;client_id&quot;: &quot;...&quot;, &quot;client_secret&quot;: &quot;...&quot;,
-                    &quot;extra&quot;: {&quot;box_subject_type&quot;: &quot;enterprise&quot;,
-                              &quot;box_subject_id&quot;: &quot;...&quot;}}}
-}}
-</code></pre>
-<p><code>command</code> = launch a child process over stdio (no console window on Windows),
-<code>url</code> = Streamable HTTP.
-<strong>Secrets go to the credential store</strong>: saving a plaintext value in <code>oauth.client_secret</code>
-automatically moves it to the OS credential store (credential_store;
-the same location as API keys), and only a
-<code>&quot;$store:mcp:&lt;server&gt;:client_secret&quot;</code> reference remains in the config file.
-If storing to the store fails, an error occurs and nothing is saved in plaintext.
-Values of <code>headers</code>/<code>env</code>/<code>oauth.client_id</code> can also be written as <code>&quot;$store:&lt;key&gt;&quot;</code>
-and are resolved from the store at connect time (writing references manually requires
-pre-registering them in the credential store). Existing configs that still contain a
-plaintext client_secret are migrated when re-saved in the settings dialog.
-Authentication either passes fixed values via <code>headers</code> or
-uses 2 kinds of OAuth via <code>oauth</code>:
-with <code>authorize_url</code> = <strong>authorization_code+PKCE</strong> (a browser opens on the first send
-for a consent screen; the token is saved to <code>~/.qgis-live/mcp_tokens.json</code>
-and afterwards refreshed automatically with refresh_token; for user-consent servers such as mcp.box.com;
-redirect_uri must be registered in the app),
-without <code>authorize_url</code> = <strong>client_credentials</strong> (client_id+secret,
-with <code>extra</code> for provider-specific form parameters).
-Retries once on 401. On connection failure, a checklist guide
-"①Register the Redirect URI ②enable authorization_code ③id/secret match"
-is shown together with the error.
-To use mcp.box.com, additionally a Business plan or higher on the Box side,
-enabling MCP in the Admin Console, and standard OAuth2
-with a Custom App (a CCG-only Server App does not work) are required.
-The obtained token is saved in plaintext to <code>~/.qgis-live/mcp_tokens.json</code>
-(handle with care since it contains access/refresh tokens).
-On the first send, connection and tools/list are performed,
-and each tool is exposed to the model as <code>mcp_&lt;server&gt;__&lt;tool&gt;</code>.
-Saving settings reconnects on the next send. Servers that fail to connect are
-shown with an error in the chat area while other servers continue.
-Note: pointing at QGIS's own driver MCP endpoint
-makes tools/call go through GUI thread dispatch, creating a self-reference, so
-in practice point at another server</p>
 </li>
 <li><p><strong>Works even when the remote control toggle is OFF</strong>: it uses a panel-private internal LiveDriver
 (no registry or HTTP exposure), so AI operations alone can be tried
@@ -330,23 +270,23 @@ The current backend can be checked in the panel's "Key storage" field.
 <strong>If writing to the store itself fails, an error is shown and nothing is saved in plaintext</strong></p>
 </li>
 </ul>
-<h2 id="security-model-localhost-only">Security model (localhost only)</h2>
+<h2 id="security-model">Security model</h2>
 <p>Because <code>pyeval</code> allows <strong>arbitrary code execution</strong>, all channels are protected as follows:</p>
 <ul>
-<li><strong>127.0.0.1 binding only</strong> — unreachable from external networks</li>
+<li><strong>Bind address configurable</strong> — default <code>127.0.0.1</code> (loopback only); set <code>QGIS_LIVE_HOST=0.0.0.0</code> to accept remote clients (then require a Key)</li>
 <li><strong>Session token required</strong> — auto-generated on each launch. HTTP compares
 <code>Authorization: Bearer</code> etc., and commands.jsonl compares the <code>token</code> field of each line.
 The token is written only to <code>~/.qgis-live/&lt;pid&gt;-dsh_qgis_driver.json</code> (registry) and
 <code>live_dir/token</code>, with user-only ACLs applied</li>
-<li><strong>Host/Origin validation</strong> — HTTP requests whose Host or Origin points anywhere other than loopback are rejected
-(protection against DNS rebinding and browser-based drive-by)</li>
+<li><strong>Host/Origin validation</strong> — when bound to loopback, HTTP requests whose Host or Origin points anywhere other than loopback are rejected
+(protection against DNS rebinding and browser-based drive-by); disabled when bound to a non-loopback address</li>
 <li><code>QGIS_LIVE_TOOLS</code> can restrict the exposed command types (e.g. <code>status,screenshot</code>)</li>
 </ul>
 <p><strong>Threat model boundary</strong>: because the token is placed in a user-only file,
 processes that can execute arbitrary code with the same user privileges cannot be prevented
 (this is the limit of any localhost service). The trust boundary is the local user account.</p>
-<p>Local MCP clients (such as <code>mcp_stdio.py</code>) read the token from the registry
-automatically, so the usage procedure does not change.</p>
+<p>The DSH bundle (<code>dsh-qgis-driver</code>) reads the token from the registry
+automatically for local connections, and can also target a remote machine via an explicit <code>host:port</code> + Key.</p>
 <h1>Disclaimer</h1>
 <p>This system was created and tested on a personal PC.<br />
 We accept no responsibility for any damage resulting from its use.</p>
