@@ -16,14 +16,13 @@
 A UI-less, control-only plugin that lets clients on the **same PC** (AI
 tools, etc.) remotely operate a running QGIS process. It exposes QGIS
 internals (`iface`, `QgsProject`, map canvas) as automation primitives
-over file-JSONL, REST (`/api/*`) and MCP (`/mcp`).
+over file-JSONL and REST (`/api/*`).
 
 ## Features
 
 - `pyeval` / `eval` / `screenshot` / `devreload` / `bridge_call` /
   `describe_plugins` primitives for remote control of all managed plugins
-- Embedded HTTP server (`/api/*` REST + `/mcp` Streamable HTTP) and
-  bundled stdio MCP shim (`mcp_stdio.py`)
+- Embedded HTTP server (`/api/*` REST)
 - Built-in AI assistant panel (OpenAI-compatible / Anthropic / Gemini /
   Azure OpenAI / GitHub Copilot / ACP agents) with tool-loop execution
 - Hot reload of managed plugins, GeoSuite shared toolbar (mode badge),

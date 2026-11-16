@@ -1,11 +1,12 @@
 """HTTP server built into geo_driver. Standard library only.
 
-Serves MCP (Streamable HTTP) and plain REST on one port, so AI tools/apps
-without MCP support can still drive QGIS with nothing but HTTP POST.
+Serves a plain REST surface on one port, so AI tools/apps can drive QGIS
+with nothing but HTTP POST.
 
-  POST /mcp              MCP JSON-RPC (initialize/tools/list/tools/call/ping)
   POST /api/cmd          dispatch the command JSON as-is ({"type":"status"} etc.)
   POST /api/pyeval       {"code": "..."} -> {"result": ...} | {"error": ...}
+  POST /api/pyeval_async {"code": "..."} -> {"task_id": "..."} (background task)
+  GET  /api/tasks/<id>   {"status": ..., "result"/"error": ...} (poll async task)
   POST /api/eval         {"expression": "...", "plugin_id": "<id>"} (forwarded to a
                          plugin that has a view. Without plugin_id, returns unsupported)
   POST /api/screenshot   {"path": "...?", "plugin_id": "...", "target": "..."}
@@ -29,17 +30,15 @@ Auth (localhost-only operation):
   Every endpoint (other than /api/health) requires a session token match.
   The token is generated at driver start and written only to user-only files
   (live_dir/token and the registry JSON).
-  Local MCP clients just read it from there.
+  Local clients just read it from there.
   Send it as Authorization: Bearer, X-Api-Key, or api-key.
   Requests whose Host is not loopback, or whose Origin points outside
   loopback, are also rejected (DNS rebinding and browser-based attacks).
   Setting QGIS_LIVE_API_KEY accepts that key as well.
   QGIS_LIVE_TOOLS    comma-separated command kinds to expose (e.g. "status,screenshot").
-                     Applies to both /mcp tools/list & tools/call and /api/*.
                      Unset or "*" allows everything.
 """
 
-import base64
 import hmac
 import json
 import os
@@ -376,22 +375,6 @@ TOOLS = [
     },
 ]
 
-PROTOCOL_VERSION = "2025-03-26"
-
-
-def _content_text(v):
-    return {
-        "content": [{
-            "type": "text",
-            "text": v if isinstance(v, str) else json.dumps(v, ensure_ascii=False, indent=2),
-        }]
-    }
-
-
-def _content_error(msg):
-    return {"content": [{"type": "text", "text": str(msg)}], "isError": True}
-
-
 class _Handler(BaseHTTPRequestHandler):
     server_version = "qgis-live/0.3"
     protocol_version = "HTTP/1.1"
@@ -496,10 +479,16 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(403, {"error": "type 'status' not allowed"})
                 return
             self._json(200, self._dispatch({"type": "status"}))
-        elif self.path == "/mcp":
-            # no Streamable HTTP GET (SSE stream) support
-            self._json(405, {"error": "method not allowed"},
-                       {"Allow": "POST"})
+        elif self.path.startswith("/api/tasks/"):
+            task_id = self.path[len("/api/tasks/"):].strip()
+            if not task_id:
+                self._json(400, {"error": "task_id required"})
+                return
+            if not self._allowed("task_status"):
+                self._json(403, {"error": "type 'task_status' not allowed"})
+                return
+            rep = self._dispatch({"type": "task_status", "task_id": task_id})
+            self._json(200 if "error" not in rep else 500, rep)
         else:
             self._json(404, {"error": "not found"})
 
@@ -513,14 +502,15 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(400, {"error": f"bad json: {e}"})
             return
-        if self.path == "/mcp":
-            self._mcp(data)
-        elif self.path == "/api/cmd":
+        if self.path == "/api/cmd":
             # dispatch the command JSON as-is (type/plugin_id etc. remain valid)
             self._api_call(data)
         elif self.path == "/api/pyeval":
             self._api_call({"type": "pyeval", "code": data.get("code", ""),
                             "plugin_id": data.get("plugin_id")})
+        elif self.path == "/api/pyeval_async":
+            self._api_call({"type": "pyeval_async",
+                            "code": data.get("code", "")})
         elif self.path == "/api/eval":
             self._api_call({"type": "eval",
                             "expression": data.get("expression", ""),
@@ -568,91 +558,6 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(png)
         except Exception as e:
             self._json(500, {"error": repr(e)})
-
-    # ---- MCP (Streamable HTTP, JSON responses only) ----
-
-    def _mcp(self, msg):
-        method = msg.get("method", "")
-        mid = msg.get("id")
-
-        if method.startswith("notifications/"):
-            self.send_response(202)
-            self.send_header("Content-Length", "0")
-            self.end_headers()
-            return
-
-        if method == "initialize":
-            self._json(200, {
-                "jsonrpc": "2.0", "id": mid,
-                "result": {
-                    "protocolVersion": msg.get("params", {})
-                    .get("protocolVersion", PROTOCOL_VERSION),
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "qgis-live", "version": "0.2.0"},
-                },
-            }, {"Mcp-Session-Id": uuid.uuid4().hex})
-            return
-
-        if method == "ping":
-            self._json(200, {"jsonrpc": "2.0", "id": mid, "result": {}})
-            return
-
-        if method == "tools/list":
-            self._json(200, {"jsonrpc": "2.0", "id": mid,
-                             "result": {"tools": self._tools()}})
-            return
-
-        if method == "tools/call":
-            params = msg.get("params", {})
-            result = self._tool_call(params.get("name"),
-                                     params.get("arguments") or {})
-            self._json(200, {"jsonrpc": "2.0", "id": mid, "result": result})
-            return
-
-        self._json(200, {
-            "jsonrpc": "2.0", "id": mid,
-            "error": {"code": -32601, "message": f"method not found: {method}"},
-        })
-
-    def _tool_call(self, name, args):
-        if not (name or "").startswith("qgis_"):
-            return _content_error(f"unknown tool: {name}")
-        if not self._allowed(name[len("qgis_"):]):
-            return _content_error(
-                f"tool '{name}' disabled (QGIS_LIVE_TOOLS)")
-        # translate qgis_<type> straight to {"type": "<type>", ...args}.
-        # adding a new command kind needs no change here.
-        if name == "qgis_screenshot":
-            return self._tool_screenshot(args)
-        cmd = {"type": name[len("qgis_"):],
-               "id": f"http-{uuid.uuid4().hex[:8]}"}
-        cmd.update({k: v for k, v in args.items() if v is not None})
-        rep = self._dispatch(cmd)
-        if "error" in rep:
-            return _content_error(rep["error"])
-        return _content_text(rep.get("result"))
-
-    def _tool_screenshot(self, args):
-        path = args.get("path") or os.path.join(
-            tempfile.gettempdir(), f"qgis-shot-{uuid.uuid4().hex[:8]}.png")
-        cmd = {"type": "screenshot", "path": path,
-               "id": f"http-{uuid.uuid4().hex[:8]}"}
-        if args.get("plugin_id"):
-            cmd["plugin_id"] = args["plugin_id"]
-        if args.get("target"):
-            cmd["target"] = args["target"]
-        rep = self._dispatch(cmd)
-        if "error" in rep:
-            return _content_error(rep["error"])
-        try:
-            with open(rep["result"], "rb") as f:
-                return {"content": [{
-                    "type": "image",
-                    "data": base64.b64encode(f.read()).decode("ascii"),
-                    "mimeType": "image/png",
-                }]}
-        except Exception as e:
-            return _content_error(repr(e))
 
 
 def start_http(driver, host="127.0.0.1", port=0,

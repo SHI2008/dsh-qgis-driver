@@ -57,7 +57,7 @@ class GeoDriverBridge:
             "name": "QGIS Live Driver",
             "summary": "Remote-control hub inside the QGIS process. Exposes "
                        "pyeval/status/bridge_call/describe_plugins and friends over file JSONL, "
-                       "REST, and MCP. The layer_org service standardizes grouping and naming of "
+                       "REST. The layer_org service standardizes grouping and naming of "
                        "imported layers; the scale_style service suggests and applies standard "
                        "line widths by scale (real-world metres / scale-band rules).",
             "when_to_use": [
@@ -72,7 +72,7 @@ class GeoDriverBridge:
                 "Build rule-based renderers whose line width changes by scale band",
             ],
             "invoke": {"type": "command",
-                       "note": "Use the driver's command surface (MCP tools such as qgis_pyeval) instead "
+                       "note": "Use the driver's command surface (REST tools such as qgis_pyeval) instead "
                                "of bridge_call",
                        "commands": _COMMANDS},
             "methods": [
@@ -131,7 +131,7 @@ class GeoDriverBridge:
                  "description": "Open the AI assistant panel (dock)"},
                 {"name": "openConnInfo",
                  "signature": "openConnInfo()",
-                 "description": "Open the connection info dialog (MCP/REST endpoints)"},
+                 "description": "Open the connection info dialog (REST endpoints)"},
                 {"name": "openDeployMode",
                  "signature": "openDeployMode()",
                  "description": "Open the Deploy Mode dialog (switching is done in the dialog UI)"},
