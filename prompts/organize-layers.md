@@ -1,4 +1,4 @@
-# レイヤ構成の整理
-現在のレイヤツリーを把握して構成を整える指示
+# Organize layer structure
+Inspect the current layer tree and tidy up its structure
 
-現在のプロジェクトのレイヤ構成を調べて、グループ構成や命名・並び順の問題点があれば改善案を提示して。合意できたものは実行まで行って
+Inspect the current project's layer structure and, if you find problems with grouping, naming, or ordering, propose improvements. Carry out anything we agree on.

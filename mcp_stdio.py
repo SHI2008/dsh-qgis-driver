@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""geo_driver用 MCP stdio ブリッジ(標準ライブラリのみ)。
+"""MCP stdio bridge for geo_driver (standard library only).
 
-MCPクライアントがこのスクリプトをspawnするだけで、
-稼働中QGISへの遠隔操作がMCPツールとして使える:
+An MCP client only needs to spawn this script to get remote control of a
+running QGIS as MCP tools:
 
     python .../plugins/geo_driver/mcp_stdio.py
 
-動作: stdinの1行1JSON-RPCメッセージを受け、tools/callを
-live dir の commands.jsonl へ追記 → results.jsonl の結果を待ち
-MCP形式でstdoutへ返す。
+How it works: read one JSON-RPC message per stdin line, append tools/call to
+commands.jsonl in the live dir -> wait for the result in results.jsonl ->
+return it on stdout in MCP form.
 
-接続先は ~/.qgis-live/<pid>-<plugin>.json のレジストリから自動検出
-(QGIS側で プラグイン > QGIS Live Driver > Remote Control が
-有効になっている必要あり)。
-QGIS_LIVE_PLUGIN で対象プラグインを指定できる(既定: geo_driver)。
+The target is auto-discovered from the ~/.qgis-live/<pid>-<plugin>.json registry
+(the QGIS side needs Plugins > QGIS Live Driver > Remote Control enabled).
+QGIS_LIVE_PLUGIN selects the target plugin (default: geo_driver).
 """
 
 import base64
@@ -165,11 +164,11 @@ TOOLS = [
                 "kind": {"type": "string",
                          "enum": ["agents", "skills"]},
                 "id": {"type": "string",
-                       "description": "対象ファイル名(stem)。read/delete用"},
+                       "description": "Target file name (stem); for read/delete"},
                 "name": {"type": "string",
-                         "description": "保存ファイル名(stem)。save用"},
+                         "description": "File name to save (stem); for save"},
                 "text": {"type": "string",
-                         "description": "ファイル本文(Markdown)。save用"},
+                         "description": "File body (Markdown); for save"},
             },
             "required": ["op", "kind"],
         },
@@ -188,7 +187,7 @@ def _err(msg):
 
 
 def _entry_token(entry, live_dir):
-    """レジストリエントリ or live_dir/token から認証トークンを取り出す。"""
+    """Get the auth token from the registry entry or live_dir/token."""
     t = entry.get("token")
     if t:
         return t
@@ -201,7 +200,7 @@ def _entry_token(entry, live_dir):
 
 
 def _find_live_dir():
-    """レジストリから稼働中のlive dirを探して応答確認する。
+    """Find a running live dir in the registry and probe it for a response.
 
     @returns (live_dir, token) or None
     """
@@ -216,7 +215,7 @@ def _find_live_dir():
                 e = json.load(f)
             if e.get("live_dir"):
                 cands.append(e)
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
     cands.sort(key=lambda e: (
         e.get("plugin_id") != TARGET_PLUGIN, -e.get("started", 0)))
@@ -252,7 +251,7 @@ def _send(live_dir, cmd, token=None, timeout=TIMEOUT):
                 for line in f:
                     try:
                         obj = json.loads(line)
-                    except Exception:  # nosec B112  # 設計上の許容
+                    except Exception:  # nosec B112  # acceptable by design
                         continue
                     if obj.get("id") == cmd["id"]:
                         return obj
@@ -285,8 +284,8 @@ def _tool_call(name, args):
     if not (name or "").startswith("qgis_"):
         return {"content": [{"type": "text", "text": f"unknown tool: {name}"}],
                 "isError": True}
-    # qgis_<type> → {"type": "<type>", ...args} にそのまま変換する。
-    # 新しいコマンド種別を追加してもここは変更不要。
+    # translate qgis_<type> straight to {"type": "<type>", ...args}.
+    # adding a new command kind needs no change here.
     cmd = {"id": _next_id(), "type": name[len("qgis_"):]}
     cmd.update({k: v for k, v in args.items() if v is not None})
     if name == "qgis_screenshot" and not cmd.get("path"):
@@ -294,7 +293,7 @@ def _tool_call(name, args):
         cmd["path"] = os.path.join(
             tempfile.gettempdir(), f"qgis-shot-{_seq}.png")
     rep = _send(_live_dir, cmd, token=_token)
-    # ドライバreload等でトークンが変わった場合は再検出して1回だけやり直す
+    # if a driver reload changed the token, re-discover and retry once
     if rep.get("error") == "unauthorized":
         _live_dir = _token = None
         if _resolve():
@@ -352,10 +351,10 @@ def main():
             continue
         try:
             msg = json.loads(line)
-        except Exception:  # nosec B112  # 設計上の許容
+        except Exception:  # nosec B112  # acceptable by design
             continue
         if msg.get("method", "").startswith("notifications/") or "id" not in msg:
-            continue  # 通知は応答不要
+            continue  # notifications need no reply
         try:
             resp = _handle(msg)
         except Exception as e:

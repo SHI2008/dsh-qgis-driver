@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""i18n/<lang>.json ベースの翻訳ローダ(全プラグイン共通・同一ファイル)。
+"""Translation loader based on i18n/<lang>.json (common to all plugins, identical file).
 
-翻訳カタログは <plugin>/i18n/<lang>.json (UTF-8) のみ。
-形式: {"<コンテキスト>": {"<英語ソース>": "<翻訳>"}}
-Qt Linguist(lupdate/lrelease)・.ts/.qm は使わない。
+The translation catalog is only <plugin>/i18n/<lang>.json (UTF-8).
+Format: {"<context>": {"<English source>": "<translation>"}}
+Qt Linguist (lupdate/lrelease) and .ts/.qm are not used.
 
-- コード側のマーキングは Qt 標準のまま:
+- Code-side marking stays standard Qt:
   self.tr("...") / QCoreApplication.translate("Ctx", "...") / QT_TRANSLATE_NOOP
-- install_translator() が JsonTranslator を install すると、それらの呼び出しが
-  JSONカタログを引くようになる(uic/loadUi が処理する .ui 由来の文字列も同じ経路)。
-- Qtを介さない文字列(生成HTML等)や QGIS 外のツールからは
-  translate_text() / catalog() / lookup() を直接使う。
+- Once install_translator() installs JsonTranslator, those calls consult the
+  JSON catalog (strings from .ui files handled by uic/loadUi go the same way).
+- For strings that do not go through Qt (generated HTML, etc.) or from tools
+  outside QGIS, use translate_text() / catalog() / lookup() directly.
 """
 
 import json
@@ -19,21 +19,22 @@ import os
 try:
     from qgis.PyQt.QtCore import (
         QCoreApplication, QLocale, QSettings, QTranslator)
-except Exception:  # QGIS外(pytest等)
+except Exception:  # outside QGIS (pytest, etc.)
     try:
         from PyQt6.QtCore import (
             QCoreApplication, QLocale, QSettings, QTranslator)
     except Exception:
         QCoreApplication = QLocale = QSettings = QTranslator = None
 
-# 採用言語(固定・全プラグイン同一)。ソース言語は英語(en)でカタログ不要
+# Supported languages (fixed, identical across all plugins). The source
+# language is English (en), so it needs no catalog.
 LANGS = ("de", "es", "fr", "hi", "it", "ja", "pt", "ru", "zh")
 
 _cache = {}
 
 
 def lang_code():
-    """QGIS設定のUI言語コードを返す。en・未対応言語は 'en'。"""
+    """UI language code from QGIS settings. 'en' for English or unsupported languages."""
     if QSettings is None:
         return "en"
     try:
@@ -47,7 +48,7 @@ def lang_code():
 
 
 def catalog(plugin_dir, lang=None):
-    """i18n/<lang>.json を読み {context: {source: translation}} を返す。"""
+    """Read i18n/<lang>.json and return {context: {source: translation}}."""
     lang = lang or lang_code()
     if lang == "en":
         return {}
@@ -64,10 +65,10 @@ def catalog(plugin_dir, lang=None):
 
 
 def lookup(cat, context, source):
-    """カタログから翻訳を返す。見つからなければ None。
+    """Return the translation from the catalog, or None when missing.
 
-    context が一致しない場合は全contextを対象に検索する
-    (同一ソースの別contextカバー・コンテキスト名揺れの吸収)。
+    When the context does not match, every context is searched (covers the
+    same source under another context and absorbs context-name drift).
     """
     hit = None
     if context:
@@ -81,17 +82,18 @@ def lookup(cat, context, source):
 
 
 def translate_text(plugin_dir, context, source, lang=None):
-    """Qtを介さずカタログを直接引く(生成HTML等の非Qt文字列用)。"""
+    """Consult the catalog directly without Qt (for non-Qt strings such as generated HTML)."""
     if not source:
         return source
     return lookup(catalog(plugin_dir, lang), context, source) or source
 
 
 def install_translator(plugin_dir):
-    """現在の言語の JsonTranslator を install して返す。
+    """Install and return the JsonTranslator for the current language.
 
-    返り値の参照を呼び出し側で保持すること(GCでアンインストールされないよう)。
-    en・未対応言語・Qt非利用環境では None を返して何もしない。
+    The caller must keep a reference to the return value (so it is not
+    uninstalled by GC). Returns None and does nothing for English, an
+    unsupported language, or an environment without Qt.
     """
     if QTranslator is None or QCoreApplication is None:
         return None
@@ -106,10 +108,10 @@ def install_translator(plugin_dir):
 if QTranslator is not None:
 
     class _JsonTranslator(QTranslator):
-        """dictカタログを引くQTranslator。
+        """QTranslator that consults a dict catalog.
 
-        QCoreApplication.translate()/self.tr()/.ui読み込みの全経路を捕捉する。
-        未登録のソースは None を返し、Qt側で英語ソースへフォールバック。
+        Captures every path: QCoreApplication.translate()/self.tr()/.ui loading.
+        Unknown sources return None and Qt falls back to the English source.
         """
 
         def __init__(self, cat):

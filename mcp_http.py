@@ -1,42 +1,42 @@
-"""geo_driver内蔵HTTPサーバ。標準ライブラリのみで実装。
+"""HTTP server built into geo_driver. Standard library only.
 
-MCP (Streamable HTTP) と plain REST を同一ポートで提供し、
-MCP非対応のAI/アプリからもHTTP POSTだけでQGISを操作できるようにする。
+Serves MCP (Streamable HTTP) and plain REST on one port, so AI tools/apps
+without MCP support can still drive QGIS with nothing but HTTP POST.
 
   POST /mcp              MCP JSON-RPC (initialize/tools/list/tools/call/ping)
-  POST /api/cmd          コマンドJSONそのまま dispatch ({"type":"status"} 等)
-  POST /api/pyeval       {"code": "..."} → {"result": ...} | {"error": ...}
-  POST /api/eval         {"expression": "...", "plugin_id": "<id>"} (viewを持つ
-                         プラグインへ転送。plugin_id無しならunsupportedを返す)
+  POST /api/cmd          dispatch the command JSON as-is ({"type":"status"} etc.)
+  POST /api/pyeval       {"code": "..."} -> {"result": ...} | {"error": ...}
+  POST /api/eval         {"expression": "...", "plugin_id": "<id>"} (forwarded to a
+                         plugin that has a view. Without plugin_id, returns unsupported)
   POST /api/screenshot   {"path": "...?", "plugin_id": "...", "target": "..."}
-                         → PNGバイナリ (Content-Type: image/png)
-  GET  /api/tools        ツール仕様JSON(function calling系AIが読む用)
-  GET  /api/status       statusコマンドの結果
+                         -> PNG binary (Content-Type: image/png)
+  GET  /api/tools        tool spec JSON (for function-calling AIs to read)
+  GET  /api/status       result of the status command
   GET  /api/health       {"ok": true, "pid": ...}
 
-実行経路: HTTPワーカースレッド → driver.submit() でメモリキュー投入 →
-GUIスレッドの LiveDriver._poll が実行 → 結果を待機して返す。
-iface/QgsProject に触れるのは常にGUIスレッドのみ。
+Execution path: HTTP worker thread -> driver.submit() puts it on the in-memory queue ->
+the GUI thread's LiveDriver._poll runs it -> the worker waits and returns the result.
+Only the GUI thread ever touches iface/QgsProject.
 
-plugin_id を指定すると eval/pyeval/screenshot/devreload はそのプラグインの
-LiveDriverへ転送される(ハブ経路)。open_plugin/reload_plugin/bridge_call/
-status は plugin_id をコマンド引数としてこのドライバが処理する。
+With plugin_id, eval/pyeval/screenshot/devreload are forwarded to that plugin's
+LiveDriver (hub route). open_plugin/reload_plugin/bridge_call/status are
+handled by this driver with plugin_id as a command argument.
 
-バインドは 127.0.0.1 固定、ポート0(空き自動選択)。
-pyeval=任意コード実行のためリモート公開は想定しない。
+Binds to 127.0.0.1 only, port 0 (free port picked automatically).
+pyeval runs arbitrary code, so remote exposure is not a use case.
 
-認証(localhost限定運用):
-  全エンドポイント(/api/health以外)でセッショントークンの照合を必須とする。
-  トークンはドライバ起動時に自動生成され、ユーザ限定ファイル
-  (live_dir/token・レジストリJSON)にのみ書き出される。
-  ローカルのMCPクライアントはそこから読むだけで使える。
-  Authorization: Bearer / X-Api-Key / api-key のいずれかで送る。
-  加えて Host が loopback 以外、または Origin が loopback 以外を指す
-  リクエストは拒否する(DNSリバインド・ブラウザ経由の対策)。
-  QGIS_LIVE_API_KEY を設定するとそのキーも追加で受け付ける。
-  QGIS_LIVE_TOOLS    公開するコマンド種別のカンマ区切り(例 "status,screenshot")。
-                     /mcp の tools/list・tools/call と /api/* の両方に効く。
-                     未設定 or "*" で全許可。
+Auth (localhost-only operation):
+  Every endpoint (other than /api/health) requires a session token match.
+  The token is generated at driver start and written only to user-only files
+  (live_dir/token and the registry JSON).
+  Local MCP clients just read it from there.
+  Send it as Authorization: Bearer, X-Api-Key, or api-key.
+  Requests whose Host is not loopback, or whose Origin points outside
+  loopback, are also rejected (DNS rebinding and browser-based attacks).
+  Setting QGIS_LIVE_API_KEY accepts that key as well.
+  QGIS_LIVE_TOOLS    comma-separated command kinds to expose (e.g. "status,screenshot").
+                     Applies to both /mcp tools/list & tools/call and /api/*.
+                     Unset or "*" allows everything.
 """
 
 import base64
@@ -184,11 +184,11 @@ TOOLS = [
                 "kind": {"type": "string",
                          "enum": ["agents", "skills", "prompts"]},
                 "id": {"type": "string",
-                       "description": "対象ファイル名(stem)。read/delete用"},
+                       "description": "Target file name (stem); for read/delete"},
                 "name": {"type": "string",
-                         "description": "保存ファイル名(stem)。save用"},
+                         "description": "File name to save (stem); for save"},
                 "text": {"type": "string",
-                         "description": "ファイル本文(Markdown)。save用"},
+                         "description": "File body (Markdown); for save"},
             },
             "required": ["op", "kind"],
         },
@@ -399,16 +399,16 @@ class _Handler(BaseHTTPRequestHandler):
     _LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
     def log_message(self, *args):
-        pass  # QGIS内でstderrは死にやすいので黙らせる
+        pass  # stay quiet: stderr tends to die inside QGIS
 
-    # ---- 共通ユーティリティ ----
+    # ---- shared utilities ----
 
     def _local_req_ok(self):
-        """loopback発であることをヘッダで確認(DNSリバインド/ブラウザ対策)。
+        """Verify from the headers that the request came from loopback.
 
-        Hostがloopback以外を指す、またはOriginがloopback以外の
-        サイトを指すリクエストは拒否する。ローカルのWebアプリ
-        (localhostオリジン)からの利用は許可する。
+        Guards against DNS rebinding and browser-based attacks: a request whose
+        Host points outside loopback, or whose Origin points at a non-loopback
+        site, is rejected. Local web apps (localhost origin) are allowed.
         """
         host = self.headers.get("Host", "")
         if host:
@@ -432,7 +432,7 @@ class _Handler(BaseHTTPRequestHandler):
         return True
 
     def _auth_ok(self):
-        """トークン照合。サーバに1つ以上の有効キーが必須(無ければ全拒否)。"""
+        """Check the token. At least one valid key is required (none denies all)."""
         keys = self.server.api_keys
         if not keys:
             return False
@@ -447,7 +447,7 @@ class _Handler(BaseHTTPRequestHandler):
             hmac.compare_digest(tok, k) for k in keys)
 
     def _gate(self, path):
-        """認証ゲート。/api/health は生存確認用に無認証で通す。"""
+        """Auth gate. /api/health passes unauthenticated for liveness checks."""
         if not self._local_req_ok():
             return False
         if path == "/api/health" or self._auth_ok():
@@ -456,7 +456,7 @@ class _Handler(BaseHTTPRequestHandler):
         return False
 
     def _allowed(self, ctype):
-        """QGIS_LIVE_TOOLSによるコマンド種別フィルタ。None=全許可。"""
+        """Command-kind filter from QGIS_LIVE_TOOLS. None allows all."""
         allow = self.server.allowed
         return allow is None or ctype in allow
 
@@ -497,14 +497,14 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             self._json(200, self._dispatch({"type": "status"}))
         elif self.path == "/mcp":
-            # Streamable HTTPのGET(SSEストリーム)は提供しない
+            # no Streamable HTTP GET (SSE stream) support
             self._json(405, {"error": "method not allowed"},
                        {"Allow": "POST"})
         else:
             self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        # keep-alive接続で未読ボディが次リクエストを壊さないよう先に読み捨てる
+        # drain the body first so an unread one can't break the next keep-alive request
         body = self._read_body()
         if not self._gate(self.path):
             return
@@ -516,7 +516,7 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/mcp":
             self._mcp(data)
         elif self.path == "/api/cmd":
-            # コマンドJSONをそのままdispatch(type/plugin_id等すべて有効)
+            # dispatch the command JSON as-is (type/plugin_id etc. remain valid)
             self._api_call(data)
         elif self.path == "/api/pyeval":
             self._api_call({"type": "pyeval", "code": data.get("code", ""),
@@ -536,7 +536,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error":
                              f"type '{cmd.get('type')}' not allowed"})
             return
-        # 未指定のplugin_idは送信しない(省略=ローカル/既定対象の意味を残す)
+        # don't send an unset plugin_id (leaving it out keeps "local/default target")
         if cmd.get("plugin_id") is None:
             cmd.pop("plugin_id", None)
         rep = self._dispatch(cmd)
@@ -569,7 +569,7 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._json(500, {"error": repr(e)})
 
-    # ---- MCP (Streamable HTTP, JSON応答のみ) ----
+    # ---- MCP (Streamable HTTP, JSON responses only) ----
 
     def _mcp(self, msg):
         method = msg.get("method", "")
@@ -620,8 +620,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._allowed(name[len("qgis_"):]):
             return _content_error(
                 f"tool '{name}' disabled (QGIS_LIVE_TOOLS)")
-        # qgis_<type> → {"type": "<type>", ...args} にそのまま変換する。
-        # 新しいコマンド種別を追加してもここは変更不要。
+        # translate qgis_<type> straight to {"type": "<type>", ...args}.
+        # adding a new command kind needs no change here.
         if name == "qgis_screenshot":
             return self._tool_screenshot(args)
         cmd = {"type": name[len("qgis_"):],
@@ -657,10 +657,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 def start_http(driver, host="127.0.0.1", port=0,
                api_keys=None, allowed=None):
-    """HTTPサーバをデーモンスレッドで起動し実ポートを返す。
+    """Start the HTTP server on a daemon thread and return the actual port.
 
-    api_keys: 受け付けるトークンの集合。必須(空なら全リクエスト拒否)
-    allowed: 許可するコマンド種別の集合。None=全許可
+    api_keys: set of accepted tokens. Required (empty rejects every request).
+    allowed: set of permitted command kinds. None allows all.
     """
     httpd = ThreadingHTTPServer((host, port), _Handler)
     httpd.daemon_threads = True

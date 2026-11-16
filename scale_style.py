@@ -1,40 +1,40 @@
-"""スケール連動の標準線幅サービス(ScaleStyler)。
+"""Scale-linked standard line width service (ScaleStyler).
 
-GISではCADと異なり、線幅をスケールに連動させられる:
+Unlike CAD, GIS can tie line width to scale:
 
-- ``mm``       : 紙面/画面幅(mm)。現在縮尺に適した幅を標準テーブルから選ぶ
-- ``meters``   : 地物の実幅(m)で描画。ズームで見た目の太さが変わる
-                 (QgsUnitTypes.RenderMetersInMapUnits。CRS非依存の実メートル)
-- ``rules``    : 縮尺帯ごとに幅の異なるルールベースレンダラを生成し、
-                 縮尺変化で自動的に幅が切り替わる
+- ``mm``       : paper/screen width (mm). Picks the current scale's width from the standard table
+- ``meters``   : draw at the feature's real width (m). Apparent thickness changes with zoom
+                 (QgsUnitTypes.RenderMetersInMapUnits; real meters, CRS-independent)
+- ``rules``    : build a rule-based renderer with a different width per scale band, so the
+                 width switches automatically as the scale changes
 
-標準線幅テーブルはプロファイルJSONで管理(layer_orgと同じ2階層):
-  同梱   : <plugin>/scale_style/*.json    (読み取り専用デフォルト)
-  ユーザ : ~/.qgis-live/scale_style/*.json (QGIS_LIVE_REGISTRY準拠、同名優先)
+The standard width table is managed by profile JSON (the same two tiers as layer_org):
+  bundled : <plugin>/scale_style/*.json    (read-only defaults)
+  user    : ~/.qgis-live/scale_style/*.json (honours QGIS_LIVE_REGISTRY, same name wins)
 
-アクティブプロファイルは QSettings "geo_driver/scale_style/profile"
-(stem名、既定 "default")。
+The active profile is QSettings "geo_driver/scale_style/profile"
+(stem name, default "default").
 
-プロファイルJSONスキーマ:
+Profile JSON schema:
   {
     "name": "default",
     "description": "...",
-    "scale_bands": [            // 縮尺分母の昇順(小さい=詳細側)。先勝ち
-      {"max": 2500,   "label": "1:2,500迄",   "factor": 1.5},
-      {"max": 25000,  "label": "〜1:25,000",  "factor": 1.0},
-      {"max": null,   "label": "1:250,000〜", "factor": 0.4}
+    "scale_bands": [            // ascending denominators (smaller = finer). first match wins
+      {"max": 2500,   "label": "up to 1:2,500",   "factor": 1.5},
+      {"max": 25000,  "label": "~1:25,000",       "factor": 1.0},
+      {"max": null,   "label": "1:250,000~",      "factor": 0.4}
     ],
-    "categories": [             // 先勝ち。matchキーはlayer_orgと同じ
+    "categories": [             // first match wins. match keys are the same as layer_org
       {"key": "road_major",
-       "match": {"name_re": "国道|主要|trunk|primary", "geom": "line"},
-       "base_mm": 0.55,         // 基準帯(factor=1.0)での紙面幅mm
-       "real_width_m": 13.0},   // meters モードの実世界幅(省略可)
+       "match": {"name_re": "trunk|primary|motorway", "geom": "line"},
+       "base_mm": 0.55,         // paper width in mm at the base band (factor=1.0)
+       "real_width_m": 13.0},   // real-world width (m) in meters mode (optional)
       {"key": "default", "match": {}, "base_mm": 0.3}
     ]
   }
 
-GUIスレッド前提のQGIS操作は全てメソッド内importに閉じ込め、
-このモジュール自体は stdlib のみでimport可能(unit test対象)。
+Every QGIS operation that assumes the GUI thread is confined to imports inside
+methods, so this module itself imports with stdlib only (unit test target).
 """
 
 import json
@@ -53,20 +53,20 @@ def _registry_dir():
 
 
 def profiles_dir():
-    """ユーザ定義プロファイル置き場 ~/.qgis-live/scale_style/。"""
+    """Directory for user-defined profiles: ~/.qgis-live/scale_style/."""
     return os.path.join(_registry_dir(), "scale_style")
 
 
 def _bundled_dir():
-    """プラグイン同梱のデフォルトプロファイル dir。"""
+    """Directory of the plugin's bundled default profiles."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)),
                         "scale_style")
 
 
 def list_profiles():
-    """利用可能なプロファイル一覧。[{id,name,description,builtin,path}]。
+    """Available profiles. [{id,name,description,builtin,path}].
 
-    bundled→user の順に走査し、同名(stem)はユーザ側が上書き。
+    Scans bundled then user; a same stem is overridden by the user side.
     """
     out = {}
     for d, builtin in ((_bundled_dir(), True), (profiles_dir(), False)):
@@ -84,7 +84,7 @@ def list_profiles():
                         meta = json.load(fh)
                     name = meta.get("name") or stem
                     desc = meta.get("description") or ""
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
                 out[stem] = {"id": stem, "name": name, "description": desc,
                              "path": p, "builtin": builtin}
@@ -92,7 +92,7 @@ def list_profiles():
 
 
 def load_profile(name):
-    """プロファイルid → (dict, path)。見つからなければ (None, None)。"""
+    """Profile id -> (dict, path). (None, None) when not found."""
     for p in list_profiles():
         if p["id"] == name:
             try:
@@ -108,10 +108,10 @@ def load_profile(name):
 
 
 def band_for_scale(prof, scale):
-    """縮尺分母に対応する scale_bands エントリを返す(先勝ち)。
+    """Return the scale_bands entry for a scale denominator (first match wins).
 
-    band["max"]=上限(排他)。max=None は「それ以上全部」。
-    scale=None(不明)は factor=1.0 の基準帯(無ければ先頭)を返す。
+    band["max"] is the upper bound (exclusive). max=None means "everything above".
+    scale=None (unknown) returns the base band with factor=1.0 (the first if none).
     """
     bands = prof.get("scale_bands") or []
     if scale is None:
@@ -133,7 +133,7 @@ def band_for_scale(prof, scale):
 
 
 def match_category(prof, attrs):
-    """categories を先頭から評価し最初に一致したカテゴリを返す。"""
+    """Evaluate categories from the top and return the first match."""
     for cat in prof.get("categories") or []:
         if _match_all(cat.get("match") or {}, attrs):
             return cat
@@ -141,7 +141,7 @@ def match_category(prof, attrs):
 
 
 def mm_to_meters(width_mm, scale):
-    """紙面mm → 地物実幅m (scale=縮尺分母)。scale不明ならNone。"""
+    """Paper mm -> feature real width in m (scale = scale denominator). None if unknown."""
     try:
         return round(float(width_mm) * float(scale) / 1000.0, 3)
     except (TypeError, ValueError):
@@ -149,9 +149,9 @@ def mm_to_meters(width_mm, scale):
 
 
 def suggested_mm(prof, cat, scale):
-    """カテゴリの base_mm に縮尺帯 factor を掛けた推奨mm幅を返す。
+    """Return the recommended mm width: category base_mm times the band factor.
 
-    @returns (width_mm, band) — band は band_for_scale() の結果。
+    @returns (width_mm, band) - band is the result of band_for_scale().
     """
     band = band_for_scale(prof, scale)
     base = float((cat or {}).get("base_mm") or 0.3)
@@ -171,11 +171,11 @@ _UNIT_NAMES = {
 
 
 def _qgis_unit(name, default="mm"):
-    """単位名 → QgsUnitTypes.RenderUnit。"""
+    """Unit name -> QgsUnitTypes.RenderUnit."""
     from qgis.core import QgsUnitTypes
     attr = _UNIT_NAMES.get(str(name or default).lower(),
                            _UNIT_NAMES[default])
-    # Qt6(scoped enum)では RenderUnit.<name>、フラット公開なら直接
+    # Qt6 (scoped enum) needs RenderUnit.<name>; flat exposure allows direct access
     try:
         return getattr(QgsUnitTypes, attr)
     except AttributeError:
@@ -183,10 +183,10 @@ def _qgis_unit(name, default="mm"):
 
 
 def _set_symbol_width(symbol, width, unit_name="mm"):
-    """シンボル内の各シンボルレイヤへ幅を設定する。
+    """Set the width on every symbol layer inside the symbol.
 
-    線/マーカーは setWidth+setWidthUnit、塗りつぶしの輪郭は
-    setStrokeWidth+setStrokeWidthUnit を使う。
+    Lines/markers use setWidth+setWidthUnit, fill outlines use
+    setStrokeWidth+setStrokeWidthUnit.
     """
     unit = _qgis_unit(unit_name)
     for i in range(symbol.symbolLayerCount()):
@@ -202,7 +202,7 @@ def _set_symbol_width(symbol, width, unit_name="mm"):
 
 
 def renderer_symbols(renderer):
-    """レンダラが保持する全シンボルを列挙する。"""
+    """Enumerate every symbol held by the renderer."""
     from qgis.core import (QgsCategorizedSymbolRenderer,
                            QgsGraduatedSymbolRenderer,
                            QgsRuleBasedRenderer,
@@ -229,25 +229,25 @@ def renderer_symbols(renderer):
     try:
         from qgis.core import QgsRenderContext
         return list(renderer.symbols(QgsRenderContext()))
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         return []
 
 
 def _symbol_color(symbol):
     try:
         return symbol.color().name()
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         return None
 
 
 class ScaleStyler:
-    """レイヤ線幅を標準テーブル+スケールで決める共有サービス。
+    """Shared service that derives layer line widths from the standard table plus scale.
 
-    bridge や他プラグインから plugins['geo_driver'].scale_style
-    経由で使う。プロファイル無効/不在でも静かにエラーdictを返す。
+    Used from bridge and other plugins via plugins['geo_driver'].scale_style.
+    Even with a disabled or missing profile it quietly returns an error dict.
     """
 
-    # ---------- プロファイル解決 ----------
+    # ---------- profile resolution ----------
 
     def active_profile_name(self):
         try:
@@ -266,7 +266,7 @@ class ScaleStyler:
         try:
             from qgis.PyQt.QtCore import QSettings
             QSettings().setValue(_SETTING_PROFILE, str(name))
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         return {"ok": True, "active": str(name)}
 
@@ -277,7 +277,7 @@ class ScaleStyler:
         return prof
 
     def describe(self, name=None):
-        """bridge表示用のプロファイル要約。"""
+        """Profile summary for bridge display."""
         prof, path = load_profile(name or self.active_profile_name())
         if prof is None:
             return None
@@ -295,19 +295,19 @@ class ScaleStyler:
                 for c in prof.get("categories") or []],
         }
 
-    # ---------- 推奨値計算 ----------
+    # ---------- recommended value computation ----------
 
     @staticmethod
     def canvas_scale():
-        """現在の地図キャンバス縮尺分母(取得不可ならNone)。"""
+        """Scale denominator of the current map canvas (None when unavailable)."""
         try:
             from qgis.utils import iface
             return iface.mapCanvas().scale()
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             return None
 
     def categorize(self, layer, ctx=None):
-        """レイヤ名/属性からカテゴリを推定する。"""
+        """Infer the category from the layer name/attributes."""
         prof = self.profile()
         attrs = layer_attrs(layer, ctx)
         cat = match_category(prof or {}, attrs)
@@ -315,7 +315,7 @@ class ScaleStyler:
 
     def suggest(self, layer=None, category=None, scale=None,
                 profile_name=None):
-        """推奨線幅を返す。scale省略時は現在のキャンバス縮尺。
+        """Return the recommended line width. When scale is omitted, the current canvas scale.
 
         @returns dict: {category, scale, band, base_mm, factor,
                         width_mm, real_width_m, width_m_equiv}
@@ -357,11 +357,11 @@ class ScaleStyler:
                 "real_width_m": real_m,
                 "width_m_equiv": mm_to_meters(w_mm, s)}
 
-    # ---------- 適用(QGIS依存) ----------
+    # ---------- applying (QGIS-dependent) ----------
 
     @staticmethod
     def _find_layer(sel):
-        """layer_id/レイヤ名/None(=アクティブ)からレイヤを解決する。"""
+        """Resolve a layer from layer_id / layer name / None (= active)."""
         from qgis.core import QgsProject
         from qgis.utils import iface
         if sel is None:
@@ -375,7 +375,7 @@ class ScaleStyler:
 
     @staticmethod
     def _is_strokable(layer):
-        """線幅を設定し得るレイヤ(線 or ポリゴン輪郭)か。"""
+        """Whether the layer can take a line width (line, or polygon outline)."""
         from qgis.core import QgsWkbTypes
         try:
             gt = QgsWkbTypes.geometryType(layer.wkbType())
@@ -387,13 +387,13 @@ class ScaleStyler:
 
     def apply(self, layer, mode="mm", category=None, scale=None,
               profile_name=None, dry=False):
-        """レイヤのレンダラに標準線幅を適用する。
+        """Apply the standard line width to the layer's renderer.
 
         mode:
-          "mm"     — 推奨mm幅を現縮尺向けに固定設定
-          "meters" — 実世界幅(m)で設定(ズーム連動)
-          "rules"  — 縮尺帯ルールレンダラを生成(幅が縮尺で自動切替)
-        dry=True で適用せず予定内容のみ返す。
+          "mm"     - fix the recommended mm width for the current scale
+          "meters" - set the real-world width (m) (zoom-linked)
+          "rules"  - build a scale-band rule renderer (width switches with scale)
+        dry=True returns the planned content without applying it.
         """
         mode = str(mode or "mm").lower()
         if mode in ("map_units", "m", "real"):
@@ -441,7 +441,7 @@ class ScaleStyler:
         return {"ok": True, "layer": layer.name(), **applied}
 
     def _apply_rules(self, layer, category, profile_name, dry):
-        """縮尺帯ルールレンダラを生成・適用する。"""
+        """Build and apply the scale-band rule renderer."""
         prof = self.profile(profile_name)
         if prof is None:
             return {"ok": False, "error": "profile not found or disabled"}
@@ -459,7 +459,7 @@ class ScaleStyler:
         if not bands:
             return {"ok": False, "error": "profile has no scale_bands"}
 
-        # 現シンボルの色を引き継ぐ
+        # inherit the color of the current symbol
         color = None
         syms = renderer_symbols(layer.renderer())
         if syms:
@@ -471,8 +471,8 @@ class ScaleStyler:
             w = round(base_mm * float(b.get("factor") or 1.0), 2)
             w = max(0.05, min(w, 10.0))
             label = f"{b.get('label') or ('1:' + str(mx))} ({w:g}mm)"
-            # 帯のactive範囲は min_scale < 縮尺分母 <= max_scale
-            # (min_scale=詳細側の排他下限、max_scale=広域側の包含上限)
+            # a band's active range is min_scale < scale denominator <= max_scale
+            # (min_scale = detail-side exclusive lower, max_scale = overview upper)
             specs.append({"label": label,
                           "min_scale": int(prev) if prev else 0,
                           "max_scale": int(mx) if mx else 0,
@@ -483,8 +483,8 @@ class ScaleStyler:
             return {"ok": True, "mode": "rules", "dry": True,
                     "category": cat.get("key"), "rules": specs}
 
-        # geo_legend がロード済みなら applyRules へ委譲(凡例作成の
-        # オーナー)。未ロード/失敗時は内部実装へフォールバック
+        # if geo_legend is loaded, delegate to applyRules (the owner of legend
+        # creation). If not loaded / on failure, fall back to the local code
         try:
             import qgis.utils
             gl = qgis.utils.plugins.get("geo_legend")
@@ -496,12 +496,12 @@ class ScaleStyler:
                     res["delegated"] = "geo_legend.applyRules"
                     res["category"] = cat.get("key")
                     return res
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         return self._apply_rules_local(layer, specs, cat)
 
     def _apply_rules_local(self, layer, specs, cat):
-        """geo_legend非依存のルールレンダラ構築(フォールバック)。"""
+        """Rule renderer construction independent of geo_legend (fallback)."""
         from qgis.core import QgsRuleBasedRenderer, QgsWkbTypes
         gt = QgsWkbTypes.geometryType(layer.wkbType())
         sym_cls = {
@@ -523,7 +523,7 @@ class ScaleStyler:
                 sym.setColor(QColor(str(spec["color"])))
             _set_symbol_width(sym, spec["width"], "mm")
             # Rule ctor: (symbol, maximumScale, minimumScale, filterExp,
-            #             label)。active範囲は min<scale<=max
+            #             label). active range is min<scale<=max
             root.appendChild(QgsRuleBasedRenderer.Rule(
                 sym, int(spec.get("max_scale") or 0),
                 int(spec.get("min_scale") or 0), "",

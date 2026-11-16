@@ -1,19 +1,20 @@
-"""Devin CLI(devin.exe)セッションをQGISプロセス内で非同期実行する。
+"""Run Devin CLI (devin.exe) sessions asynchronously inside the QGIS process.
 
-qgis_devin_* ツール群の実体。2つのエンジンを持つ:
+Backend for the qgis_devin_* tools. Two engines:
 
-- "acp"(既定): `devin acp` をJSON-RPC(stdio)で駆動。
-  IDE認証(credentials.toml の windsurf_api_key)を共有するため
-  `devin auth login` 不要。session/load で既存セッション再開も可。
-  dispatcher(C:\\devin\\agent\\acp-runner.mjs)と同じ経路。
-- "print": `devin -p`(非対話モード)を起動しstdoutをログへ写す。
-  `devin auth login` によるCLIログインが必要。
+- "acp" (default): drives `devin acp` over JSON-RPC (stdio).
+  Shares IDE credentials (windsurf_api_key in credentials.toml), so
+  `devin auth login` is not needed. Existing sessions can be resumed via
+  session/load. Same transport path as the dispatcher (C:/devin/agent/acp-runner.mjs).
+- "print": launches `devin -p` (non-interactive mode) and mirrors stdout to the log.
+  Requires a CLI login via `devin auth login`.
 
-engine="auto" はIDE認証情報があれば acp、無ければ print を選ぶ。
+engine="auto" picks acp when IDE credentials exist, otherwise print.
 
-タスクレジストリはプロセスメモリ上に保持するため、QGIS再起動で
-追跡情報は消える(プロセス自体は孤児として残り得る点に注意)。
-stdlibのみで実装し実QGIS無しでpytest可能。iface等は触らない。
+The task registry lives in process memory, so tracking info is lost when QGIS
+restarts (note that the processes themselves may remain as orphans).
+Stdlib-only so it can be tested with pytest without a real QGIS; iface etc.
+are never touched.
 """
 
 import itertools
@@ -21,12 +22,12 @@ import json
 import os
 import re
 import shutil
-import subprocess  # nosec B404  # devin.exe起動に必要
+import subprocess  # nosec B404  # needed to launch devin.exe
 import threading
 import time
 import uuid
 
-# dispatcher(C:\devin\agent)と同じ既定インストール先
+# Same default install location as the dispatcher (C:/devin/agent)
 _DEFAULT_EXE = os.path.expandvars(
     r"%LOCALAPPDATA%\Programs\Devin\resources\app\extensions"
     r"\windsurf\devin\bin\devin.exe")
@@ -43,13 +44,14 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 class TaskError(Exception):
-    """ツールへそのまま返せるユーザー向けエラー。"""
+    """User-facing error that can be returned to the tool as-is."""
 
 
 def find_exe(exe=None):
-    """devin.exe のパスを解決する。見つからなければ None。
+    """Resolve the path of devin.exe. None if it cannot be found.
 
-    解決順: 引数 > QGIS_LIVE_DEVIN_EXE > PATH の devin > 既定インストール先。
+    Resolution order: argument > QGIS_LIVE_DEVIN_EXE > devin on PATH > default
+    install location.
     """
     for c in (exe, os.environ.get("QGIS_LIVE_DEVIN_EXE"),
               shutil.which("devin"), _DEFAULT_EXE):
@@ -59,10 +61,10 @@ def find_exe(exe=None):
 
 
 def _ide_api_key():
-    """IDE認証共有用の windsurf_api_key を返す。見つからなければ None。
+    """Return windsurf_api_key for sharing IDE auth. None if not found.
 
-    解決順: QGIS_LIVE_WINDSURF_API_KEY > WINDSURF_API_KEY >
-    credentials.toml。値はログへ書き出さない。
+    Resolution order: QGIS_LIVE_WINDSURF_API_KEY > WINDSURF_API_KEY >
+    credentials.toml. The value is never written to the log.
     """
     for k in ("QGIS_LIVE_WINDSURF_API_KEY", "WINDSURF_API_KEY"):
         v = os.environ.get(k)
@@ -78,12 +80,13 @@ def _ide_api_key():
 
 
 def _copilot_exe_spec():
-    """copilot CLI を直接spawn可能なargv先頭列を返す。無ければNone。
+    """Return an argv prefix that can spawn the copilot CLI directly. None if absent.
 
-    npmの .cmd shim は直接spawnできず cmd /c 経由は引数クォートが
-    脆弱なので、実exe/winget shim > node+npm-loader.js の順で探す。
-    QGISの子プロセスはPATHにnpm dirが無いことがあるため、
-    既定インストール先(%APPDATA%\\npm 等)も候補に含める。
+    npm's .cmd shim cannot be spawned directly and going through cmd /c makes
+    argument quoting fragile, so try a real exe/winget shim first, then
+    node + npm-loader.js. QGIS child processes may lack the npm dir on PATH,
+    so default install locations (the usual npm global dir etc.) are also
+    candidates.
     """
     npm_dir = os.path.expandvars(r"%APPDATA%\npm")
     cands = [shutil.which("copilot"),
@@ -111,14 +114,14 @@ def _copilot_exe_spec():
 
 def _build_copilot_argv(prompt, session_id=None, model=None,
                         permission_mode="dangerous"):
-    """`copilot -p` 非対話実行のコマンドライン。
+    """Command line for `copilot -p` non-interactive execution.
 
-    権限: permission_mode="dangerous" は環境変数
-    COPILOT_ALLOW_ALL=true(全ツール自動許可+作業dir信頼=
-    devinの --respect-workspace-trust false 相当)を run() 側で
-    立てる。"accept-edits" は --allow-all-tools(ツールは許可するが
-    dir信頼はしない)。それ以外は追加フラグ無し(非対話では
-    未承認ツールは否認される)。再開は -r <session_id>。
+    Permissions: permission_mode="dangerous" makes run() set
+    COPILOT_ALLOW_ALL=true (allow all tools automatically + trust the working
+    dir, equivalent to devin's --respect-workspace-trust false). "accept-edits"
+    maps to --allow-all-tools (tools are allowed but the dir is not trusted).
+    Otherwise no extra flags (non-interactive mode denies unapproved tools).
+    Resume with -r <session_id>.
     """
     spec = _copilot_exe_spec()
     if spec is None:
@@ -141,10 +144,10 @@ def _build_copilot_argv(prompt, session_id=None, model=None,
 
 
 def _resolve_engine(engine, agent="devin"):
-    """engine="auto"|"acp"|"print" を実エンジン名に解決する。"""
+    """Resolve engine="auto"|"acp"|"print" to a concrete engine name."""
     if engine in (None, "", "auto"):
         if agent == "copilot":
-            return "acp"  # IDE認証不要のため常にacpを優先
+            return "acp"  # no IDE auth needed, so always prefer acp
         return "acp" if _ide_api_key() else "print"
     if engine not in ("acp", "print"):
         raise TaskError(f"engine must be one of {_ENGINES}: {engine!r}")
@@ -153,11 +156,11 @@ def _resolve_engine(engine, agent="devin"):
 
 def _build_argv(exe, prompt_file, session_id=None, model=None,
                 permission_mode="dangerous"):
-    """`devin -p` 非対話実行のコマンドライン。
+    """Command line for `devin -p` non-interactive execution.
 
-    --respect-workspace-trust false: -p は対話プロンプトを出せないため
-    未信頼dirで即死するのを防ぐ。--prompt-file: 長文プロンプトを
-    コマンドライン長制限なく渡す。
+    --respect-workspace-trust false: -p cannot show an interactive prompt, so
+    this keeps it from exiting immediately in an untrusted dir. --prompt-file
+    passes long prompts without hitting the command-line length limit.
     """
     argv = [exe, "-p", "--respect-workspace-trust", "false"]
     if permission_mode:
@@ -175,7 +178,7 @@ def _build_argv(exe, prompt_file, session_id=None, model=None,
 
 
 def _prune_locked():
-    """レジストリ上限超過時、終了済みの古いタスクから捨てる。"""
+    """When the registry cap is exceeded, drop finished old tasks first."""
     if len(_TASKS) <= _MAX_TASKS:
         return
     done = sorted((t for t in _TASKS.values() if t["proc"].poll() is not None),
@@ -191,19 +194,19 @@ def _close(t):
         if f is not None:
             try:
                 f.close()
-            except Exception:  # nosec B110  # 設計上の許容
+            except Exception:  # nosec B110  # acceptable by design
                 pass
 
 
 def run(prompt, cwd=None, session_id=None, model=None,
         permission_mode="dangerous", exe=None, live_dir=None,
         engine="auto", agent="devin"):
-    """エージェントCLIセッションを非同期起動し、タスク情報を返す。
+    """Start an agent CLI session asynchronously and return task info.
 
-    @param exe: 実行ファイルパス。list/tuple を渡すとそれをそのまま
-        argv として使う(テスト用。CLI引数は付かない)
-    @param engine: "auto"|"acp"|"print"。autoは使える方を選ぶ
-    @param agent: "devin" または "copilot"(GitHub Copilot CLI)
+    @param exe: executable path. A list/tuple is used as argv verbatim
+        (for tests; no CLI args are appended)
+    @param engine: "auto"|"acp"|"print". auto picks whichever is available
+    @param agent: "devin" or "copilot" (GitHub Copilot CLI)
     @returns {"task_id", "pid", "cwd", "log", "engine"}
     """
     prompt = prompt or ""
@@ -255,22 +258,21 @@ def run(prompt, cwd=None, session_id=None, model=None,
 
     env = None
     if agent == "copilot" and permission_mode == "dangerous":
-        # COPILOT_ALLOW_ALL=true は全ツール自動許可に加えて
-        # 作業dirも信頼する(devin --respect-workspace-trust false相当)
+        # COPILOT_ALLOW_ALL=true approves every tool automatically and also
+        # trusts the working dir (equivalent to devin --respect-workspace-trust false)
         env = dict(os.environ, COPILOT_ALLOW_ALL="true")
 
     try:
-        # acp: セッションログはワーカースレッドが単独で書くため
-        # buffering=0。stderr(CLIのトレースログ)は別ファイルへ
-        # 分離する(同一ファイルへの別appendハンドルは書込みが
-        # 競合で欠落する実績あり)
+        # acp: the worker thread writes the session log alone, hence
+        # buffering=0. stderr (the CLI trace log) goes to a separate file
+        # (separate append handles on one file have lost writes on contention).
         logf = open(log, "ab", buffering=0 if eng == "acp" else -1)
         errf = open(log[:-4] + ".stderr.log", "ab") \
             if eng == "acp" else None
         try:
             if eng == "acp":
-                # JSON-RPCをstdin/stdoutでやり取りするためpipe。
-                # stderrは別ファイルへ(stdoutへの混入はRPCを壊す)
+                # JSON-RPC travels over stdin/stdout, so use pipes.
+                # stderr goes to a separate file (mixing it into stdout breaks RPC)
                 proc = subprocess.Popen(  # nosec B603
                     argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                     stderr=errf, cwd=cwd, env=env,
@@ -344,7 +346,7 @@ def _tail(path, chars):
 
 
 def status(task_id=None, tail=2000):
-    """タスク状態を返す。task_id省略時は全タスク一覧。"""
+    """Return task status. With task_id omitted, returns all tasks."""
     if not task_id:
         with _LOCK:
             return {"tasks": [_summary(t) for t in _TASKS.values()]}
@@ -357,7 +359,7 @@ def status(task_id=None, tail=2000):
 
 
 def result(task_id, tail=20000):
-    """タスクの出力(ログ末尾)を返す。"""
+    """Return the task output (tail of the log)."""
     t = _get(task_id)
     out = _summary(t)
     out["output"] = _tail(t["log"], max(0, int(tail)))
@@ -367,7 +369,7 @@ def result(task_id, tail=20000):
 
 
 def abort(task_id):
-    """実行中タスクをkillする。"""
+    """Kill a running task."""
     t = _get(task_id)
     t["proc"].kill()
     out = _summary(t)
@@ -375,18 +377,19 @@ def abort(task_id):
     return out
 
 
-# ---- ACP (Agent Client Protocol) エンジン ----
-# `devin.exe acp` はstdio上で行単位JSON-RPCを話す。1スレッドが
-# initialize→authenticate→session/new(またはload)→session/promptを
-# 順に投げ、応答待ち中も session/update 通知の整形と
-# session/request_permission への自動応答を継続する。
-# (dispatcher C:\devin\agent\acp-runner.mjs と同じ手順)
+# ---- ACP (Agent Client Protocol) engine ----
+# `devin.exe acp` speaks line-delimited JSON-RPC over stdio. One thread sends
+# initialize→authenticate→session/new (or load)→session/prompt in order, and
+# keeps formatting session/update notifications and auto-answering
+# session/request_permission while awaiting responses.
+# (Same procedure as the dispatcher's acp-runner.mjs)
 
 def _pick_permission_option(options, dangerous):
-    """request_permission の選択肢から応答 optionId を選ぶ。
+    """Pick the response optionId from the request_permission options.
 
-    dangerous=常にallow系(allow_always優先)。それ以外はallow_once系
-    (一度きり許可)を優先し、allow系が無ければ先頭にフォールバック。
+    dangerous: always prefer allow-style (allow_always first). Otherwise prefer
+    allow_once-style (one-time approval) and fall back to the first option when
+    no allow-style option exists.
     """
     opts = options or []
 
@@ -411,7 +414,7 @@ def _pick_permission_option(options, dangerous):
 
 
 def _acp_handle(msg, t, send, out):
-    """エージェント→クライアント方向の通知/リクエストを処理する。"""
+    """Handle agent→client notifications/requests."""
     method = msg.get("method")
     if method == "session/update":
         u = (msg.get("params") or {}).get("update") or {}
@@ -431,10 +434,10 @@ def _acp_handle(msg, t, send, out):
             out("[plan] "
                 + json.dumps(u.get("entries") or "",
                              ensure_ascii=False)[:300])
-        # agent_thought_chunk/config_option_update等は省略
+        # agent_thought_chunk, config_option_update etc. are omitted
     elif msg.get("id") is not None:
-        # リクエスト: 許可問い合わせはポリシーで自動応答、
-        # 未知のメソッドはmethod not foundを返す(応答無しで止めない)
+        # Request: permission queries are answered automatically by policy;
+        # unknown methods get method not found (so the peer never hangs on no reply)
         if method == "session/request_permission":
             oid = _pick_permission_option(
                 (msg.get("params") or {}).get("options"),
@@ -449,12 +452,11 @@ def _acp_handle(msg, t, send, out):
 
 
 def _acp_drive(t):
-    """ACPセッションをワーカースレッドで駆動する。
+    """Drive an ACP session on a worker thread.
 
-    セッションログ(t["logf"])はこのスレッドが単独で書く
-    (子stderrは別ファイル)。プロンプト完了(または失敗)で
-    t["done"] を立ててプロセスを終了させ、_summary の
-    state 判定に委ねる。
+    This thread alone writes the session log (t["logf"]) (child stderr goes to
+    a separate file). When the prompt completes (or fails) it sets t["done"]
+    and terminates the process, leaving state determination to _summary.
     """
     proc = t["proc"]
     seq = itertools.count(1)
@@ -485,7 +487,7 @@ def _acp_drive(t):
                 _acp_handle(msg, t, send, out)
                 continue
             if msg.get("id") != mid:
-                continue  # 別idの遅延応答(通常来ない)
+                continue  # delayed response for another id (normally never happens)
             if "error" in msg:
                 raise TaskError(
                     f"{method}: {json.dumps(msg['error'])[:400]}")
@@ -495,16 +497,16 @@ def _acp_drive(t):
         init = rpc("initialize", {
             "protocolVersion": 1,
             "clientInfo": {"name": "qgis-live-driver", "version": "1.0.0"},
-            # fs/terminal を true にすると実行がクライアントへ委任される。
-            # エージェント側ツールに任せるため false 固定
+            # fs/terminal true delegates execution to the client.
+            # Keep them false so the agent-side tools handle it
             "clientCapabilities": {
                 "fs": {"readTextFile": False, "writeTextFile": False},
                 "terminal": False}})
         caps = init.get("agentCapabilities") or {}
         if t.get("acp_engine") == "copilot":
-            # 認証はCLI側のghログインに委譲。authMethods提示時のみ
-            # 先頭方式をbest-effortで試みる(terminal-authを伴い
-            # うるため失敗は無視して session/new へ進む)
+            # Auth is delegated to the CLI's own gh login. Only when authMethods
+            # are advertised, try the first method best-effort (it may involve
+            # terminal auth), so ignore failures and proceed to session/new
             m = (init.get("authMethods") or [{}])[0]
             if m.get("id"):
                 try:
@@ -528,9 +530,9 @@ def _acp_drive(t):
             sid = s.get("sessionId")
             t["session_id"] = sid
             out(f"[session started] {sid}")
-        # permission_mode → ACPモード。ACPのモードIDは
-        # accept-edits/smart/ask/plan/bypass。dangerousはbypassへ
-        # 写像すると request_permission 自体が来なくなる
+        # permission_mode → ACP mode. ACP mode IDs are
+        # accept-edits/smart/ask/plan/bypass. Mapping dangerous to bypass
+        # means request_permission never arrives at all
         mode = {"dangerous": "bypass", "smart": "smart",
                 "accept-edits": "accept-edits"}.get(t["permission_mode"])
         if mode:
@@ -553,20 +555,20 @@ def _acp_drive(t):
             "prompt": [{"type": "text", "text": t["prompt_full"]}]})
         out(f"\n[done] {json.dumps(res or {}, ensure_ascii=False)}")
         t["done"] = True
-    except Exception as e:  # プロセス側異常もここへ来る
+    except Exception as e:  # process-side failures also land here
         try:
             out(f"\n[fatal] {e}")
         except OSError:
             pass
         t["error"] = str(e)
     finally:
-        # devin側セッション一覧に残さないよう session/close を
-        # best-effort通知(応答は待たない)してからプロセスを畳む
+        # Notify session/close best-effort (do not await the response) so the
+        # session is not left in devin's session list, then shut the process down
         try:
             if t["done"] and t["session_id"]:
                 send({"jsonrpc": "2.0", "method": "session/close",
                       "params": {"sessionId": t["session_id"]}})
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         try:
             proc.terminate()
@@ -576,10 +578,10 @@ def _acp_drive(t):
 
 
 def _copilot_argv():
-    """`copilot --acp --stdio` のargv(dispatcher copilotSpawnSpec相当)。
+    """argv for `copilot --acp --stdio` (equivalent to dispatcher copilotSpawnSpec).
 
-    直接spawn可能な spec が取れればそれを使い、無理な場合のみ
-    cmd経由で解決させる(引数を含まないのでcmdでも安全)。
+    Use a directly spawnable spec when available; otherwise resolve it through
+    cmd (safe here because no args are involved).
     """
     spec = _copilot_exe_spec()
     if spec is not None:
@@ -590,18 +592,18 @@ def _copilot_argv():
 
 
 class AcpSession:
-    """`devin acp` / `copilot --acp --stdio` の常駐セッション
-    (チャットプロバイダ用)。
+    """Long-lived session for `devin acp` / `copilot --acp --stdio`
+    (for the chat provider).
 
-    _acp_drive(ワンショットタスク)と違い、prompt() を呼ぶたびに同じ
-    セッションへ session/prompt を送れる。readerスレッドが応答・
-    通知・エージェントからのリクエストを多重化するので、send側は
-    単純に応答を待てばよい。
+    Unlike _acp_drive (one-shot tasks), prompt() can send session/prompt to the
+    same session repeatedly. The reader thread multiplexes responses,
+    notifications and agent-initiated requests, so the sender can simply wait
+    for its response.
 
-    @param mode: ACPモードID(bypass/smart/accept-edits等)。
-        permission_mode からの写像は _ACP_MODES を使う
-    @param on_update: session/update ごとに呼ぶコールバック
-        (readerスレッド上で実行されるため重い処理は避ける)
+    @param mode: ACP mode ID (bypass/smart/accept-edits etc.).
+        Use _ACP_MODES to map from permission_mode
+    @param on_update: callback invoked for each session/update
+        (runs on the reader thread, so avoid heavy work)
     """
 
     _ACP_MODES = {"dangerous": "bypass", "smart": "smart",
@@ -621,7 +623,7 @@ class AcpSession:
         self._wlock = threading.Lock()
         self._closed = False
         if isinstance(exe, (list, tuple)):
-            argv = list(exe)  # テスト用: argvをそのまま使う
+            argv = list(exe)  # for tests: use argv as-is
         elif engine == "copilot":
             argv = ([exe, "--acp", "--stdio"] if exe
                     else _copilot_argv())
@@ -635,11 +637,11 @@ class AcpSession:
         if engine == "devin" and not _ide_api_key():
             raise TaskError(
                 "ACP requires IDE credentials (windsurf_api_key)")
-        # devin acp は WINDSURF_EXT_HOST_PID のプロセスを「親」として
-        # 監視し、死亡を検出すると自己終了する。IDEターミナル等から
-        # 起動されたQGISが IDE再起動済みの陳腐pidを継承していると
-        # セッション生成直後に acp が落ちてしまうため、実際の親である
-        # 自プロセス(QGIS)を指すよう上書きする
+        # devin acp watches the process in WINDSURF_EXT_HOST_PID as its
+        # "parent" and exits itself when that process dies. If QGIS was launched
+        # from an IDE terminal it may inherit a stale pid from a restarted IDE,
+        # which kills acp right after session creation, so point it at the real
+        # parent (this QGIS process) instead
         env = dict(os.environ)
         if env.get("WINDSURF_EXT_HOST_PID"):
             env["WINDSURF_EXT_HOST_PID"] = str(os.getpid())
@@ -669,11 +671,10 @@ class AcpSession:
                     "methodId": "devin-browser",
                     "_meta": {"api_key": _ide_api_key()}}, timeout=60.0)
             else:
-                # copilot: 認証はCLI側のghログインに委譲。
-                # authMethods が提示されたら先頭方式を試みるが、
-                # copilot-login はterminal-authを伴いうるため
-                # 失敗・タイムアウトは無視して session/new へ進む
-                # (ghログイン済みなら認証自体が不要)
+                # copilot: auth is delegated to the CLI's gh login. Try the
+                # first advertised authMethod, but copilot-login may involve
+                # terminal auth, so ignore failures/timeouts and proceed to
+                # session/new (with gh already logged in, no auth is needed)
                 m = (init.get("authMethods") or [{}])[0]
                 if m.get("id"):
                     try:
@@ -697,7 +698,7 @@ class AcpSession:
                 except TaskError:
                     if not mcp:
                         raise
-                    # MCP定義が原因かもしれないので空で再試行
+                    # may be caused by the MCP definitions, so retry with an empty list
                     s = self.rpc("session/new", {
                         "cwd": cwd, "mcpServers": []}, timeout=60.0)
                 self.session_id = s.get("sessionId")
@@ -729,7 +730,7 @@ class AcpSession:
             self._proc.stdin.flush()
 
     def rpc(self, method, params=None, timeout=None):
-        """JSON-RPCを投げてresultを待つ。timeout=Noneで無制限。"""
+        """Send a JSON-RPC request and wait for the result. timeout=None waits forever."""
         if self._closed:
             raise TaskError("acp session is closed")
         mid = next(self._seq)
@@ -772,7 +773,7 @@ class AcpSession:
                         box["result"] = msg.get("result")
                     ev.set()
         finally:
-            # プロセス終了: 待機中の全rpcを解放する
+            # Process exited: release every pending rpc
             for mid, (ev, box) in list(self._pending.items()):
                 box["eof"] = True
                 ev.set()
@@ -781,7 +782,7 @@ class AcpSession:
     def _handle_agent(self, msg):
         method = msg.get("method")
         if msg.get("id") is not None:
-            # エージェント→クライアントのリクエスト
+            # agent→client request
             if method == "session/request_permission":
                 oid = _pick_permission_option(
                     (msg.get("params") or {}).get("options"),
@@ -798,7 +799,7 @@ class AcpSession:
             if self.on_update:
                 try:
                     self.on_update(u)
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
 
     def _respond(self, mid, result=None, err=None):
@@ -813,17 +814,17 @@ class AcpSession:
             pass
 
     def prompt(self, blocks):
-        """session/prompt を送り、ターン終了まで待つ。
+        """Send session/prompt and wait until the turn finishes.
 
         @param blocks: [{"type":"text","text":...},
                         {"type":"image","data":b64,"mimeType":...}]
-        @returns session/prompt の result(stopReason/usage等)
+        @returns result of session/prompt (stopReason/usage etc.)
         """
         return self.rpc("session/prompt", {
             "sessionId": self.session_id, "prompt": blocks})
 
     def cancel(self):
-        """進行中ターンを中断させる(session/cancel通知)。"""
+        """Abort the running turn (session/cancel notification)."""
         try:
             self._send({"jsonrpc": "2.0", "method": "session/cancel",
                         "params": {"sessionId": self.session_id}})
@@ -831,7 +832,7 @@ class AcpSession:
             pass
 
     def close(self):
-        """session/close をbest-effort通知してプロセスを畳む。"""
+        """Notify session/close best-effort and shut the process down."""
         if self._closed:
             return
         self._closed = True

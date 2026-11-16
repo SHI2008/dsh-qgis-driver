@@ -1,31 +1,32 @@
-"""APIキーをOSの資格情報ストアに保存する(stdlibのみ・Qt非依存)。
+"""Store API keys in the OS credential store (stdlib only, no Qt dependency).
 
-バックエンド(優先順):
-  - Windows: DPAPI (CryptProtectData/CRYPTPROTECT_UI_FORBIDDEN)。
-    ブラウザ保存パスワードと同じ仕組みで、暗号文は
-    「このマシンのこのユーザでログイン中」にしか復号できない。
-    暗号化blob自体は ~/.qgis-live/ai-secrets.json にbase64で保持
-  - macOS: `security` CLI → ログインキーチェーン
-  - Linux: `secret-tool` (libsecret) があれば Secret Service
-    (GNOME Keyring / KWallet)。
-    無ければ ~/.qgis-live/ai-secrets.json を chmod 600 の
-    平文ファイルとして使う(Chromeのbasic保存と同等の水準)
+Backends (in priority order):
+  - Windows: DPAPI (CryptProtectData/CRYPTPROTECT_UI_FORBIDDEN).
+    The same mechanism as browser-saved passwords, so the ciphertext can only
+    be decrypted while "this user is logged in on this machine".
+    The encrypted blob itself is kept base64-encoded in
+    ~/.qgis-live/ai-secrets.json
+  - macOS: `security` CLI -> login keychain
+  - Linux: Secret Service via `secret-tool` (libsecret) when available
+    (GNOME Keyring / KWallet).
+    Otherwise ~/.qgis-live/ai-secrets.json is used as a chmod 600
+    plain-text file (the same level as Chrome's basic storage).
 
-いずれの経路でも「同一ユーザ権限のプロセス」までは防げない
-(ブラウザのパスワード保存と同じ信頼境界)。他ユーザ・
-ファイル/レジストリの抜き取りだけでは復号されない点が
-QSettings平文保存との違い。
+No path here protects against a process running with the same user's
+privileges (the same trust boundary as browser password storage). It differs
+from plain QSettings storage in that other users, or mere file/registry
+exfiltration, cannot decrypt it.
 
-ai_panel からは set_secret/get_secret/delete_secret/backend_label
-だけを使う。失敗時は None/False を返し、呼び出し側で
-QSettings平文へのフォールバックを判断する。
+ai_panel uses only set_secret/get_secret/delete_secret/backend_label. On
+failure these return None/False and the caller decides whether to fall back
+to plain QSettings.
 """
 
 import base64
 import json
 import os
 import shutil
-import subprocess  # nosec B404  # icacls/security/secret-tool実行に必要
+import subprocess  # nosec B404  # needed to run icacls/security/secret-tool
 import sys
 
 try:
@@ -65,13 +66,13 @@ def _restrict_file(path):
                 os.environ.get("SystemRoot", r"C:\Windows"),
                 "System32", "icacls.exe")
             if user:
-                subprocess.run(  # nosec B603  # 引数は固定+USERNAMEのみ
+                subprocess.run(  # nosec B603  # fixed args plus USERNAME only
                     [exe, path, "/inheritance:r",
                      "/grant:r", f"{user}:F"],
                     capture_output=True, timeout=10)
         else:
             os.chmod(path, 0o600)
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
 
 
@@ -96,7 +97,7 @@ def _save_file(data):
 # ---- Windows DPAPI ----
 
 def _dpapi_crypt(data, protect):
-    """CryptProtectData/CryptUnprotectData。失敗時None。"""
+    """CryptProtectData/CryptUnprotectData. None on failure."""
     import ctypes
     from ctypes import wintypes
 
@@ -111,7 +112,7 @@ def _dpapi_crypt(data, protect):
     crypt32 = ctypes.windll.crypt32
     fn = crypt32.CryptProtectData if protect \
         else crypt32.CryptUnprotectData
-    # CRYPTPROTECT_UI_FORBIDDEN=0x1: UIプロンプトを出さない
+    # CRYPTPROTECT_UI_FORBIDDEN=0x1: do not show a UI prompt
     if not fn(ctypes.byref(blob_in), None, None, None, None,
               0x1, ctypes.byref(blob_out)):
         return None
@@ -150,7 +151,7 @@ def _security(*args, stdin=None):
     if not exe:
         return 1, ""
     try:
-        r = subprocess.run([exe, *args],  # nosec B603  # 引数は固定フラグ
+        r = subprocess.run([exe, *args],  # nosec B603  # fixed flags only
                            input=stdin, capture_output=True,
                            timeout=15)
         return r.returncode, r.stdout.decode("utf-8", "replace")
@@ -177,7 +178,7 @@ def _secret_tool(*args, stdin=None):
     if not exe:
         return 1, ""
     try:
-        r = subprocess.run([exe, *args],  # nosec B603  # 引数は固定フラグ
+        r = subprocess.run([exe, *args],  # nosec B603  # fixed flags only
                            input=stdin, capture_output=True,
                            timeout=15)
         return r.returncode, r.stdout.decode("utf-8", "replace")
@@ -199,7 +200,7 @@ def _ss_get(name):
     return out.rstrip("\n") if rc == 0 else None
 
 
-# ---- ファイル(平文 fallback。chmod600) ----
+# ---- file (plain-text fallback, chmod 600) ----
 
 def _file_set(name, secret):
     data = _load_file()
@@ -218,10 +219,10 @@ def _file_get(name):
         return None
 
 
-# ---- 公開API ----
+# ---- public API ----
 
 def backend():
-    """使用中のバックエンドIDを返す。"""
+    """Return the id of the backend in use."""
     if sys.platform == "win32":
         return "dpapi"
     if sys.platform == "darwin" and shutil.which("security"):
@@ -232,7 +233,7 @@ def backend():
 
 
 def backend_label():
-    """UI表示用のバックエンド説明。"""
+    """Backend description for UI display."""
     src = {
         "dpapi": _LBL_DPAPI,
         "keychain": _LBL_KEYCHAIN,
@@ -245,7 +246,7 @@ def backend_label():
 
 
 def set_secret(name, secret):
-    """シークレットを保存する。成功時True。"""
+    """Store a secret. True on success."""
     if not secret:
         return delete_secret(name)
     try:
@@ -262,7 +263,7 @@ def set_secret(name, secret):
 
 
 def get_secret(name):
-    """保存済みシークレットを返す。無ければNone。"""
+    """Return the stored secret, or None when absent."""
     try:
         b = backend()
         if b == "dpapi":
@@ -277,7 +278,7 @@ def get_secret(name):
 
 
 def delete_secret(name):
-    """保存済みシークレットを消す。存在しない場合も成功(冪等)。"""
+    """Delete the stored secret. Idempotent: succeeds even when absent."""
     try:
         if get_secret(name) is None:
             return True

@@ -1,17 +1,18 @@
-"""接続情報ダイアログ(初回利用の導線)。
+"""Connection info dialog (first-run guidance).
 
-リモート制御を有効化したユーザーが「次に何をすればよいか」迷わないよう、
-MCP/RESTの接続情報と、MCPクライアントへそのまま貼れる設定JSONを
-コピー可能な形でまとめて表示する。
+So that a user who enabled remote control is not left wondering "what next",
+it shows the MCP/REST connection details together with the client config JSON
+that can be pasted straight into an MCP client, all in copyable form.
 
-- メニュー「プラグイン > QGIS Live Driver > Connection Info」から開く
-- リモート制御トグルをONにした直後にも自動表示される
-- リモート制御OFFでも開ける。その場合は有効化手順と
-  stdio shim の設定(セッション自動検出のため接続情報を含まない)だけを出す
+- Opened from the menu "Plugins > QGIS Live Driver > Connection Info"
+- Also shown automatically right after the remote control toggle is turned ON
+- Opens even while remote control is OFF. In that case it shows only the
+  enablement steps and the stdio shim config (which contains no connection
+  details, since the session is auto-detected)
 
-構成は「最上段のHarnessリポジトリ行(常時表示) + 内容別タブ」:
-初期セットアップで最初に必要なのがrepoの解決のため常時見せ、
-MCP/REST/セッション情報はタブで分けて見やすくする。
+The layout is "top Harness repository row (always visible) + tabs by content":
+the repo is the first thing needed for initial setup, so it stays visible,
+while MCP/REST/session details are separated into tabs for readability.
 """
 
 import json
@@ -26,11 +27,11 @@ def _tr(s):
 
 
 def _python_exe():
-    """stdio shim を動かせるPython実行パスを推定する。
+    """Guess a Python executable path able to run the stdio shim.
 
-    QGIS内では sys.executable が qgis-bin.exe を指すため使えない。
-    同梱Pythonは sys.exec_prefix/python.exe にある(実測済み)。
-    見つからなければ PATH 解決任せの "python" を返す。
+    Inside QGIS, sys.executable points at qgis-bin.exe and cannot be used.
+    The bundled Python lives at sys.exec_prefix/python.exe (verified).
+    If it is not found, return "python" and leave it to PATH resolution.
     """
     name = "python.exe" if os.name == "nt" else "python"
     for base in (sys.exec_prefix, sys.base_prefix):
@@ -41,10 +42,10 @@ def _python_exe():
 
 
 def _stdio_config(plugin_dir):
-    """MCPクライアント用 stdio 設定(JSON文字列)を返す。
+    """Return the stdio config for an MCP client (a JSON string).
 
-    shimはレジストリから稼働セッションを自動検出するため、
-    リモート制御OFFでも同じ設定を出せる。
+    The shim auto-detects the running session from the registry, so the same
+    config can be produced even while remote control is OFF.
     """
     shim = os.path.join(plugin_dir, "mcp_stdio.py")
     return json.dumps(
@@ -67,11 +68,11 @@ def _curl_example(port, token):
 
 
 def _repo_status(plugin_dir):
-    """harness repo の解決結果を返す(mode_switch側の解決と同一経路)。"""
+    """Return the resolved harness repo (same path as resolution in mode_switch)."""
     try:
         from .mode_switch import repo_root
         return repo_root(os.path.join(plugin_dir, "__init__.py"))
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         return None
 
 
@@ -83,7 +84,7 @@ def _off_msg():
 
 
 def build_sections(plugin):
-    """タブ別の表示データを組み立てて返す。
+    """Build and return the per-tab display data.
 
     {"repo": str|None, "status": str, "mcp": str, "rest": str,
      "fields": {"reg": str, "livedir": str|None, "token": str|None},
@@ -141,7 +142,7 @@ def build_sections(plugin):
 
 
 def show_dialog(plugin):
-    """接続情報ダイアログを非モーダルで開いて返す。"""
+    """Open the connection info dialog non-modally and return it."""
     from qgis.PyQt.QtWidgets import (
         QApplication, QDialog, QDialogButtonBox, QFormLayout,
         QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
@@ -159,7 +160,7 @@ def show_dialog(plugin):
     def _notify(msg):
         try:
             plugin._hot_notify("info", msg)
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
 
     def _make_copy(key):
@@ -177,7 +178,7 @@ def show_dialog(plugin):
         copies.append((b, key))
         return b
 
-    # ── 最上段: Harnessリポジトリ(初期セットアップの要なので常時表示) ──
+    # ── Top row: Harness repository (always shown; essential for first setup) ──
     repo_row = QHBoxLayout()
     repo_row.addWidget(QLabel(_tr("Harness repository"), dlg))
     repo_edit = QLineEdit(dlg)
@@ -194,7 +195,7 @@ def show_dialog(plugin):
     status_lbl.setWordWrap(True)
     lay.addWidget(status_lbl)
 
-    # ── 内容別タブ ──
+    # ── Tabs by content type ──
     tabs = QTabWidget(dlg)
     lay.addWidget(tabs, 1)
 
@@ -270,7 +271,7 @@ def show_dialog(plugin):
     refresh_btn.clicked.connect(_refresh)
 
     def _locate_repo():
-        """harness repoフォルダを選択させてQSettingsへ保存する。"""
+        """Let the user pick the harness repo folder and save it to QSettings."""
         from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         d = QFileDialog.getExistingDirectory(
@@ -281,7 +282,7 @@ def show_dialog(plugin):
         try:
             from .mode_switch import set_repo_path
             ok, msg = set_repo_path(d)
-        except Exception as e:  # nosec B110  # 設計上の許容
+        except Exception as e:  # nosec B110  # acceptable by design
             ok, msg = False, str(e)
         if not ok:
             QMessageBox.warning(

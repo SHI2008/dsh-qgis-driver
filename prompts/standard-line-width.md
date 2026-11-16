@@ -1,4 +1,4 @@
-# 縮尺に合った標準線幅
-アクティブなライン/ポリゴンレイヤに scale_style の標準線幅を適用する指示
+# Standard line width for the scale
+Apply scale_style standard line widths to the active line/polygon layer
 
-アクティブなレイヤに、現在の縮尺とレイヤの用途(道路/河川/境界など)に合った標準的な線幅を適用して。縮尺帯ごとに幅が切替わるルール方式(rules)でお願い。まず推定値を見せてから適用して
+Apply to the active layer a standard line width suited to the current scale and the layer's use (road/river/boundary, etc.). Use the rule-based (rules) mode that switches width per scale band. Show the suggested values first, then apply.

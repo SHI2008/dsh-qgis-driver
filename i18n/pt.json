@@ -38,7 +38,7 @@
     "Enter also sends. While sending it changes to \"Abort\" and\nstops the ongoing round trip (in-flight API responses/tool executions cannot be interrupted).": "Enter também envia. Durante o envio muda para \"Abortar\" e\ninterrompe o ciclo em curso (as respostas de API/execuções de ferramentas em curso não podem ser interrompidas).",
     "Enter instructions (Enter to send / Shift+Enter for a new line / Ctrl+V or drag & drop to attach images).\nUse /agent and /skill to edit instructions directly (/help)": "Introduza instruções (Enter para enviar / Shift+Enter para nova linha / Ctrl+V ou arrastar e largar para anexar imagens).\nUse /agent e /skill para editar instruções diretamente (/help)",
     "Entering code {0} on GitHub…": "A introduzir o código {0} no GitHub…",
-    "Explain the provider type tags 【API】/【ACP】/【ブリッジ】": "Explicar as etiquetas de tipo de provedor 【API】/【ACP】/【ブリッジ】",
+    "Explain the provider type tags 【API】/【ACP】/【Bridge】": "Explicar as etiquetas de tipo de provedor 【API】/【ACP】/【Bridge】",
     "Failed to fetch the model list: {0}": "Falha ao obter a lista de modelos: {0}",
     "Failed to get a device code for sign-in: {0}": "Falha ao obter um código de dispositivo para início de sessão: {0}",
     "Failed to save the attached image: {0}": "Falha ao guardar a imagem anexada: {0}",

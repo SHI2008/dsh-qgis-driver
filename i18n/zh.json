@@ -38,7 +38,7 @@
     "Enter also sends. While sending it changes to \"Abort\" and\nstops the ongoing round trip (in-flight API responses/tool executions cannot be interrupted).": "Enter 也可发送。发送时会变为“中止”并\n停止正在进行的往返(进行中的 API 响应/工具执行无法中断)。",
     "Enter instructions (Enter to send / Shift+Enter for a new line / Ctrl+V or drag & drop to attach images).\nUse /agent and /skill to edit instructions directly (/help)": "输入指示(Enter 发送 / Shift+Enter 换行 / Ctrl+V 或拖放以附加图片)。\n使用 /agent 和 /skill 直接编辑指示(/help)",
     "Entering code {0} on GitHub…": "正在 GitHub 上输入代码 {0}…",
-    "Explain the provider type tags 【API】/【ACP】/【ブリッジ】": "说明提供程序类型标签【API】/【ACP】/【桥接】",
+    "Explain the provider type tags 【API】/【ACP】/【Bridge】": "说明提供程序类型标签【API】/【ACP】/【Bridge】",
     "Failed to fetch the model list: {0}": "获取模型列表失败: {0}",
     "Failed to get a device code for sign-in: {0}": "获取登录设备代码失败: {0}",
     "Failed to save the attached image: {0}": "保存附加图片失败: {0}",

@@ -1,8 +1,9 @@
-"""geo_driver 自身のAI向けブリッジ。
+"""AI-facing bridge for geo_driver itself.
 
-ドライバ自身の機能は LiveDriver のコマンド面(pyeval/status/bridge_call等)
-として全経路から既に呼べるため、ここでは describe_plugins カタログ用の
-自己記述と稼働状態の報告だけを提供する。
+The driver's own features are already callable from every route through the
+LiveDriver command surface (pyeval/status/bridge_call etc.), so this module only
+provides the self-description for the describe_plugins catalog and a runtime
+status report.
 """
 
 import json
@@ -12,29 +13,31 @@ _PLUGIN_ID = "geo_driver"
 
 _COMMANDS = [
     {"name": "pyeval", "signature": "pyeval(code)",
-     "description": "QGISプロセス内で任意Pythonを実行(iface/QgsProject等にアクセス可)"},
+     "description": "Run arbitrary Python inside the QGIS process (access to iface, "
+                    "QgsProject, etc.)"},
     {"name": "eval", "signature": "eval(code)",
-     "description": "WebEngineプラグインのページ内でJS実行(view必須)"},
+     "description": "Run JavaScript inside a WebEngine plugin page (view required)"},
     {"name": "status", "signature": "status()",
-     "description": "ドライバ・ロード中プラグイン・bridge有無の一覧"},
+     "description": "List the driver, loaded plugins, and bridge availability"},
     {"name": "describe_plugins", "signature": "describe_plugins()",
-     "description": "全プラグインのAI利用可能機能カタログ(pluginInfo集約)"},
+     "description": "AI-usable capability catalog of all plugins (aggregated pluginInfo)"},
     {"name": "bridge_call", "signature": "bridge_call(plugin_id, method, args)",
-     "description": "プラグインのbridgeメソッドを直接呼ぶ"
-                    "(bridge未搭載プラグインは汎用アダプタが応答)"},
+     "description": "Call a plugin's bridge method directly (a generic adapter answers for "
+                    "plugins without a bridge)"},
     {"name": "open_plugin", "signature": "open_plugin(plugin_id)",
-     "description": "プラグインをロード+run()で開く"},
+     "description": "Load a plugin and open it via run()"},
     {"name": "reload_plugin", "signature": "reload_plugin(plugin_id)",
-     "description": "プラグインを再読み込み(junction配置ならコード即反映)"},
+     "description": "Reload a plugin (with a junction install, code changes apply "
+                    "immediately)"},
     {"name": "screenshot", "signature": "screenshot(target, path)",
-     "description": "地図キャンバス/mainwindow/dockのPNG撮影"},
+     "description": "Capture a PNG of the map canvas, main window, or dock"},
 ]
 
 
 class GeoDriverBridge:
-    """QGIS Live Driver の自己記述ブリッジ。
+    """Self-description bridge for QGIS Live Driver.
 
-    メソッドはJSON文字列を返す(他プラグインのbridgeと同じ契約)。
+    Methods return JSON strings (same contract as other plugins' bridges).
     """
 
     def __init__(self, plugin):
@@ -48,118 +51,110 @@ class GeoDriverBridge:
         return json.dumps(obj, ensure_ascii=False)
 
     def pluginInfo(self):
-        """describe_plugins カタログ用の標準自己記述。"""
+        """Standard self-description for the describe_plugins catalog."""
         return self._ok({
             "id": _PLUGIN_ID,
             "name": "QGIS Live Driver",
-            "summary": "QGISプロセス内の遠隔制御ハブ。pyeval/status/"
-                       "bridge_call/describe_plugins等をファイルJSONL・"
-                       "REST・MCPの全経路で提供する。layer_org サービスで"
-                       "追加レイヤのグループ整理・命名を標準化できる。"
-                       "scale_style サービスで縮尺に応じた標準線幅の"
-                       "提案・適用(実幅m/縮尺帯ルール)ができる",
+            "summary": "Remote-control hub inside the QGIS process. Exposes "
+                       "pyeval/status/bridge_call/describe_plugins and friends over file JSONL, "
+                       "REST, and MCP. The layer_org service standardizes grouping and naming of "
+                       "imported layers; the scale_style service suggests and applies standard "
+                       "line widths by scale (real-world metres / scale-band rules).",
             "when_to_use": [
-                "QGIS内部(iface/QgsProject/地物/レイヤ)を直接操作・検査したい",
-                "他プラグインの機能をbridge_callで呼び出したい",
-                "地図キャンバスやウィンドウのスクリーンショットが欲しい",
-                "プラグインのロード・再読み込みを行いたい",
-                "取り込んだレイヤをルールでグループ整理・リネームしたい",
-                "レイヤの線幅を現在縮尺に適した標準値にしたい",
-                "線幅を実世界の幅(m)で設定してズームに連動させたい",
-                "縮尺帯で線幅が変わるルールベースレンダラを作りたい",
+                "Inspect or manipulate QGIS internals directly (iface, QgsProject, "
+                "features, layers)",
+                "Call another plugin's features through bridge_call",
+                "Take screenshots of the map canvas or windows",
+                "Load or reload plugins",
+                "Group and rename imported layers by rule",
+                "Set layer line widths to standard values for the current scale",
+                "Set line widths in real-world metres and keep them tied to zoom",
+                "Build rule-based renderers whose line width changes by scale band",
             ],
             "invoke": {"type": "command",
-                       "note": "bridge_callではなくドライバのコマンド面"
-                               "(qgis_pyeval等のMCPツール)を使う",
+                       "note": "Use the driver's command surface (MCP tools such as qgis_pyeval) instead "
+                               "of bridge_call",
                        "commands": _COMMANDS},
             "methods": [
                 {"name": "pluginInfo", "signature": "pluginInfo()",
-                 "description": "この自己記述を返す"},
+                 "description": "Return this self-description"},
                 {"name": "status", "signature": "status()",
-                 "description": "ドライバ稼働状態(live_dir/http_port/pid)"},
+                 "description": "Driver runtime status (live_dir/http_port/pid)"},
                 {"name": "deployMode", "signature": "deployMode()",
-                 "description": "deployモード(dev/use)と各プラグインの"
-                                "配置形態(junction/dir)を返す(読取専用)"},
+                 "description": "Return the deploy mode (dev/use) and each plugin's install form "
+                                "(junction/dir); read-only"},
                 {"name": "layerOrgProfiles",
                  "signature": "layerOrgProfiles()",
-                 "description": "レイヤ整理プロファイル一覧とアクティブ"
-                                "(~/.qgis-live/layer_org/*.json + 同梱)"},
+                 "description": "Layer-organization profiles and the active one "
+                                "(~/.qgis-live/layer_org/*.json + bundled)"},
                 {"name": "layerOrgRules",
                  "signature": "layerOrgRules(profile=None)",
-                 "description": "プロファイルのルール一覧を返す"
-                                "(省略時=アクティブ)"},
+                 "description": "Return a profile's rule list (default: active)"},
                 {"name": "setLayerOrgProfile",
                  "signature": "setLayerOrgProfile(name)",
-                 "description": "アクティブプロファイルを切替(QSettings永続化)"},
+                 "description": "Switch the active profile (persisted in QSettings)"},
                 {"name": "organizeLayers",
                  "signature": "organizeLayers(profile=None, dry=False)",
-                 "description": "全レイヤをルールで再配置(dry=Trueでプレビュー)"},
+                 "description": "Reorganize all layers by rule (dry=True previews)"},
                 {"name": "placeLayer",
                  "signature": "placeLayer(layer_id=None, ctx=None)",
-                 "description": "単一レイヤをルールへ配置"
-                                "(省略時=アクティブレイヤ)"},
+                 "description": "Place a single layer by rule (default: active layer)"},
                 {"name": "scaleStyleProfiles",
                  "signature": "scaleStyleProfiles()",
-                 "description": "標準線幅プロファイル一覧とアクティブを返す"
-                                "(~/.qgis-live/scale_style/*.json + 同梱)"},
+                 "description": "Return the line-width profiles and the active one "
+                                "(~/.qgis-live/scale_style/*.json + bundled)"},
                 {"name": "scaleStyleTable",
                  "signature": "scaleStyleTable(profile=None)",
-                 "description": "プロファイルの縮尺帯・カテゴリ別線幅"
-                                "テーブルを返す(省略時=アクティブ)"},
+                 "description": "Return a profile's scale-band / category line-width table (default: "
+                                "active)"},
                 {"name": "setScaleStyleProfile",
                  "signature": "setScaleStyleProfile(name)",
-                 "description": "アクティブな線幅プロファイルを切替"
-                                "(QSettings永続化)"},
+                 "description": "Switch the active line-width profile (persisted in QSettings)"},
                 {"name": "suggestScaleWidth",
                  "signature": "suggestScaleWidth(layer_id=None, "
                               "category=None, scale=None, profile=None)",
-                 "description": "レイヤ/カテゴリと縮尺から標準的な線幅を"
-                                "提案する。scale省略時=現在のキャンバス縮尺。"
-                                "category省略時はレイヤ名から推定"
-                                "(road/boundary/river等)。"
-                                "width_mm(紙面幅)とreal_width_m(実幅)を返す"},
+                 "description": "Suggest a standard line width from the layer/category and scale. If "
+                                "scale is omitted, the current canvas scale is used; if category is "
+                                "omitted it is inferred from the layer name (road/boundary/river, etc.). "
+                                "Returns width_mm (paper width) and real_width_m (real-world width)."},
                 {"name": "applyScaleWidth",
                  "signature": "applyScaleWidth(layer_id=None, category=None,"
                               " scale=None, mode='mm', profile=None,"
                               " dry=False)",
-                 "description": "レイヤに標準線幅を適用する。"
-                                "mode='mm'=現縮尺向けの紙面幅を固定設定、"
-                                "'meters'=実世界幅(m)で設定しズーム連動、"
-                                "'rules'=縮尺帯ごとに幅が切替わるルール"
-                                "レンダラを生成(geo_legendロード時は"
-                                "applyRulesへ委譲)。dry=Trueで予定のみ"},
+                 "description": "Apply a standard line width to a layer. mode='mm' fixes a paper width "
+                                "for the current scale; 'meters' sets a real-world width (m) tied to "
+                                "zoom; 'rules' generates a rule-based renderer whose width changes per "
+                                "scale band (delegated to applyRules when geo_legend is loaded). dry=True "
+                                "returns the plan only."},
                 {"name": "openAiPanel",
                  "signature": "openAiPanel()",
-                 "description": "AIアシスタントパネル(ドック)を開く"},
+                 "description": "Open the AI assistant panel (dock)"},
                 {"name": "openConnInfo",
                  "signature": "openConnInfo()",
-                 "description": "接続情報ダイアログ(MCP/REST接続先)を開く"},
+                 "description": "Open the connection info dialog (MCP/REST endpoints)"},
                 {"name": "openDeployMode",
                  "signature": "openDeployMode()",
-                 "description": "Deploy Mode切替ダイアログを開く"
-                                "(切替はダイアログ上のUI操作)"},
+                 "description": "Open the Deploy Mode dialog (switching is done in the dialog UI)"},
                 {"name": "listDevPlugins",
                  "signature": "listDevPlugins()",
-                 "description": "ホットリロード対象(junction配置の開発中"
-                                "プラグインID)を返す"},
+                 "description": "Return hot-reload targets (ids of in-development plugins installed as "
+                                "junctions)"},
                 {"name": "hotReload",
                  "signature": "hotReload(plugin_ids=None)",
-                 "description": "開発中プラグインをsys.modules掃除+"
-                                "reloadPluginで即再読込(省略時=全対象)"},
+                 "description": "Immediately reload in-development plugins (sys.modules cleanup + "
+                                "reloadPlugin; default: all targets)"},
                 {"name": "remoteControl",
                  "signature": "remoteControl(enabled=None)",
-                 "description": "リモート制御(ファイルJSONL/HTTP面)の"
-                                "有効状態を取得/設定する"},
+                 "description": "Get/set whether remote control (file JSONL / HTTP surface) is enabled"},
                 {"name": "auditLog",
                  "signature": "auditLog(n=50, filter=None)",
-                 "description": "監査ログ(~/.qgis-live/audit-*.jsonl)の"
-                                "直近n件を新しい順に返す。filterは"
-                                "フィールド一致dictまたは部分一致文字列"},
+                 "description": "Return the latest n audit-log entries (~/.qgis-live/audit-*.jsonl), "
+                                "newest first. filter is a field-match dict or a substring"},
                 {"name": "auditSettings",
                  "signature": "auditSettings(enabled=None, max_bytes=None,"
                               " max_files=None)",
-                 "description": "監査ログの有効化・ファイルサイズ/世代数"
-                                "上限を取得/設定(QSettings永続化)"},
+                 "description": "Get/set audit-log enablement and size/generation limits (persisted in "
+                                "QSettings)"},
             ],
         })
 
@@ -169,7 +164,7 @@ class GeoDriverBridge:
                           ensure_ascii=False)
 
     def status(self):
-        """ドライバの稼働状態を返す。"""
+        """Return the driver runtime status."""
         d = self._plugin.driver
         org = getattr(self._plugin, "layer_org", None)
         return self._ok({
@@ -187,10 +182,11 @@ class GeoDriverBridge:
         })
 
     def deployMode(self):
-        """deployモード(dev/use)と各プラグイン配置形態を返す(読取専用)。
+        """Return the deploy mode (dev/use) and each plugin's install form (read-only).
 
-        切替は人が行う操作のため読取のみ公開(切替はメニューの
-        Deploy Mode ダイアログ、または npm run deploy / deploy:use / deploy:install)。
+        Switching is a human operation, so only reading is exposed (switching
+        happens in the Deploy Mode menu dialog, or via
+        npm run deploy / deploy:use / deploy:install).
         """
         try:
             from .mode_switch import deploy_state
@@ -200,13 +196,13 @@ class GeoDriverBridge:
         except Exception as e:
             return self._err(f"deployMode failed: {e}")
 
-    # ---- レイヤ整理(layer_org) ----
+    # ---- Layer organization (layer_org) ----
 
     def _org(self):
         return getattr(self._plugin, "layer_org", None)
 
     def layerOrgProfiles(self):
-        """利用可能なレイヤ整理プロファイル一覧とアクティブを返す。"""
+        """Return the available layer-organization profiles and the active one."""
         from . import layer_org as lo
         org = self._org()
         return self._ok({
@@ -216,7 +212,7 @@ class GeoDriverBridge:
         })
 
     def layerOrgRules(self, profile=None):
-        """プロファイルのルール一覧を返す(省略時=アクティブ)。"""
+        """Return a profile's rule list (default: active)."""
         org = self._org()
         if org is None:
             return self._err("layer_org not available")
@@ -228,7 +224,7 @@ class GeoDriverBridge:
         return self._ok(desc)
 
     def setLayerOrgProfile(self, name):
-        """アクティブな整理プロファイルを切り替える(QSettings永続化)。"""
+        """Switch the active organization profile (persisted in QSettings)."""
         org = self._org()
         if org is None:
             return self._err("layer_org not available")
@@ -236,9 +232,9 @@ class GeoDriverBridge:
                           ensure_ascii=False)
 
     def organizeLayers(self, profile=None, dry=False):
-        """プロジェクト内の全レイヤをプロファイルのルールで再配置する。
+        """Re-place every layer in the project according to the profile's rules.
 
-        dry=True で移動せず適用結果の予定だけを返す(プレビュー)。
+        dry=True returns only the planned results without moving anything (preview).
         """
         org = self._org()
         if org is None:
@@ -248,10 +244,10 @@ class GeoDriverBridge:
         return self._ok(rep)
 
     def placeLayer(self, layer_id=None, ctx=None):
-        """単一レイヤを整理ルールへ配置する。
+        """Place a single layer according to the organization rules.
 
-        layer_id 省略時はアクティブレイヤ。ctx は
-        {"plugin_id","dataset","resource","format","url"} 等のdict。
+        layer_id defaults to the active layer. ctx is a dict such as
+        {"plugin_id","dataset","resource","format","url"}.
         """
         org = self._org()
         if org is None:
@@ -268,13 +264,13 @@ class GeoDriverBridge:
         rep = org.place_all([(layer, dict(ctx or {}))])
         return self._ok(rep)
 
-    # ---- 標準線幅(scale_style) ----
+    # ---- Standard line width (scale_style) ----
 
     def _styler(self):
         return getattr(self._plugin, "scale_style", None)
 
     def scaleStyleProfiles(self):
-        """利用可能な標準線幅プロファイル一覧とアクティブを返す。"""
+        """Return the available standard line-width profiles and the active one."""
         from . import scale_style as ss
         styler = self._styler()
         return self._ok({
@@ -284,7 +280,7 @@ class GeoDriverBridge:
         })
 
     def scaleStyleTable(self, profile=None):
-        """プロファイルの縮尺帯・カテゴリ別線幅テーブルを返す。"""
+        """Return a profile's scale-band / category line-width table."""
         styler = self._styler()
         if styler is None:
             return self._err("scale_style not available")
@@ -296,7 +292,7 @@ class GeoDriverBridge:
         return self._ok(desc)
 
     def setScaleStyleProfile(self, name):
-        """アクティブな線幅プロファイルを切り替える(QSettings永続化)。"""
+        """Switch the active line-width profile (persisted in QSettings)."""
         styler = self._styler()
         if styler is None:
             return self._err("scale_style not available")
@@ -305,10 +301,10 @@ class GeoDriverBridge:
 
     def suggestScaleWidth(self, layer_id=None, category=None, scale=None,
                           profile=None):
-        """レイヤ/カテゴリと縮尺から標準的な線幅を提案する。
+        """Suggest a standard line width from the layer/category and scale.
 
-        scale 省略時は現在のキャンバス縮尺。category 省略時は
-        レイヤ名から推定。layer 省略時はアクティブレイヤ。
+        scale defaults to the current canvas scale; category defaults to an
+        inference from the layer name; layer defaults to the active layer.
         """
         styler = self._styler()
         if styler is None:
@@ -325,13 +321,13 @@ class GeoDriverBridge:
 
     def applyScaleWidth(self, layer_id=None, category=None, scale=None,
                         mode="mm", profile=None, dry=False):
-        """レイヤのレンダラに標準線幅を適用する。
+        """Apply a standard line width to the layer's renderer.
 
         mode:
-          "mm"     — 現縮尺向けの紙面幅(mm)を固定設定
-          "meters" — 実世界幅(m)で設定しズーム連動
-          "rules"  — 縮尺帯ごとに幅が切替わるルールレンダラを生成
-        dry=True で適用せず予定内容のみ返す。
+          "mm"     — fix a paper width (mm) for the current scale
+          "meters" — set a real-world width (m) and keep it tied to zoom
+          "rules"  — generate a rule renderer whose width switches per scale band
+        dry=True returns only the plan without applying it.
         """
         styler = self._styler()
         if styler is None:
@@ -347,10 +343,10 @@ class GeoDriverBridge:
             return self._ok(rep)
         return self._err(rep)
 
-    # ---- ドライバ自身のUI/運用 ----
+    # ---- Driver's own UI/operation ----
 
     def openAiPanel(self):
-        """AIアシスタントパネルを開く。"""
+        """Open the AI assistant panel."""
         self._plugin._open_ai_panel()
         panel = getattr(self._plugin, "_ai_panel", None)
         return self._ok({"opened": panel is not None,
@@ -358,18 +354,18 @@ class GeoDriverBridge:
                                          and panel.isVisible())})
 
     def openConnInfo(self):
-        """接続情報ダイアログを開く。"""
+        """Open the connection info dialog."""
         self._plugin._open_conn_info()
         return self._ok({"opened": True})
 
     def openDeployMode(self):
-        """Deploy Mode切替ダイアログを開く(切替はUI操作のみ)。"""
+        """Open the Deploy Mode dialog (switching is UI-only)."""
         from qgis.PyQt.QtCore import QTimer
         QTimer.singleShot(0, self._plugin._open_mode_dialog)
         return self._ok({"launched": True})
 
     def listDevPlugins(self):
-        """ホットリロード対象(開発モード配置のプラグインID)を返す。"""
+        """Return the hot-reload targets (ids of plugins installed in dev mode)."""
         try:
             from .hot_reload import dev_plugin_ids
             own = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -379,10 +375,10 @@ class GeoDriverBridge:
             return self._err(f"dev_plugin_ids failed: {e}")
 
     def hotReload(self, plugin_ids=None):
-        """開発中プラグインを再読込する(省略時=全対象、driverは最後)。
+        """Reload in-development plugins (default: all targets, driver last).
 
-        junction配置(repo優先)のみ対象。reload_pluginコマンドより
-        sys.modules掃除込みの完全再読込になる。
+        Only junction installs (repo-preferred) are targeted. This is a fuller
+        reload than the reload_plugin command because it also cleans sys.modules.
         """
         try:
             from .hot_reload import dev_plugin_ids, reload_plugins
@@ -397,11 +393,11 @@ class GeoDriverBridge:
             return self._err(f"hotReload failed: {e}")
 
     def remoteControl(self, enabled=None):
-        """リモート制御の有効状態を取得/設定する。
+        """Get/set whether remote control is enabled.
 
-        enabled=TrueでファイルJSONL/HTTP面を開始、Falseで停止。
-        有効化時の確認ダイアログは出さない(呼出側の判断で実行)。
-        注意:Falseにすると以後の遠隔コマンドは届かなくなる。
+        enabled=True starts the file JSONL/HTTP surface, False stops it.
+        No confirmation dialog is shown when enabling (the caller decides).
+        Note: setting False means remote commands will no longer arrive.
         """
         p = self._plugin
         if enabled is not None:
@@ -415,23 +411,23 @@ class GeoDriverBridge:
                 p._stop()
             try:
                 p._sync_action()
-            except Exception:  # nosec B110  # 設計上の許容
+            except Exception:  # nosec B110  # acceptable by design
                 pass
         d = p.driver
         return self._ok({"enabled": d is not None,
                          "live_dir": getattr(d, "dir", None),
                          "http_port": getattr(d, "http_port", None)})
 
-    # ---- 監査ログ ----
+    # ---- Audit log ----
 
     def auditLog(self, n=50, filter=None):
-        """監査ログの直近n件を新しい順に返す。
+        """Return the most recent n audit-log entries, newest first.
 
-        ~/.qgis-live/audit-*.jsonl(日次+サイズ上限で世代分割)を読む。
-        filter は {"type":"pyeval","plugin_id":"x","ok":false} 等の
-        フィールド一致dict、または type/method/plugin_id/origin を
-        対象にした部分一致文字列。args内のsecretsは記録時点で
-        マスク済み。
+        Reads ~/.qgis-live/audit-*.jsonl (daily + generations split by size cap).
+        filter is a field-match dict such as
+        {"type":"pyeval","plugin_id":"x","ok":false}, or a substring matched
+        against type/method/plugin_id/origin. Secrets in args are already
+        masked when recorded.
         """
         try:
             from .live_driver import _audit_recent
@@ -441,10 +437,11 @@ class GeoDriverBridge:
             return self._err(f"auditLog failed: {e}")
 
     def auditSettings(self, enabled=None, max_bytes=None, max_files=None):
-        """監査ログの設定を取得/変更する(QSettings永続化)。
+        """Get/change the audit-log settings (persisted in QSettings).
 
-        enabled=記録の有効/無効、max_bytes=1ファイルのサイズ上限
-        (超過時は時刻付き世代へローテーション)、max_files=保持世代数。
+        enabled = recording on/off, max_bytes = size cap for one file (rotates
+        to a timestamped generation when exceeded), max_files = retained
+        generation count.
         """
         try:
             from .live_driver import _audit_base_dir, _audit_conf

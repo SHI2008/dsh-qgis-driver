@@ -1,26 +1,29 @@
-"""deployモード(dev/use)の切替UI。
+"""Deploy mode (dev/use) switch UI.
 
-メニュー「プラグイン > QGIS Live Driver > Deploy Mode」から、
-開発モード(junction=repo優先)と利用モード(実体dir=退避版の復元)を
-明示切替する。実際の切替はリポジトリ側の scripts/deploy-plugin.ps1 を
-起動して行い、完了後にプラグインのリロードを任意で実行する。
+From the menu "Plugins > QGIS Live Driver > Deploy Mode", explicitly switch
+between development mode (junction = repo preferred) and use mode (real dir =
+restore the parked copy). The actual switch is performed by launching
+scripts/deploy-plugin.ps1 in the repository, and afterwards the plugin can
+optionally be reloaded.
 
-モード宣言は profiles/<profile>/qgis_live_mode.json
-({"mode":"dev"|"use","repo":"<harness repo>"})に書き出される。
-宣言は意図の記録であり、モード判定は配置実態(junction/dir)が優先
-される(未配置時のみ宣言で補う)。
-実体dir配置(利用モード)でも marker.repo からスクリプトを解決できる。
-dev化時は既存の実体プラグイン(利用版)を profiles/<profile>/
-qgis_live_parked/<id> へ退避してからjunctionを張り、use化時は
-junctionを外して退避版を復帰する(退避も既存実体も無ければ
-未配置のまま=そのプラグインは利用されていなかった)。
-repoからのcopyによる利用版の新規配置/更新は -Install(リリース操作)のみ。
-junction失敗時にcopyへ自動フォールバックしない点はスクリプト側で保証済み。
+The mode declaration is written to profiles/<profile>/qgis_live_mode.json
+({"mode":"dev"|"use","repo":"<harness repo>"}). The declaration records
+intent; mode detection prefers the deployment reality (junction/dir) and
+falls back to the declaration only when nothing is deployed. Even with a
+real-dir install (use mode), the script can be resolved from marker.repo.
+When switching to dev, any existing real plugin (use version) is parked to
+profiles/<profile>/qgis_live_parked/<id> before the junction is created;
+when switching to use, the junction is removed and the parked copy is
+restored (if there is neither a parked copy nor an existing real dir, the
+plugin stays undeployed = it was not being used).
+Creating/updating a use version by copying from the repo happens only with
+-Install (a release operation). The script guarantees that a failed junction
+never falls back to copy automatically.
 """
 
 import json
 import os
-import subprocess  # nosec B404  # deploy-plugin.ps1起動に必要
+import subprocess  # nosec B404  # needed to launch deploy-plugin.ps1
 
 CTRL_ID = "geo_driver"
 _MARK = "qgis_live_mode.json"
@@ -29,32 +32,32 @@ SETTING_REPO = "geo_driver/harness_repo"
 
 
 def _looks_like_repo(path):
-    """harness repoらしさの判定(deployスクリプトの存在を見る)。"""
+    """Check whether the path looks like a harness repo (deploy script present)."""
     return (os.path.isdir(path)
             and os.path.isfile(
                 os.path.join(path, "scripts", "deploy-plugin.ps1")))
 
 
 def _settings_repo():
-    """QSettingsで明示指定されたharness repoパスを返す(無効ならNone)。
+    """Return the harness repo path explicitly set in QSettings (None if unset).
 
-    単体install(コピー/ZIP)では marker も junction も無いため、
-    ユーザーが Deploy Mode ダイアログ等からフォルダを指定する経路を持つ。
+    A standalone install (copy/ZIP) has neither marker nor junction, so the
+    user has a way to pick the folder from the Deploy Mode dialog.
     """
     try:
         from qgis.PyQt.QtCore import QSettings
         p = str(QSettings().value(SETTING_REPO, "") or "").strip()
         if p and os.path.isdir(p):
             return os.path.abspath(p)
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
     return None
 
 
 def set_repo_path(path):
-    """harness repoパスをQSettingsへ保存する。None/空でクリア。
+    """Save the harness repo path to QSettings. None/empty clears it.
 
-    @returns (ok, msg)。repoらしくないフォルダは拒否する。
+    @returns (ok, msg). Folders that do not look like a repo are rejected.
     """
     try:
         from qgis.PyQt.QtCore import QSettings
@@ -73,8 +76,8 @@ def set_repo_path(path):
 
 
 def profile_root(own_file):
-    """deploy先 .../<profile>/python/plugins/<id>/<file> から
-    profile rootを返す。"""
+    """Return the profile root from the deployed path
+    .../<profile>/python/plugins/<id>/<file>."""
     p = os.path.abspath(own_file)
     for _ in range(4):
         p = os.path.dirname(p)
@@ -82,34 +85,34 @@ def profile_root(own_file):
 
 
 def _is_junction(path):
-    """Windowsのjunction/reparse point判定(islinkはjunctionを拾わない)。"""
+    """Detect a Windows junction/reparse point (islink does not catch junctions)."""
     try:
         st = os.stat(path, follow_symlinks=False)
         if getattr(st, "st_file_attributes", 0) & _REPARSE:
             return True
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
     return os.path.islink(path)
 
 
 def read_marker(own_file):
-    """モード宣言markerを読む。無ければ空dict。"""
+    """Read the mode declaration marker. Returns an empty dict if absent."""
     try:
         with open(os.path.join(profile_root(own_file), _MARK),
                   encoding="utf-8-sig") as f:
             m = json.load(f)
         if isinstance(m, dict):
             return m
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
     return {}
 
 
 def repo_root(own_file):
-    """harnessリポジトリのルートを返す。
+    """Return the root of the harness repository.
 
-    解決順: QSettingsの明示指定 > marker.repo >
-    junctionのrealpath(.../qgis-plugin/<id>)からの推定。
+    Resolution order: explicit QSettings value > marker.repo >
+    inference from the junction realpath (.../qgis-plugin/<id>).
     """
     p = _settings_repo()
     if p:
@@ -125,8 +128,8 @@ def repo_root(own_file):
 
 
 def managed_ids(own_file):
-    """管理対象プラグインid一覧。repo側 plugin.config.json 優先、
-    無ければjunction配置(realpathがqgis-plugin配下)のもの。"""
+    """Ids of the managed plugins. Prefers repo-side plugin.config.json,
+    else junction installs (realpath under qgis-plugin)."""
     root = repo_root(own_file)
     if root:
         try:
@@ -137,7 +140,7 @@ def managed_ids(own_file):
                 ids = [ids]
             if ids:
                 return sorted(set(ids))
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
     try:
         from .hot_reload import dev_plugin_ids
@@ -147,14 +150,15 @@ def managed_ids(own_file):
 
 
 def deploy_state(own_file):
-    """現在のdeploy状態を返す。
+    """Return the current deploy state.
 
     {mode, declared, actual, diverged, plugins:{id: junction|dir|missing},
      parked, repo, profile}
-    mode は配置実態(actual)優先。実際に動くコードを決めるのは配置物
-    なので、古い宣言で実態を上書きしない。未配置(none)の時だけ
-    宣言markerで補う(use宣言=自動deploy抑制の意図を残すため)。
-    宣言と実態が食い違う場合 diverged=True。
+    mode prefers the deployment reality (actual). What actually runs is the
+    deployed artifact, so a stale declaration must not override reality. Only
+    when nothing is deployed (none) does the declaration fill in (keeping the
+    use declaration = intent to suppress auto-deploy). diverged=True when the
+    declaration and reality disagree.
     """
     proot = profile_root(own_file)
     plugins_root = os.path.join(proot, "python", "plugins")
@@ -196,13 +200,13 @@ def deploy_state(own_file):
 
 
 def switch_mode(own_file, mode):
-    """deploy-plugin.ps1を起動してモード切替する。(ok, output)を返す。"""
+    """Launch deploy-plugin.ps1 to switch modes. Returns (ok, output)."""
     root = repo_root(own_file)
     if not root:
-        return False, "repo root not found (qgis_live_mode.json/repo不明)"
+        return False, "repo root not found (qgis_live_mode.json/repo unknown)"
     ps1 = os.path.join(root, "scripts", "deploy-plugin.ps1")
-    # QGIS(OSGeo4W系)環境はPATHが最小化され "powershell" を解決できない
-    # ことがあるため、SystemRoot配下のフルパスを優先する
+    # QGIS (OSGeo4W) environments have a minimal PATH and may fail to resolve
+    # "powershell", so prefer the full path under SystemRoot
     exe = "powershell"
     if os.name == "nt":
         cand = os.path.join(
@@ -222,7 +226,7 @@ def switch_mode(own_file, mode):
     if os.name == "nt":
         kw["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        r = subprocess.run(args, **kw)  # nosec B603  # exe/引数はホワイトリスト検証済み固定値
+        r = subprocess.run(args, **kw)  # nosec B603  # exe/args are fixed whitelisted values
     except Exception as e:
         return False, str(e)
     out = ((r.stdout or "") + (r.stderr or "")).strip()
@@ -230,7 +234,7 @@ def switch_mode(own_file, mode):
 
 
 def show_dialog(iface, own_file, notify=None):
-    """モード切替ダイアログをモーダル表示する。"""
+    """Show the mode switch dialog modally."""
     from qgis.PyQt.QtCore import QCoreApplication, Qt
     from qgis.PyQt.QtWidgets import (
         QApplication, QCheckBox, QDialog, QDialogButtonBox, QHBoxLayout,
@@ -338,14 +342,14 @@ def show_dialog(iface, own_file, notify=None):
             refresh()
             return
         if chk.isChecked():
-            # ドライバ自身は除く(このダイアログを抱えるプラグイン。
-            # メニューのホットリロードかQGIS再起動で反映)
+            # Exclude the driver itself (the plugin owning this dialog;
+            # it picks up changes via the menu hot reload or a QGIS restart)
             ids = [p for p in deploy_state(own_file)["plugins"]
                    if p != CTRL_ID]
             try:
                 from .hot_reload import reload_plugins
                 reload_plugins(ids, notify=notify)
-            except Exception:  # nosec B110  # 設計上の許容
+            except Exception:  # nosec B110  # acceptable by design
                 pass
         if notify:
             notify("info", tr("Deploy mode switched: {0}").format(mode))
@@ -353,11 +357,11 @@ def show_dialog(iface, own_file, notify=None):
         refresh()
 
     def do_browse():
-        """harness repoフォルダを選択させてQSettingsへ保存する。
+        """Let the user pick a harness repo folder and save it to QSettings.
 
-        単体install(marker/junction無し)でもここでrepoを指定すれば、
-        以降「開発モードへ切替」が deploy-plugin.ps1 を実行できる
-        (driver自身も含め junction 化され dev環境へ移行できる)。
+        Even on a standalone install (no marker/junction), specifying the repo
+        here lets "Switch to Development" run deploy-plugin.ps1 afterwards
+        (the driver is junctioned too and moves to the dev environment).
         """
         from qgis.PyQt.QtWidgets import QFileDialog
         d = QFileDialog.getExistingDirectory(

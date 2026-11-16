@@ -1,38 +1,39 @@
-"""AIアシスタントパネル用のLLM APIクライアント(stdlibのみ)。
+"""LLM API client for the AI assistant panel (stdlib only).
 
-ai_panel.py(Qt層)から呼ばれる。QGIS/Qtに依存しないためpytest対象。
+Called from ai_panel.py (the Qt layer). Independent of QGIS/Qt, so this
+module is a pytest target.
 
-対応プロバイダ:
-  - "openai": OpenAI Chat Completions 互換
-    (POST {base}/chat/completions, tools=function calling)。
-    Ollama・LM Studio・OpenRouter・xAI Grok・Mistral・Groq・
-    DeepSeek等の互換サーバもbase URLを変えるだけで使える
-    (例: http://localhost:11434/v1)。Bedrock/Vertex等も
-    LiteLLM等の互換プロキシ経由なら同じ経路で繋がる
+Supported providers:
+  - "openai": OpenAI Chat Completions compatible
+    (POST {base}/chat/completions, tools=function calling).
+    Compatible servers such as Ollama, LM Studio, OpenRouter, xAI Grok,
+    Mistral, Groq and DeepSeek work too, just by changing the base URL
+    (e.g. http://localhost:11434/v1). Bedrock/Vertex etc. connect the same
+    way through a compatible proxy such as LiteLLM
   - "anthropic": Anthropic Messages API
-    (POST {base}/v1/messages, tools=input_schema。
-    認証は x-api-key + anthropic-version ヘッダ)
+    (POST {base}/v1/messages, tools=input_schema.
+    Auth: x-api-key + anthropic-version headers)
   - "gemini": Google Gemini API
-    (POST {base}/models/{model}:generateContent, functionDeclarations。
-    認証は x-goog-api-key ヘッダ)
+    (POST {base}/models/{model}:generateContent, functionDeclarations.
+    Auth: x-goog-api-key header)
   - "azure": Azure OpenAI Service
-    (Chat CompletionsはOpenAI互換だが認証は api-key ヘッダ、
-    URLは {resource}/openai/deployments/<deployment>/chat/completions
-    ?api-version=…。model欄はデプロイ名)
+    (Chat Completions is OpenAI compatible, but auth is the api-key header
+    and the URL is {resource}/openai/deployments/<deployment>/chat/completions
+    ?api-version=.... The model field is the deployment name)
   - "copilot": GitHub Copilot
-    (OpenAI互換の {api}/chat/completions。APIキー欄のGitHubトークンを
-    api.github.com/copilot_internal/v2/token で短期トークンに交換し、
-    応答の endpoints.api をAPI先に使う。Copilot契約が必要。
-    「GitHubでサインイン」ボタンはOAuthデバイスフローでトークンを取得)
+    (OpenAI-compatible {api}/chat/completions. The GitHub token in the API key
+    field is exchanged for a short-lived token at
+    api.github.com/copilot_internal/v2/token, and endpoints.api from the
+    response is used as the API host. Requires a Copilot subscription.
+    The "Sign in with GitHub" button gets a token via the OAuth device flow)
 
-ツール定義は mcp_http.TOOLS(MCP/RESTと同一)を各プロバイダの
-スキーマに変換して使う。実行は LiveDriver.submit() に委譲するため
-このモジュール自体はQGISを触らない。
+Tool definitions are mcp_http.TOOLS (same as MCP/REST), converted to each
+provider's schema. Execution is delegated to LiveDriver.submit(), so this
+module never touches QGIS itself.
 
-プロバイダ抽象化: OpenAIProvider/AnthropicProvider/GeminiProvider/
-AzureOpenAIProvider/CopilotProvider が build_messages / send /
-parse / append_exchange を実装し、
-ai_panel のエージェントループはプロバイダ非依存で回る。
+Provider abstraction: OpenAIProvider/AnthropicProvider/GeminiProvider/
+AzureOpenAIProvider/CopilotProvider implement build_messages / send /
+parse / append_exchange; ai_panel's agent loop is provider-agnostic.
 """
 
 import base64
@@ -44,7 +45,7 @@ import os
 import re
 import secrets
 import shutil
-import subprocess  # nosec B404  # MCPサーバ起動に必要
+import subprocess  # nosec B404  # needed to launch MCP servers
 import tempfile
 import threading
 import time
@@ -67,7 +68,7 @@ except ImportError:
 
 
 def tr_label(src):
-    """UI表示用ラベルの実行時翻訳。Qtが無い環境(pytest)では英語のまま。"""
+    """Runtime translation of UI labels. Stays English where Qt is absent (pytest)."""
     if QCoreApplication is not None:
         return QCoreApplication.translate("geo_driver", src)
     return src
@@ -83,13 +84,13 @@ _F_CONTEXT = QT_TRANSLATE_NOOP("geo_driver", "Context: {0} tokens")
 _LBL_API_VALUE = QT_TRANSLATE_NOOP("geo_driver", "API value")
 _LBL_REFERENCE = QT_TRANSLATE_NOOP("geo_driver", "reference")
 
-# 1ユーザメッセージに対するツール実行の最大往復数(暴走防止)
+# Max number of tool round trips per user message (runaway protection)
 MAX_TOOL_ROUNDS = 25
 
-# ツール結果としてモデルに返すテキストの上限(超過分は切り詰め)
+# Cap on the tool result text returned to the model (excess is truncated)
 MAX_TOOL_RESULT_CHARS = 6000
-# 会話履歴をプロンプトへ渡す上限(文字数)。超過分は古いターンから
-# 落とす(往復で肥大したコンテキストがAPIエラーになるのを防ぐ)
+# Cap on conversation history passed to the prompt (characters). Excess is
+# dropped from the oldest turns (keeps bloated round-trip context from erroring)
 MAX_HISTORY_CHARS = 60000
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -102,27 +103,27 @@ GEMINI_DEFAULT_MODEL = "gemini-3.8-flash"
 ANTHROPIC_DEFAULT_BASE = "https://api.anthropic.com"
 ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-5"
 ANTHROPIC_VERSION = "2023-06-01"
-# Messages APIはmax_tokens必須。全現行モデルが許容する値を既定にする
+# The Messages API requires max_tokens. Default to a value all current models allow
 ANTHROPIC_MAX_TOKENS = 8192
 
 # ---- Azure OpenAI ----
-# api-versionクエリ省略時の既定(2024-10-21=GAのv1 API)
+# Default when the api-version query is omitted (2024-10-21 = GA v1 API)
 AZURE_API_VERSION = "2024-10-21"
 AZURE_DEFAULT_MODEL = "gpt-4o"
 
 # ---- GitHub Copilot ----
-# GitHub Copilot APIは公開仕様ではなく、VS CodeのCopilot Chatが使う
-# 内部エンドポイント。GitHubトークンを短期トークンに交換して使うのは
-# copilot-api等のコミュニティ実装と同じ経路。Copilot契約が必要。
+# The GitHub Copilot API is not a public spec but the internal endpoint that
+# VS Code's Copilot Chat uses. Swapping the GitHub token for a short-lived one
+# matches copilot-api and other community clients. A Copilot subscription is required.
 COPILOT_DEFAULT_BASE = "https://api.githubcopilot.com"
 COPILOT_DEFAULT_MODEL = "gpt-4o"
-COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"  # nosec B105  # 公開API URL
-# v2/tokenが応答しない環境でのフォールバック: 契約情報(endpoints.api/
-# access_type_sku)を返す。@github/copilot CLIが使う公式経路
+COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"  # nosec B105  # public URL
+# Fallback for environments where v2/token does not respond: returns plan
+# info (endpoints.api / access_type_sku). The official route @github/copilot uses
 COPILOT_USER_URL = "https://api.github.com/copilot_internal/user"
-# api.githubcopilot.com が要求するクライアント識別ヘッダ。
-# 任意のEditor-Versionでは拒否されうるため、VS CodeのCopilot Chatが
-# 送る値(VS Code拡張・copilot-api等と同じデファクト)を使う。
+# Client identification headers api.githubcopilot.com requires. An arbitrary
+# Editor-Version may be rejected, so we send what VS Code's Copilot Chat sends
+# (the de-facto standard, shared with VS Code extensions and copilot-api).
 COPILOT_HEADERS = {
     "Editor-Version": "vscode/1.99.3",
     "Editor-Plugin-Version": "copilot-chat/0.26.7",
@@ -130,14 +131,14 @@ COPILOT_HEADERS = {
     "Openai-Intent": "conversation-panel",
     "User-Agent": "GitHubCopilotChat/0.26.7",
 }
-# OAuthデバイスフローのclient_id。既定はVS Codeの公開OAuth Appで、
-# 同意画面には「Visual Studio Code」と表示される(Copilot認可を受ける
-# デファクトの方法。copilot-api等も同値)。独自OAuth Appを使う場合は
-# 環境変数で差し替える。
+# client_id for the OAuth device flow. The default is VS Code's public OAuth
+# App, so the consent screen shows "Visual Studio Code" (the de-facto way to
+# get Copilot authorization; copilot-api etc. use the same value). To use your
+# own OAuth App, override it with the environment variable.
 GITHUB_CLIENT_ID = os.environ.get("QGIS_LIVE_GITHUB_CLIENT_ID",
                                   "Iv1.b507a08c87ecfe98")
 GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
-GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"  # nosec B105  # 公開API URL
+GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"  # nosec B105  # public URL
 
 PROVIDERS = {
     "openai": {
@@ -240,7 +241,7 @@ PROVIDERS = {
     },
     "devin_bridge": {
         "label": "Devin",
-        "tag": "【ブリッジ】",
+        "tag": "【Bridge】",
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
@@ -255,7 +256,7 @@ PROVIDERS = {
     },
     "copilot_bridge": {
         "label": "GitHub Copilot",
-        "tag": "【ブリッジ】",
+        "tag": "【Bridge】",
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
@@ -270,7 +271,7 @@ PROVIDERS = {
     },
     "agent": {
         "label": QT_TRANSLATE_NOOP("geo_driver", "External agent"),
-        "tag": "【ブリッジ】",
+        "tag": "【Bridge】",
         "base": "",
         "model": "default",
         "key_hint": QT_TRANSLATE_NOOP(
@@ -284,13 +285,13 @@ PROVIDERS = {
     },
 }
 
-# 表示順は【API】→【ACP】→【ブリッジ】の分類順
-# (kasugai_canvas の PROVIDER_ORDER と同じ規則)
+# Display order follows the category order [API] -> [ACP] -> [Bridge]
+# (same rule as PROVIDER_ORDER in kasugai_canvas)
 PROVIDER_ORDER = ["gemini", "copilot", "azure", "anthropic", "openai",
                   "copilot_acp", "devin_acp", "acp",
                   "copilot_bridge", "devin_bridge", "agent"]
 
-# プロバイダ種別タグ → 接続方式の説明(ツールチップ・ヘルプ用)
+# Provider category tag -> connection-method description (for tooltips/help)
 PROVIDER_TAGS = {
     "【API】": QT_TRANSLATE_NOOP(
         "geo_driver",
@@ -302,7 +303,7 @@ PROVIDER_TAGS = {
         "engine and runs its own tool loop (the panel is a chat UI; "
         "no API key needed — uses the CLI/IDE sign-in; the endpoint "
         "field is the working directory)"),
-    "【ブリッジ】": QT_TRANSLATE_NOOP(
+    "【Bridge】": QT_TRANSLATE_NOOP(
         "geo_driver",
         "Delegation chat — a normal API chat with injected "
         "instructions to hand substantial work to an agent CLI via "
@@ -310,9 +311,9 @@ PROVIDER_TAGS = {
         "drives the tool loop; needs an API endpoint + key)"),
 }
 
-# ---- モデル一覧のメタ情報 ----
+# ---- Model list metadata ----
 
-# モデル種別 → 表示ラベル。この順序でコンボをグループ化する。
+# Model kind -> display label. The combo box is grouped in this order.
 MODEL_KINDS = [
     ("chat_vision",
      QT_TRANSLATE_NOOP("geo_driver", "Text (image input)")),
@@ -323,9 +324,9 @@ MODEL_KINDS = [
 ]
 MODEL_KIND_LABELS = dict(MODEL_KINDS)
 
-# プロバイダ既定エンドポイント利用時にコンボへ予め載せる推奨モデル
-# (「取得」ボタンを押さなくても価格付きで選べるようにするため)。
-# 実際に使えるかはAPIキーのプラン次第。取得で実一覧に置き換わる。
+# Suggested models preloaded into the combo when a provider's default endpoint
+# is used (so models with prices can be chosen without pressing "Fetch").
+# Actual availability depends on the API key's plan; "Fetch" replaces them.
 SUGGESTED_MODELS = {
     "openai": ["gpt-5-mini", "gpt-5", "gpt-4.1-mini", "gpt-4.1",
                "gpt-4o-mini", "gpt-4o", "o4-mini"],
@@ -339,10 +340,10 @@ SUGGESTED_MODELS = {
                 "claude-sonnet-4", "claude-3.7-sonnet", "gemini-2.5-pro"],
 }
 
-# 主要モデルの参考価格 (USD / 1Mトークン, [入力, 出力])。
-# APIが価格を返さない場合の目安表示用。公開価格ベースだが
-# 変動しうるため「参考値」として表示する。モデルIDの末尾部分
-# (プロバイダ名を除いたもの)との前方一致・最長一致で引く。
+# Reference prices for popular models (USD / 1M tokens, [input, output]).
+# For indicative display when the API returns no price. Based on public
+# prices but subject to change, so shown as a "reference value". Looked up by
+# longest prefix match against the tail of the model ID (provider name removed).
 KNOWN_MODEL_PRICES = {
     "gpt-5-pro": (15.00, 120.00),
     "gpt-5": (1.25, 10.00),
@@ -367,8 +368,8 @@ KNOWN_MODEL_PRICES = {
     "gemini-2.0-flash-lite": (0.075, 0.30),
 }
 
-# 種別推定のための名前ヒント(モデルID末尾の小文字に対して検索)。
-# 判定は推定であり、APIが modality 等を返す場合はそちらを優先する。
+# Name hints for kind inference (searched against the lower-cased model ID tail).
+# This is only a guess; when the API returns modality etc., that takes priority.
 _EMBED_RE = re.compile(r"embed")
 _IMAGE_RE = re.compile(
     r"dall-e|gpt-image|imagen|[-_/]image($|[-_.0-9])|flux|"
@@ -385,12 +386,12 @@ _VISION_RE = re.compile(
 
 
 def classify_model(model_id, entry=None):
-    """モデルID(+APIのメタ情報)から種別を推定する。
+    """Infer the kind from the model ID (plus API metadata).
 
     @returns "chat_vision"|"chat"|"image"|"embed"|"other"
-    entry は list_model_entries() の1要素。OpenRouter等が返す
-    architecture.modality ("text+image->text" 等) や
-    input_modalities/output_modalities があれば最優先で使う。
+    entry is one element of list_model_entries(). If the API (e.g. OpenRouter)
+    returns architecture.modality ("text+image->text" etc.) or
+    input_modalities/output_modalities, those are used first.
     """
     tail = (model_id or "").split("/")[-1].lower()
     if entry:
@@ -419,7 +420,7 @@ def classify_model(model_id, entry=None):
 
 
 def _usd(v):
-    """金額を $ 表記に整形 (0.6→$0.60, 0.075→$0.075, 10→$10)。"""
+    """Format an amount as $ (0.6 -> $0.60, 0.075 -> $0.075, 10 -> $10)."""
     s = f"{v:.4f}".rstrip("0").rstrip(".")
     if "." in s and len(s.rsplit(".", 1)[1]) < 2:
         s = f"{v:.2f}"
@@ -427,7 +428,7 @@ def _usd(v):
 
 
 def fmt_tokens(n):
-    """トークン数を短縮表記に (128000→"128k", 1048576→"1.0M")。"""
+    """Abbreviate a token count (128000 -> "128k", 1048576 -> "1.0M")."""
     try:
         n = int(n)
     except (TypeError, ValueError):
@@ -440,7 +441,7 @@ def fmt_tokens(n):
 
 
 def _known_price(tail):
-    """既知価格表を末尾IDで最長前方一致検索 → (in_usd, out_usd)|None"""
+    """Longest-prefix match in the known price table by tail ID -> (in_usd, out_usd)|None"""
     best = None
     for key, io in KNOWN_MODEL_PRICES.items():
         if tail == key or tail.startswith(key):
@@ -450,10 +451,10 @@ def _known_price(tail):
 
 
 def _entry_price(entry, tail):
-    """価格情報 → (短表記, 説明文, 出典, (in,out)/1MのUSD|None) 。
+    """Price info -> (short form, description, source, (in,out) USD per 1M|None).
 
-    OpenRouter等が pricing.prompt/completion (USD/token) を返せば
-    それを使い、無ければ既知価格表(参考値)にフォールバックする。
+    If OpenRouter etc. returns pricing.prompt/completion (USD/token) that is
+    used; otherwise it falls back to the known price table (reference values).
     """
     pr = entry.get("pricing")
     if isinstance(pr, dict):
@@ -487,8 +488,8 @@ def _entry_price(entry, tail):
 
 
 def model_info(entry):
-    """list_model_entries()の1要素 → {id, kind, price, price_desc,
-    price_src, price_usd, context} に正規化する。"""
+    """Normalize one element of list_model_entries() into {id, kind, price,
+    price_desc, price_src, price_usd, context}."""
     mid = entry["id"]
     tail = mid.split("/")[-1].lower()
     price, desc, src, usd = _entry_price(entry, tail)
@@ -497,17 +498,18 @@ def model_info(entry):
         "kind": classify_model(mid, entry),
         "price": price,
         "price_desc": desc,
-        "price_src": src,          # "api"=エンドポイント応答 / "known"=参考値
-        "price_usd": usd,          # (in_usd, out_usd)/1Mトークン|None
+        "price_src": src,          # "api" = endpoint response / "known" = reference value
+        "price_usd": usd,          # (in_usd, out_usd)/1M tokens|None
         "context": (entry.get("context_length")
                     or entry.get("input_token_limit")),
     }
 
 
 def usage_cost(info, total):
-    """model_info + 累計usage {"in","out"} → 推定コストUSD|None。
+    """model_info + accumulated usage {"in","out"} -> estimated cost USD|None.
 
-    price_usd は1MトークンあたりのUSD。"known"(参考値)でも計算する。
+    price_usd is USD per 1M tokens. Calculation also runs for "known"
+    (reference) prices.
     """
     pr = info.get("price_usd")
     if not pr:
@@ -517,12 +519,12 @@ def usage_cost(info, total):
 
 
 def parse_usage(data):
-    """API応答のusage → {"in","out"}|None に正規化する。
+    """Normalize usage from an API response into {"in","out"}|None.
 
-    OpenAI互換: usage.prompt_tokens/completion_tokens
+    OpenAI compatible: usage.prompt_tokens/completion_tokens
     Anthropic: usage.input_tokens/output_tokens
     Gemini: usageMetadata.promptTokenCount/candidatesTokenCount
-    (thoughtsTokenCount も出力側に含める)
+    (thoughtsTokenCount is counted on the output side too)
     """
     u = data.get("usage")
     if isinstance(u, dict):
@@ -545,13 +547,13 @@ def parse_usage(data):
 
 
 def model_label(info):
-    """コンボの表示テキスト。価格があれば 'id   $in/$out' 形式。"""
+    """Combo display text. With a price, the 'id   $in/$out' form."""
     return (f"{info['id']}   {info['price']}" if info.get("price")
             else info["id"])
 
 
 def model_tooltip(info):
-    """コンボ項目のツールチップ(複数行)。"""
+    """Tooltip for a combo item (multiple lines)."""
     lines = [info["id"],
              tr_label(_F_KIND).format(tr_label(
                  MODEL_KIND_LABELS.get(info["kind"], info["kind"])))]
@@ -620,21 +622,21 @@ Guidelines:
 
 
 class ApiError(Exception):
-    """API呼び出しの失敗(HTTP/接続/応答形式/設定不足)。"""
+    """An API call failure (HTTP/connection/response shape/missing config)."""
 
 
 def provider_defaults(provider):
-    """プロバイダID → {"base","model","label","key_hint","endpoint_hint"}"""
+    """Provider ID -> {"base","model","label","key_hint","endpoint_hint"}"""
     try:
         return PROVIDERS[provider]
     except KeyError:
         raise ApiError(f"Unknown provider: {provider}")
 
 
-# ---- 共通HTTP ----
+# ---- Shared HTTP ----
 
 def _require_http_scheme(url):
-    """http/https 以外のスキーム(file:等)を拒否する。"""
+    """Reject schemes other than http/https (file: etc.)."""
     scheme = urllib.parse.urlparse(url).scheme.lower()
     if scheme not in ("http", "https"):
         raise ApiError("Unsupported URL scheme: {0}".format(scheme or "(none)"))
@@ -644,13 +646,13 @@ def _get_json(url, headers, timeout=30.0):
     _require_http_scheme(url)
     req = urllib.request.Request(url, headers=headers or {}, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # _require_http_schemeでhttp/httpsのみ許可
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https only
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = ""
         try:
             detail = e.read().decode("utf-8", "replace")[:500]
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         raise ApiError(f"HTTP {e.code}: {detail or e.reason}") from e
     except urllib.error.URLError as e:
@@ -664,13 +666,13 @@ def _post_json(url, headers, body, timeout=180.0):
         url, data=json.dumps(body).encode("utf-8"),
         headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # _require_http_schemeでhttp/httpsのみ許可
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https only
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = ""
         try:
             detail = e.read().decode("utf-8", "replace")[:500]
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         raise ApiError(f"HTTP {e.code}: {detail or e.reason}") from e
     except urllib.error.URLError as e:
@@ -678,7 +680,7 @@ def _post_json(url, headers, body, timeout=180.0):
 
 
 def _post_form(url, fields, timeout=30.0):
-    """application/x-www-form-urlencoded でPOSTして応答JSONを返す。"""
+    """POST application/x-www-form-urlencoded and return the response JSON."""
     _require_http_scheme(url)
     body = urllib.parse.urlencode(fields).encode("utf-8")
     req = urllib.request.Request(
@@ -687,22 +689,22 @@ def _post_form(url, fields, timeout=30.0):
             "Content-Type": "application/x-www-form-urlencoded",
         })
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # _require_http_schemeでhttp/httpsのみ許可
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https only
             return json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = ""
         try:
             detail = e.read().decode("utf-8", "replace")[:500]
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         raise ApiError(f"HTTP {e.code}: {detail or e.reason}") from e
     except urllib.error.URLError as e:
         raise ApiError(f"Connection failed: {e.reason}") from e
 
 
-# ---- GitHub Copilot: トークン交換 / OAuthデバイスフロー ----
+# ---- GitHub Copilot: token exchange / OAuth device flow ----
 
-# GitHubトークン → {"token","expires_at","api"} のキャッシュ
+# GitHub token -> {"token","expires_at","api"} cache
 _COPILOT_CACHE = {}
 _COPILOT_CACHE_LOCK = threading.Lock()
 
@@ -714,17 +716,17 @@ def _gh_headers(github_token):
 
 
 def copilot_session(github_token, base):
-    """GitHubトークン → (Copilot APIのBearerトークン, API base) に解決する。
+    """Resolve a GitHub token into (Copilot API bearer token, API base).
 
-    baseが既定(COPILOT_DEFAULT_BASE)の場合のみ、GitHubトークンを
-    copilot_internal/v2/token で短期トークンに交換し、応答の
-    endpoints.api (individual/business/enterprise) をAPI先に使う。
-    トークンは期限切れ60秒前までモジュール内キャッシュする。
-    v2/token が応答しない環境(404の報告あり)では
-    copilot_internal/user でAPI先だけを解決し、GitHubトークンを
-    そのままBearerに使う(@github/copilot CLIと同じ動作)。
-    既定以外のbaseはcopilot-api互換プロキシ等とみなし、
-    交換せずgithub_tokenをそのままBearerに使う。
+    Only when base is the default (COPILOT_DEFAULT_BASE) is the GitHub token
+    exchanged for a short-lived token at copilot_internal/v2/token; endpoints.api
+    from the response (individual/business/enterprise) becomes the API host.
+    The token is cached in-module until 60s before it expires.
+    Where v2/token does not respond (404s have been reported),
+    copilot_internal/user resolves just the API host and the GitHub token is
+    used as the bearer token directly (same as the @github/copilot CLI).
+    Any base other than the default is treated as a copilot-api compatible
+    proxy etc., and github_token is used as the bearer token without exchange.
     """
     u = (base or "").strip().rstrip("/") or COPILOT_DEFAULT_BASE
     if not github_token:
@@ -752,8 +754,8 @@ def copilot_session(github_token, base):
                         or COPILOT_DEFAULT_BASE),
             }
         except ApiError as e1:
-            # フォールバック: copilot_internal/user でプラン別API先を
-            # 解決し、GitHubトークンをそのままBearerに使う
+            # Fallback: resolve the plan-specific API host via
+            # copilot_internal/user and use the GitHub token as the bearer
             try:
                 user = _get_json(COPILOT_USER_URL,
                                  _gh_headers(github_token))
@@ -774,11 +776,11 @@ def copilot_session(github_token, base):
 
 
 def github_device_code(scope="read:user"):
-    """OAuthデバイスフローを開始する。
+    """Start the OAuth device flow.
 
     @returns {"device_code","user_code","verification_uri",
-              "interval","expires_in"} — ユーザにverification_uriで
-      user_codeを入力させ、device_codeをポーリングに使う
+              "interval","expires_in"} -- have the user enter user_code at
+      verification_uri, then poll with device_code
     """
     d = _post_form(GITHUB_DEVICE_CODE_URL,
                    {"client_id": GITHUB_CLIENT_ID, "scope": scope})
@@ -788,11 +790,11 @@ def github_device_code(scope="read:user"):
 
 
 def github_poll_access_token(device_code):
-    """デバイスフローのトークンを1回ポーリングする。
+    """Poll once for the device flow token.
 
-    @returns API応答dict。{"access_token": ...} なら完了、
-      {"error": "authorization_pending"|"slow_down"|...} は未完了/失敗
-      (GitHubは未認可でもHTTP 200でerrorフィールドを返す)
+    @returns the API response dict. {"access_token": ...} means done;
+      {"error": "authorization_pending"|"slow_down"|...} means pending/failed
+      (GitHub returns HTTP 200 with an error field even when not authorized)
     """
     return _post_form(GITHUB_ACCESS_TOKEN_URL, {
         "client_id": GITHUB_CLIENT_ID,
@@ -800,10 +802,10 @@ def github_poll_access_token(device_code):
         "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
 
 
-# ---- OpenAI互換 (Chat Completions) ----
+# ---- OpenAI-compatible (Chat Completions) ----
 
 def openai_models_url(base):
-    """base URLをmodels一覧のGET先に正規化する。"""
+    """Normalize a base URL into the GET target for the models list."""
     u = (base or "").strip().rstrip("/")
     if not u:
         raise ApiError("API endpoint is not set")
@@ -813,10 +815,10 @@ def openai_models_url(base):
 
 
 def endpoint_url(base):
-    """base URLをchat/completionsのPOST先に正規化する。
+    """Normalize a base URL into the POST target for chat/completions.
 
-    "https://api.openai.com/v1" → ".../v1/chat/completions"
-    既に /chat/completions で終わるURLはそのまま使う。
+    "https://api.openai.com/v1" -> ".../v1/chat/completions"
+    A URL already ending in /chat/completions is used as-is.
     """
     u = (base or "").strip().rstrip("/")
     if not u:
@@ -827,13 +829,13 @@ def endpoint_url(base):
 
 
 def _tool_short(name):
-    """ツール名の接頭辞(qgis_|ai_)を剥がした種別名。allowed判定用。"""
+    """Tool name with the qgis_|ai_ prefix stripped. Used for allowed checks."""
     return name.split("_", 1)[1] if "_" in name else name
 
 
 def openai_tools(allowed=None):
-    """mcp_http.TOOLS + INSTRUCTION_TOOLS + 外部MCPツールを
-    OpenAI function callingスキーマに変換する。"""
+    """Convert mcp_http.TOOLS + INSTRUCTION_TOOLS + external MCP tools into
+    the OpenAI function calling schema."""
     out = []
     for t in TOOLS + INSTRUCTION_TOOLS + _EXTRA_TOOLS:
         if allowed is not None and _tool_short(t["name"]) not in allowed:
@@ -851,10 +853,10 @@ def openai_tools(allowed=None):
 
 def chat_completions(base, api_key, model, messages, tools=None,
                      timeout=180.0, extra=None, headers=None):
-    """POST {base}/chat/completions (非ストリーミング)して応答JSONを返す。
+    """POST {base}/chat/completions (non-streaming) and return the response JSON.
 
-    @param headers: Authorization以外に追加するヘッダ(Copilot用)
-    @raises ApiError: HTTP/接続エラー・応答形式不正
+    @param headers: extra headers besides Authorization (for Copilot)
+    @raises ApiError: HTTP/connection error, or a malformed response
     """
     body = {"model": model, "messages": messages}
     if tools:
@@ -872,15 +874,15 @@ def chat_completions(base, api_key, model, messages, tools=None,
 
 
 # ---- OpenAI Responses API (POST {base}/responses) ----
-# CopilotのGPT-6系等、/chat/completions を受け付けず /responses 専用の
-# モデル向け(GET /models の supported_endpoints で判別できる)。
-# ワイヤ形式は異なるが、プロバイダ内部ではchat形式のmsgsを保持し、
-# 送信時にだけResponses形式へ変換する(往復でtool_calls/tool結果が
-# 混ざったmsgsを毎回まるごと変換するので状態を持たない)。
+# For models that reject /chat/completions and only support /responses, such
+# as Copilot's GPT-6 family (detectable via supported_endpoints on GET /models).
+# The wire format differs, but providers keep chat-format msgs internally and
+# convert to the Responses format only when sending (every round converts the
+# whole msgs list with mixed tool_calls/tool results, so no state is kept).
 
 def responses_tools(tools):
-    """OpenAI function calling形式 → Responses APIのtools形式。
-    {"type":"function","function":{...}} をフラット化する。"""
+    """OpenAI function calling format -> the Responses API tools format.
+    Flattens {"type":"function","function":{...}}."""
     out = []
     for t in tools or []:
         if t.get("type") == "function" \
@@ -894,8 +896,8 @@ def responses_tools(tools):
 
 
 def _responses_content_parts(content, role):
-    """chat形式のcontent → Responsesのcontent parts
-    (user=input_text/input_image, assistant=output_text)。"""
+    """chat-format content -> Responses content parts
+    (user=input_text/input_image, assistant=output_text)."""
     text_t = "input_text" if role == "user" else "output_text"
     if isinstance(content, str):
         return [{"type": text_t, "text": content}]
@@ -916,8 +918,8 @@ def _responses_content_parts(content, role):
 
 
 def _tool_result_output(content):
-    """chat形式のtool結果content → function_call_output.output。
-    文字列はそのまま、画像を含むparts列はinput_*形式にする。"""
+    """chat-format tool result content -> function_call_output.output.
+    Strings pass through; part lists with images become the input_* form."""
     if isinstance(content, str):
         return content
     parts = []
@@ -935,7 +937,7 @@ def _tool_result_output(content):
 
 
 def openai_msgs_to_responses_input(msgs):
-    """OpenAI chat形式msgs → (instructions, Responses API input items)。"""
+    """OpenAI chat-shaped msgs -> (instructions, Responses API input items)."""
     instr = []
     items = []
     for m in msgs or []:
@@ -977,10 +979,10 @@ def openai_msgs_to_responses_input(msgs):
 
 def responses_create(base, api_key, model, msgs, tools=None,
                      timeout=180.0, extra=None, headers=None):
-    """POST {base}/responses (非ストリーミング)して応答JSONを返す。
+    """POST {base}/responses (non-streaming) and return the response JSON.
 
-    @param msgs: OpenAI chat形式メッセージ列(system含む)。
-      systemメッセージはinstructionsフィールドへ移す
+    @param msgs: OpenAI chat-format message list (including system).
+      system messages move to the instructions field
     """
     instr, inp = openai_msgs_to_responses_input(msgs)
     body = {"model": model, "input": inp, "store": False}
@@ -1003,8 +1005,8 @@ def responses_create(base, api_key, model, msgs, tools=None,
 
 
 def parse_responses_output(data):
-    """Responses API応答 → parse()と同じ {"text","calls","raw","usage"}。
-    rawはchat形式のassistantメッセージ(append_exchange互換)。"""
+    """Responses API response -> {"text","calls","raw","usage"} like parse().
+    raw is a chat-format assistant message (append_exchange compatible)."""
     text = []
     calls = []
     tool_calls = []
@@ -1037,18 +1039,18 @@ def parse_responses_output(data):
             "usage": parse_usage(data)}
 
 
-# model id → True で /responses 専用と記録する。
-# Copilotの GET /models の supported_endpoints と、送信時の
-# model_not_supported エラーからのフォールバックで学習する
+# Records model id -> True when the model is /responses only.
+# Learned from supported_endpoints on Copilot's GET /models and from the
+# model_not_supported error when sending (fallback)
 _RESPONSES_ONLY_MODELS = {}
 
 
 def _responses_only_error(e):
-    """そのモデルが /chat/completions を受け付けない場合の
-    エラーかを判定する。誤判定の場合 /responses 側が同様に
-    失敗してそのエラーが返るだけなので広めに拾う。"""
+    """Decide whether the error means the model does not accept
+    /chat/completions. A false positive just makes /responses fail the
+    same way and return its own error, so match broadly."""
     s = str(e).lower()
-    # "The requested model is not supported." 等の文言揺れも拾う
+    # Also catch wording variants such as "The requested model is not supported."
     return ("not accessible via the /chat/completions" in s
             or "model_not_supported" in s
             or "not supported" in s)
@@ -1057,25 +1059,25 @@ def _responses_only_error(e):
 # ---- Gemini (generateContent) ----
 
 def gemini_models_url(base):
-    """base URLをmodels一覧のGET先に正規化する。"""
+    """Normalize a base URL into the GET target for the models list."""
     u = (base or "").strip().rstrip("/")
     if not u:
         raise ApiError("API endpoint is not set")
     if ":generateContent" in u:
-        u = u.split("/models/")[0]  # /models/<m>:generateContent を切る
+        u = u.split("/models/")[0]  # strip /models/<m>:generateContent
     return u + "/models"
 
 
 def _gemini_schema(s):
-    """JSON Schema(lowercase type)をGemini functionDeclarationsの
-    Schema(UPPERCASE type, OpenAPIサブセット)に変換する。"""
+    """Convert a JSON Schema (lowercase type) into the Schema form used by
+    Gemini functionDeclarations (UPPERCASE type, an OpenAPI subset)."""
     if isinstance(s, dict):
         out = {}
         for k, v in s.items():
             out[k] = (v.upper() if (k == "type" and isinstance(v, str))
                       else _gemini_schema(v))
         if out.get("type") == "ARRAY" and "items" not in out:
-            out["items"] = {}  # items必須。{}=任意型
+            out["items"] = {}  # items is required; {} = any type
         return out
     if isinstance(s, list):
         return [_gemini_schema(x) for x in s]
@@ -1083,8 +1085,8 @@ def _gemini_schema(s):
 
 
 def gemini_tools(allowed=None):
-    """mcp_http.TOOLS + INSTRUCTION_TOOLS + 外部MCPツールを
-    Gemini functionDeclarationsに変換する。"""
+    """Convert mcp_http.TOOLS + INSTRUCTION_TOOLS + external MCP tools into
+    Gemini functionDeclarations."""
     decls = []
     for t in TOOLS + INSTRUCTION_TOOLS + _EXTRA_TOOLS:
         if allowed is not None and _tool_short(t["name"]) not in allowed:
@@ -1098,7 +1100,7 @@ def gemini_tools(allowed=None):
 
 
 def gemini_url(base, model):
-    """generateContentのPOST先URL。"""
+    """POST target URL for generateContent."""
     u = (base or "").strip().rstrip("/")
     if not u:
         raise ApiError("API endpoint is not set")
@@ -1109,7 +1111,7 @@ def gemini_url(base, model):
 
 def gemini_generate(base, api_key, model, system, contents,
                     tools=None, timeout=180.0, extra=None):
-    """POST {base}/models/{model}:generateContent して応答JSONを返す。"""
+    """POST {base}/models/{model}:generateContent and return the response JSON."""
     body = {"contents": contents}
     if system:
         body["systemInstruction"] = {"parts": [{"text": system}]}
@@ -1130,7 +1132,7 @@ def gemini_generate(base, api_key, model, system, contents,
 # ---- Anthropic (Messages API) ----
 
 def _anthropic_v1(base):
-    """base URLを /v1 までの形に正規化する。"""
+    """Normalize a base URL into the form ending at /v1."""
     u = (base or "").strip().rstrip("/")
     if not u:
         raise ApiError("API endpoint is not set")
@@ -1144,17 +1146,17 @@ def _anthropic_v1(base):
 
 
 def anthropic_messages_url(base):
-    """messagesのPOST先URL。"""
+    """POST target URL for messages."""
     return _anthropic_v1(base) + "/messages"
 
 
 def anthropic_models_url(base):
-    """models一覧のGET先URL。"""
+    """GET target URL for the models list."""
     return _anthropic_v1(base) + "/models"
 
 
 def anthropic_headers(api_key):
-    """Messages APIの認証ヘッダ。"""
+    """Auth headers for the Messages API."""
     h = {"anthropic-version": ANTHROPIC_VERSION}
     if api_key:
         h["x-api-key"] = api_key
@@ -1162,8 +1164,8 @@ def anthropic_headers(api_key):
 
 
 def anthropic_tools(allowed=None):
-    """mcp_http.TOOLS + INSTRUCTION_TOOLS + 外部MCPツールを
-    Anthropic tools(input_schema)に変換する。"""
+    """Convert mcp_http.TOOLS + INSTRUCTION_TOOLS + external MCP tools into
+    Anthropic tools (input_schema)."""
     out = []
     for t in TOOLS + INSTRUCTION_TOOLS + _EXTRA_TOOLS:
         if allowed is not None and _tool_short(t["name"]) not in allowed:
@@ -1177,7 +1179,7 @@ def anthropic_tools(allowed=None):
 
 
 def anthropic_image_part(path):
-    """PNGファイル→Anthropicのimageブロック(読めなければNone)。"""
+    """PNG file -> Anthropic image block (None if unreadable)."""
     b64 = image_b64(path)
     if b64 is None:
         return None
@@ -1188,21 +1190,21 @@ def anthropic_image_part(path):
 
 
 def anthropic_content(text, image_paths):
-    """テキスト+画像パス列をAnthropicのcontentにする。
+    """Turn text + image paths into Anthropic content.
 
-    画像が無い場合は文字列のまま返す(ショートハンド形式)。
+    With no images it returns the plain string (shorthand form).
     """
     imgs = [p for p in
             (anthropic_image_part(x) for x in image_paths or [])
             if p is not None]
     if not imgs:
-        return text or "(empty)"   # 空文字列contentはAPIが拒否する
+        return text or "(empty)"   # the API rejects empty string content
     return ([{"type": "text", "text": text}] if text else []) + imgs
 
 
 def anthropic_messages(base, api_key, model, system, messages,
                        tools=None, timeout=180.0, extra=None):
-    """POST {base}/v1/messages (非ストリーミング)して応答JSONを返す。"""
+    """POST {base}/v1/messages (non-streaming) and return the response JSON."""
     body = {"model": model, "max_tokens": ANTHROPIC_MAX_TOKENS,
             "messages": messages}
     if system:
@@ -1223,10 +1225,11 @@ def anthropic_messages(base, api_key, model, system, messages,
 # ---- Azure OpenAI ----
 
 def azure_chat_url(base):
-    """Azureのbase(deploymentsパス)をchat/completionsのPOST先URLにする。
+    """Turn an Azure base (deployments path) into a chat/completions POST URL.
 
-    api-versionクエリは省略時 AZURE_API_VERSION を既定として付ける。
-    既に /chat/completions や api-version を含むURLはそれを尊重する。
+    When the api-version query is missing, AZURE_API_VERSION is appended as
+    the default. URLs that already contain /chat/completions or api-version
+    are left as they are.
     """
     u = (base or "").strip().rstrip("/")
     if not u:
@@ -1243,10 +1246,10 @@ def azure_chat_url(base):
 
 
 def azure_resource_url(base, tail):
-    """{scheme}://{host}/openai/<tail>?api-version=… を作る。
+    """Build {scheme}://{host}/openai/<tail>?api-version=....
 
-    base中の /openai までのパスと api-version を引き継ぐ
-    (deployments/models等のリソースレベルAPI用)。
+    Inherits the path up to /openai in base, plus the api-version
+    (for resource-level APIs such as deployments/models).
     """
     u = (base or "").strip()
     if not u:
@@ -1261,13 +1264,13 @@ def azure_resource_url(base, tail):
          f"api-version={urllib.parse.quote(ver)}", ""))
 
 
-# ---- ツール共通 ----
+# ---- Shared tool helpers ----
 
 def tool_to_command(name, args):
-    """ツール呼び出し(qgis_<type>)をドライバのコマンドdictに変換する。
+    """Convert a tool call (qgis_<type>) into a driver command dict.
 
-    mcp_http._tool_call と同じ規則: qgis_接頭辞を剥がしてtypeにし、
-    引数をそのままマージする。None値の引数は送らない。
+    Same rule as mcp_http._tool_call: strip the qgis_ prefix to get the
+    type, then merge the arguments as-is. Arguments that are None are not sent.
     """
     if not (name or "").startswith("qgis_"):
         raise ApiError(f"Unknown tool: {name}")
@@ -1277,8 +1280,8 @@ def tool_to_command(name, args):
 
 
 def trim_history(history, max_chars=MAX_HISTORY_CHARS):
-    """会話履歴を max_chars 以内にする。古いターンから落とし、
-    最新ターンは必ず残る(プロンプト送信時のコンテキスト上限対策)。"""
+    """Trim conversation history to max_chars. Older turns are dropped first
+    and the newest turn always survives (guards the context cap when prompting)."""
     total = 0
     keep = []
     for m in reversed(history or []):
@@ -1291,7 +1294,7 @@ def trim_history(history, max_chars=MAX_HISTORY_CHARS):
 
 
 def parse_tool_arguments(raw):
-    """tool_callのarguments(JSON文字列)をdictにする。"""
+    """Turn the tool_call arguments (a JSON string) into a dict."""
     if isinstance(raw, dict):
         return raw
     try:
@@ -1302,7 +1305,7 @@ def parse_tool_arguments(raw):
 
 
 def command_from_tool_call(tc):
-    """OpenAI tool_callオブジェクト → (name, ドライバcmd)。"""
+    """OpenAI tool_call object -> (name, driver cmd)."""
     fn = (tc or {}).get("function") or {}
     name = fn.get("name") or ""
     args = parse_tool_arguments(fn.get("arguments"))
@@ -1310,7 +1313,7 @@ def command_from_tool_call(tc):
 
 
 def reply_to_text(rep):
-    """ドライバのreply dictをツール結果テキストにする。"""
+    """Turn a driver reply dict into tool result text."""
     if "error" in rep:
         return f"ERROR: {rep['error']}"
     text = rep.get("result")
@@ -1328,13 +1331,13 @@ def screenshot_temp_path():
 
 
 def attachment_temp_path():
-    """チャット入力に添付された画像の保存先(PNGに正規化して書く)。"""
+    """Save destination for an image attached to chat input (normalized to PNG)."""
     return os.path.join(tempfile.gettempdir(),
                         f"qgis-ai-attach-{uuid.uuid4().hex[:8]}.png")
 
 
 def image_b64(path):
-    """PNGファイルをbase64文字列にする(読めなければNone)。"""
+    """Base64-encode a PNG file (None if unreadable)."""
     try:
         with open(path, "rb") as f:
             return base64.b64encode(f.read()).decode("ascii")
@@ -1343,7 +1346,7 @@ def image_b64(path):
 
 
 def image_url_part(path):
-    """PNGファイル→OpenAIのimage_urlパート(読めなければNone)。"""
+    """PNG file -> OpenAI image_url part (None if unreadable)."""
     b64 = image_b64(path)
     if b64 is None:
         return None
@@ -1352,7 +1355,7 @@ def image_url_part(path):
 
 
 def image_inline_part(path):
-    """PNGファイル→GeminiのinlineDataパート(読めなければNone)。"""
+    """PNG file -> Gemini inlineData part (None if unreadable)."""
     b64 = image_b64(path)
     if b64 is None:
         return None
@@ -1360,10 +1363,10 @@ def image_inline_part(path):
 
 
 def user_content(text, image_paths):
-    """ユーザ入力(テキスト+画像パス列)をOpenAIのcontentにする。
+    """Turn user input (text + image paths) into OpenAI content.
 
-    画像が無い・全て読めない場合はテキスト文字列のまま返す
-    (vision非対応モデルとの互換のため単一テキストは配列化しない)。
+    With no images, or none readable, it returns the plain text string (a
+    single text is not wrapped in an array, for compatibility with non-vision models).
     """
     imgs = [p for p in
             (image_url_part(x) for x in image_paths or [])
@@ -1374,7 +1377,7 @@ def user_content(text, image_paths):
 
 
 def image_message_content(path, note=None):
-    """PNGファイルをOpenAI vision用のcontent配列にする(読めなければNone)。"""
+    """Turn a PNG file into an OpenAI vision content array (None if unreadable)."""
     part = image_url_part(path)
     if part is None:
         return None
@@ -1384,16 +1387,16 @@ def image_message_content(path, note=None):
 
 def system_prompt(plugins=None, agent_text=None, skills=None,
                   agents=None, active_agent=None):
-    """システムプロンプトを組み立てる。
+    """Assemble the system prompt.
 
-    @param agent_text: エージェント指示書(agents/*.mdの本文)。
-      選択されていれば常時注入される
-    @param skills: list_skills() の一覧。パス+説明のみ載せ、
-      本文はモデルが必要時に qgis_pyeval の open() で読む
-      (progressive disclosureでトークン節約)
-    @param agents: list_agents() の一覧。id+説明のみ載せ、
-      active_agent に [active] を付ける。モデルは
-      ai_select_agent で切替・ai_read_instruction で読取できる
+    @param agent_text: agent instruction text (body of agents/*.md).
+      Injected at all times when one is selected
+    @param skills: the list_skills() listing. Only path + description go in;
+      the model reads bodies on demand with open() in qgis_pyeval
+      (progressive disclosure saves tokens)
+    @param agents: the list_agents() listing. Only id + description go in,
+      with [active] on active_agent. The model can switch with
+      ai_select_agent and read with ai_read_instruction
     """
     plist = ", ".join(sorted(plugins)) if plugins else "(none)"
     p = SYSTEM_PROMPT.format(plugins=plist)
@@ -1425,14 +1428,14 @@ def system_prompt(plugins=None, agent_text=None, skills=None,
     return p
 
 
-# ---- エージェント/スキル(指示書ファイル) ----
-# 整理方針:
-#   agents/  = 常時注入される指示書(役割・方針)。UIで1件選択して使う
-#   skills/  = オンデマンドの手順書。一覧だけをプロンプトに載せ、
-#              モデルが該当タスク時に qgis_pyeval で本文を読む
-# 置き場所(ユーザ定義)は ~/.qgis-live/<kind>/ (QGIS_LIVE_REGISTRY準拠)。
-# <plugin>/<kind>/ はプラグイン同梱の読み取り専用デフォルトで、
-# ユーザ側の同名ファイルが優先される(上書き)。
+# ---- Agents/skills (instruction files) ----
+# Layout policy:
+#   agents/  = instructions injected at all times (role, policy). Pick one in the UI
+#   skills/  = on-demand procedure docs. Only the listing goes in the prompt;
+#              the model reads the body with qgis_pyeval when the task matches
+# User-defined locations are ~/.qgis-live/<kind>/ (per QGIS_LIVE_REGISTRY).
+# <plugin>/<kind>/ holds plugin-bundled read-only defaults, and a user file
+# with the same name takes precedence (overrides it).
 
 def _registry_dir():
     return os.environ.get(
@@ -1453,15 +1456,15 @@ def prompts_dir():
 
 
 def _bundled_dir(kind):
-    """プラグイン同梱のデフォルト <kind> ディレクトリ。"""
+    """Plugin-bundled default <kind> directory."""
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), kind)
 
 
 def _bundled_dirs(kind):
-    """同梱 <kind> ディレクトリ群(geo_driver + 全ロードプラグイン)。
+    """All bundled <kind> directories (geo_driver + every loaded plugin).
 
-    各プラグインが自身の <plugin>/<kind>/*.md を同梱できるようにし、
-    geo_driver のものを先頭に同名は先勝ちで列挙する。
+    Lets each plugin bundle its own <plugin>/<kind>/*.md, with geo_driver's
+    first; on a name clash the earlier directory wins.
     """
     dirs = [_bundled_dir(kind)]
     try:
@@ -1474,27 +1477,28 @@ def _bundled_dirs(kind):
                 continue
             if d not in dirs and os.path.isdir(d):
                 dirs.append(d)
-    except Exception:  # nosec B110  # QGIS外利用の許容
+    except Exception:  # nosec B110  # acceptable outside QGIS
         pass
     return dirs
 
 
-# ヘッダーの「使いどき」ラベル(説明文の直後・最初の空行までの間に書く)
+# "use_when" header label (right after the description, up to the first blank line)
 _WHEN_RE = re.compile(
     r"^(?:use_when|when_to_use|when|用途|使いどき)\s*[:：]\s*(.+)$",
     re.IGNORECASE)
 
 
 def _md_head(path):
-    """.md の先頭から (title, desc, when) を取る。
+    """Read (title, desc, when) from the head of a .md file.
 
-    所定書式(ヘッダー):
-        # タイトル
-        説明文(1行)
-        use_when: 使いどき(1行、省略可)
-    'use_when' には when/when_to_use/用途/使いどき の別名も使える。
-    when 行は説明文の直後・最初の空行までの間のみ認識する。
-    frontmatter的な '---' やコメント行は読み飛ばす。
+    Expected header format:
+        # Title
+        Description (one line)
+        use_when: when it applies (one line, optional)
+    'use_when' also accepts when/when_to_use and the two Japanese labels
+    (see _WHEN_RE). A when line is recognized only right after the description,
+    up to the first blank line. A frontmatter-like '---' and comment lines
+    are skipped.
     """
     title = desc = when = None
     try:
@@ -1509,7 +1513,7 @@ def _md_head(path):
                     if title is None:
                         title = t.lstrip("#").strip()
                     elif desc:
-                        break      # 次見出し=ヘッダー終了
+                        break      # next heading = end of header
                     continue
                 if desc is None:
                     if t.startswith("---") or t.startswith("<!--"):
@@ -1519,17 +1523,17 @@ def _md_head(path):
                 m = _WHEN_RE.match(t)
                 if m:
                     when = m.group(1).strip()
-                break              # ラベル行以外=ヘッダー終了
-    except Exception:  # nosec B110  # 設計上の許容
+                break              # non-label line = end of header
+    except Exception:  # nosec B110  # acceptable by design
         pass
     return title, desc, when
 
 
 def list_instruction_files(kind):
-    """"agents"|"skills" の .md を走査する。
+    """Walk the .md files for "agents"|"skills".
 
-    @returns [{id, title, desc, path, builtin}] (id=ファイル名stemで
-      ソート)。bundled→user の順で走査し、同名はユーザ側が上書き。
+    @returns [{id, title, desc, path, builtin}] (id = file stem, sorted).
+      Bundled -> user order; a user file of the same name overrides it.
     """
     udir = os.path.join(_registry_dir(), kind)
     out = {}
@@ -1551,23 +1555,23 @@ def list_instruction_files(kind):
 
 
 def list_agents():
-    """利用可能なエージェント指示書一覧。"""
+    """List the available agent instruction files."""
     return list_instruction_files("agents")
 
 
 def list_skills():
-    """利用可能なスキル手順書一覧。"""
+    """List the available skill instruction files."""
     return list_instruction_files("skills")
 
 
 def list_prompts():
-    """おすすめプロンプト一覧(チャット入力欄へ挿入する定型文)。"""
+    """List the suggested prompts (canned text to insert into the chat input)."""
     return list_instruction_files("prompts")
 
 
 def _md_body(path):
-    """_md_head と同規則でヘッダー(#タイトル/説明/use_when)を
-    読み飛ばした残りの本文を返す。"""
+    """Same rules as _md_head: skip the header (#title/description/
+    use_when) and return the remaining body text."""
     try:
         with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -1589,7 +1593,7 @@ def _md_body(path):
                 i += 1
                 continue
             if desc:
-                break       # 次見出し=ヘッダー終了(その行は本文)
+                break       # next heading = header end (that line is body)
             i += 1
             continue
         if desc is None:
@@ -1600,16 +1604,16 @@ def _md_body(path):
             i += 1
             continue
         if _WHEN_RE.match(t):
-            i += 1        # use_when 行はヘッダーとして消費
-        break               # ラベル行以外=ヘッダー終了(その行は本文)
+            i += 1        # consume the use_when line as part of the header
+        break               # non-label line = header end (that line is body)
     return "".join(lines[i:]).strip()
 
 
 def prompt_body(item_id):
-    """prompts の id → 入力欄へ挿入する本文。未指定/未存在はNone。
+    """prompt id -> text to insert into the input field. None if unspecified.
 
-    ヘッダー(#タイトル/説明/use_when)を除いた残りを返す。
-    本文が無いファイルは説明→タイトルの順にフォールバックする。
+    Strips the header (#title/description/use_when) and returns the rest;
+    a file without a body falls back to description then title.
     """
     for a in list_instruction_files("prompts"):
         if a["id"] == item_id:
@@ -1627,12 +1631,12 @@ def _kind_list(kind):
 
 
 def load_agent(agent_id):
-    """エージェントid → 指示テキスト。未指定/未存在はNone。"""
+    """Agent id -> instruction text. None if unspecified or missing."""
     return load_instruction("agents", agent_id)
 
 
 def load_instruction(kind, item_id):
-    """kind("agents"|"skills")のid → 本文。未指定/未存在はNone。"""
+    """id of kind ("agents"|"skills") -> body text. None if unspecified."""
     if not item_id:
         return None
     for a in _kind_list(kind):
@@ -1646,19 +1650,19 @@ def load_instruction(kind, item_id):
 
 
 def save_agent(name, text):
-    """ユーザの agents/ に <name>.md として保存しパスを返す。"""
+    """Save as <name>.md under the user's agents/ and return the path."""
     return save_instruction("agents", name, text)
 
 
 def save_skill(name, text):
-    """ユーザの skills/ に <name>.md として保存しパスを返す。"""
+    """Save as <name>.md under the user's skills/ and return the path."""
     return save_instruction("skills", name, text)
 
 
 def save_instruction(kind, name, text):
-    """ユーザの <kind>/ に <name>.md として保存しパスを返す。
+    """Save as <name>.md under the user's <kind>/ and return the path.
 
-    ファイル名に使えない文字・空白は '_' に置換する。
+    Characters not allowed in file names and whitespace become '_'.
     """
     safe = re.sub(r'[\\/:*?"<>|\s]+', "_", (name or "").strip())
     if not safe:
@@ -1672,17 +1676,17 @@ def save_instruction(kind, name, text):
 
 
 def delete_agent(agent_id):
-    """ユーザ側のエージェントファイルを消す(bundledは消せない)。"""
+    """Delete the user's agent file (bundled files cannot be deleted)."""
     return delete_instruction("agents", agent_id)
 
 
 def delete_skill(skill_id):
-    """ユーザ側のスキルファイルを消す(bundledは消せない)。"""
+    """Delete the user's skill file (bundled files cannot be deleted)."""
     return delete_instruction("skills", skill_id)
 
 
 def delete_instruction(kind, item_id):
-    """ユーザ側の <kind>/<id>.md を消す(bundledは消せない)。"""
+    """Delete the user's <kind>/<id>.md (bundled files cannot be deleted)."""
     for a in _kind_list(kind):
         if a["id"] == item_id and not a["builtin"]:
             try:
@@ -1693,23 +1697,22 @@ def delete_instruction(kind, item_id):
     return False
 
 
-# ---- AIローカルツール(指示書の自己編集) ----
-# qgis_* ツールはドライバのコマンドだが、ai_* ツールはパネル側で
-# ローカル実行し、このファイル層に委譲する。
-# mcp_http.TOOLS と同じ {name, description, inputSchema} 形にして
-# openai_tools()/gemini_tools() にそのまま混ぜられるようにする。
+# ---- AI local tools (self-editing of the instruction files) ----
+# The qgis_* tools are driver commands, but the ai_* tools run locally
+# in the panel and delegate to this file layer.
+# They use the same {name, description, inputSchema} shape as
+# mcp_http.TOOLS so they can be mixed into openai_tools()/gemini_tools().
 
 _KIND_PROP = {"type": "string",
               "enum": ["agents", "skills", "prompts"],
               "description":
-                  "agents=役割・方針・出力様式など常時注入の指示書"
-                  "(同時に1件のみ有効。人格や「常に〜して」系の依頼向け) / "
-                  "skills=特定タスクの手順・レシピ"
-                  "(複数共存し必要時だけ読まれる。「この手順を覚えて」"
-                  "系の依頼向け) / "
-                  "prompts=チャット入力欄へ挿入する定型文"
-                  "(パネルのおすすめ一覧に出る。「この指示をおすすめに"
-                  "登録して」系の依頼向け。本文=挿入される指示文)"}
+                  "agents = persistent instructions (role, policy, output style) injected "
+                  "into the system prompt (only one is active at a time; for persona / "
+                  "\"always do ...\" requests) / skills = task procedures and recipes (many "
+                  "coexist, read on demand; for \"remember this procedure\" requests) / "
+                  "prompts = canned prompt text inserted into the chat input (shown in the "
+                  "panel's suggestion list; for \"add this instruction to the suggestions\" "
+                  "requests; body = the text inserted)"}
 
 INSTRUCTION_TOOLS = [
     {
@@ -1728,7 +1731,7 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {"kind": _KIND_PROP,
                                        "id": {"type": "string",
-                                              "description": "ファイル名(stem)"}},
+                                              "description": "File name (stem)"}},
                         "required": ["kind", "id"]},
     },
     {
@@ -1751,9 +1754,9 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {"kind": _KIND_PROP,
                                        "name": {"type": "string",
-                                                "description": "ファイル名(stem)"},
+                                                "description": "File name (stem)"},
                                        "text": {"type": "string",
-                                                "description": "ファイル本文(Markdown)"}},
+                                                "description": "File body (Markdown)"}},
                         "required": ["kind", "name", "text"]},
     },
     {
@@ -1764,7 +1767,7 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {"kind": _KIND_PROP,
                                        "id": {"type": "string",
-                                              "description": "ファイル名(stem)"}},
+                                              "description": "File name (stem)"}},
                         "required": ["kind", "id"]},
     },
     {
@@ -1776,7 +1779,7 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {
                             "id": {"type": "string",
-                                   "description": "エージェントid(空=解除)"}},
+                                   "description": "Agent id (empty = clear)"}},
                         "required": ["id"]},
     },
 ]
@@ -1785,12 +1788,12 @@ INSTRUCTION_TOOL_NAMES = {t["name"] for t in INSTRUCTION_TOOLS}
 
 
 def run_instruction_tool(name, args):
-    """ai_* ツールを実行して結果テキストを返す(パネルローカル実行)。
+    """Run an ai_* tool and return the result text (panel-local execution).
 
-    @raises ApiError: 未知ツール・引数不正・対象なし
+    @raises ApiError: unknown tool, invalid arguments, or no target
     """
     if name == "ai_select_agent":
-        # 選択状態はパネル側のUI状態のためここでは扱わない
+        # selection state is panel UI state, so it is not handled here
         raise ApiError("ai_select_agent is only valid on the AI panel")
     a = args or {}
     kind = a.get("kind") or ""
@@ -1825,38 +1828,38 @@ def run_instruction_tool(name, args):
     raise ApiError(f"Unknown tool: {name}")
 
 
-# ---- 外部MCPクライアント(外向き接続) ----
-# AIパネルが外部MCPサーバのツールを使うための接続層。
-# 設定は ~/.qgis-live/mcp_servers.json (Claude Desktop互換):
+# ---- External MCP client (outbound connections) ----
+# Connection layer that lets the AI panel use tools of external MCP servers.
+# Config lives in ~/.qgis-live/mcp_servers.json (Claude Desktop compatible):
 #   {"mcpServers": {"fs":  {"command": "npx", "args": [...]},
 #                   "api": {"url": "http://localhost:3000/mcp"}}}
-# command=stdio起動 / url=Streamable HTTP。発見ツールは
-# mcp_<server>__<tool> にマングリングしてfunction callingへ混ぜ、
-# _EXTRA_TOOL_CALLERS 経由でパネルがローカル実行する。
-# 秘密値(client_secret・headers・env)は "$store:<key>" と書くと
-# OSの資格情報ストア(credential_store)から解決される。
-# 平文の oauth.client_secret は mcp_save_config 保存時に自動で
-# ストアへ移され、設定ファイルには参照だけが残る。
+# command = stdio launch / url = Streamable HTTP. Discovered tools are
+# mangled to mcp_<server>__<tool>, mixed into function calling, and run
+# locally by the panel through _EXTRA_TOOL_CALLERS.
+# Secret values (client_secret, headers, env) resolve from the OS
+# credential store (credential_store) when written as "$store:<key>".
+# A plaintext oauth.client_secret is moved to the store automatically
+# when mcp_save_config saves, leaving only the reference in the file.
 
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
 
 def mcp_config_path():
-    """外部MCPサーバの設定ファイル。"""
+    """Configuration file for external MCP servers."""
     return os.path.join(_registry_dir(), "mcp_servers.json")
 
 
-# 設定値中の資格情報ストア参照プレフィックス
-MCP_SECRET_REF = "$store:"  # nosec B105  # 参照プレフィックス(資格情報ではない)
+# Credential-store reference prefix used inside config values
+MCP_SECRET_REF = "$store:"  # nosec B105  # reference prefix (not a credential)
 
 
 def _mcp_secret_key(server, field):
-    """資格情報ストア上のキー名(サーバ名+項目名)。"""
+    """Key name in the credential store (server name + field name)."""
     return f"mcp:{server}:{field}"
 
 
 def _resolve_secret_ref(v):
-    """'$store:<key>' 参照なら資格情報ストアから値を解決する。"""
+    """Resolve a value from the credential store when it is a '$store:<key>' ref."""
     if isinstance(v, str) and v.startswith(MCP_SECRET_REF):
         key = v[len(MCP_SECRET_REF):]
         s = credential_store.get_secret(key)
@@ -1884,18 +1887,18 @@ MCP_CONFIG_TEMPLATE = {
             "oauth": {
                 "authorize_url":
                     "https://account.box.com/api/oauth2/authorize",
-                "token_url": "https://api.box.com/oauth2/token",  # nosec B105  # 公開API URL
+                "token_url": "https://api.box.com/oauth2/token",  # nosec B105  # public API URL
                 "client_id": "<Box app Client ID>",
-                "client_secret": "<Client Secret>",  # nosec B105  # テンプレートのプレースホルダ
+                "client_secret": "<Client Secret>",  # nosec B105  # template placeholder
                 "redirect_uri": "http://127.0.0.1:8020/callback",
             },
         },
         "example-http-ccg": {
             "url": "https://example.com/mcp",
             "oauth": {
-                "token_url": "https://example.com/oauth/token",  # nosec B105  # 例示URL
+                "token_url": "https://example.com/oauth/token",  # nosec B105  # example URL
                 "client_id": "<client_id>",
-                "client_secret": "<client_secret>",  # nosec B105  # テンプレートのプレースホルダ
+                "client_secret": "<client_secret>",  # nosec B105  # template placeholder
                 "extra": {"box_subject_type": "enterprise",
                           "box_subject_id": "<id>"},
             },
@@ -1905,7 +1908,7 @@ MCP_CONFIG_TEMPLATE = {
 
 
 def mcp_servers_config():
-    """mcp_servers.json を読み {name: {command|url, ...}} を返す。"""
+    """Read mcp_servers.json and return {name: {command|url, ...}}."""
     try:
         with open(mcp_config_path(), "r", encoding="utf-8") as f:
             d = json.load(f)
@@ -1921,14 +1924,14 @@ def mcp_servers_config():
 
 
 def mcp_save_config(text):
-    """設定JSONテキストを検証して mcp_servers.json へ保存する。
+    """Validate the config JSON text and save it to mcp_servers.json.
 
-    oauth.client_secret に平文が書かれていた場合はOSの資格情報
-    ストア(credential_store)へ移し、設定ファイルには
-    '$store:<key>' 参照だけを残す(APIキーと同じ方針で
-    ストア保存に失敗した場合は平文では保存しない)。
-    実際に保存したJSONテキストを返す。
-    空欄は「MCPサーバなし」として {"mcpServers": {}} に正規化する。
+    A plaintext oauth.client_secret is moved to the OS credential store
+    (credential_store) and only the '$store:<key>' reference is kept in
+    the config file (same policy as API keys: if storing fails, nothing
+    is saved in plaintext). Returns the JSON text that was actually
+    saved. An empty text means "no MCP servers" and normalizes to
+    {"mcpServers": {}}.
     """
     if not (text or "").strip():
         text = '{"mcpServers": {}}'
@@ -1946,7 +1949,7 @@ def mcp_save_config(text):
         if not isinstance(sec, str) or not sec \
                 or sec.startswith(MCP_SECRET_REF) \
                 or (sec.startswith("<") and sec.endswith(">")):
-            continue                      # 既に参照 or 未記入の雛形
+            continue                      # already a reference or unfilled template
         key = _mcp_secret_key(name, "client_secret")
         if not credential_store.set_secret(key, sec):
             raise ApiError(
@@ -1964,7 +1967,7 @@ def mcp_save_config(text):
 
 
 def _loads_rpc(text):
-    """JSON-RPCメッセージ(単一orバッチ)を列挙する。"""
+    """Enumerate the JSON-RPC messages (single message or batch)."""
     try:
         d = json.loads(text)
     except Exception:
@@ -1975,10 +1978,11 @@ def _loads_rpc(text):
 
 
 def _iter_rpc_msgs(raw, ctype=""):
-    """HTTP応答本文からJSON-RPCメッセージを列挙する。
+    """Enumerate JSON-RPC messages from an HTTP response body.
 
-    application/json は単一/バッチそのまま、text/event-stream は
-    各SSEイベントの data: ペイロード(複数行連結可)が1メッセージ。
+    application/json is a single message or batch as-is; for
+    text/event-stream each SSE event's data: payload (multi-line
+    allowed) is one message.
     """
     if "text/event-stream" in (ctype or ""):
         data_lines = []
@@ -2002,9 +2006,9 @@ def _mcp_error(m):
 
 
 def _oauth_request(oc, body, timeout=30.0):
-    """トークンエンドポイントへform-encoded POST(RFC 6749 Basic認証)。
+    """Form-encoded POST to the token endpoint (RFC 6749 Basic auth).
 
-    @returns {"access_token","refresh_token"?,"expires_at"} のdict
+    @returns dict of {"access_token","refresh_token"?,"expires_at"}
     """
     turl = oc.get("token_url") or ""
     if not turl:
@@ -2015,7 +2019,7 @@ def _oauth_request(oc, body, timeout=30.0):
     headers = {"Content-Type": "application/x-www-form-urlencoded",
                "Accept": "application/json"}
     if csec:
-        # confidential client: RFC 6749 Basic認証
+        # confidential client: RFC 6749 Basic auth
         cred = (f"{urllib.parse.quote(cid)}:"
                 f"{urllib.parse.quote(csec)}")
         headers["Authorization"] = (
@@ -2027,13 +2031,13 @@ def _oauth_request(oc, body, timeout=30.0):
         turl, data=urllib.parse.urlencode(body).encode("utf-8"),
         headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # _require_http_schemeでhttp/httpsのみ許可
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https only
             d = json.loads(r.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as e:
         detail = ""
         try:
             detail = e.read().decode("utf-8", "replace")[:300]
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
         raise ApiError(
             f"token fetch HTTP {e.code}: {detail or e.reason}") from e
@@ -2042,7 +2046,7 @@ def _oauth_request(oc, body, timeout=30.0):
     tok = d.get("access_token")
     if not tok:
         raise ApiError(f"Invalid token response: {str(d)[:200]}")
-    # expires_in から60秒の余裕を持たせて期限を計算
+    # compute the expiry from expires_in with a 60-second margin
     return {"access_token": tok,
             "refresh_token": d.get("refresh_token"),
             "expires_at": (time.time()
@@ -2050,7 +2054,7 @@ def _oauth_request(oc, body, timeout=30.0):
 
 
 def _oauth_token(oc, timeout=30.0):
-    """client_credentialsでトークン取得 → (access_token, expires_at)。"""
+    """Get a token via client_credentials -> (access_token, expires_at)."""
     body = {"grant_type": "client_credentials"}
     if oc.get("scope"):
         body["scope"] = oc["scope"]
@@ -2061,7 +2065,7 @@ def _oauth_token(oc, timeout=30.0):
 
 
 def _mcp_tokens_path():
-    """OAuthトークンの永続化先。"""
+    """Where OAuth tokens are persisted."""
     return os.path.join(_registry_dir(), "mcp_tokens.json")
 
 
@@ -2076,7 +2080,7 @@ def _mcp_token_load(name):
 
 
 def _mcp_token_save(name, tok):
-    """{access_token, refresh_token?, expires_at} を保存する。"""
+    """Save {access_token, refresh_token?, expires_at}."""
     try:
         try:
             with open(_mcp_tokens_path(), "r", encoding="utf-8") as f:
@@ -2089,8 +2093,8 @@ def _mcp_token_save(name, tok):
         os.makedirs(os.path.dirname(_mcp_tokens_path()), exist_ok=True)
         with open(_mcp_tokens_path(), "w", encoding="utf-8") as f:
             json.dump(d, f, indent=1)
-    except Exception:  # nosec B110  # 設計上の許容
-        pass                       # 保存失敗は致命的ではない
+    except Exception:  # nosec B110  # acceptable by design
+        pass                       # a failed save is not fatal
 
 
 def _mcp_token_delete(name):
@@ -2102,18 +2106,18 @@ def _mcp_token_delete(name):
             with open(_mcp_tokens_path(), "w",
                       encoding="utf-8") as f:
                 json.dump(d, f, indent=1)
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
 
 
 def _oauth_authorize(oc, timeout=180.0, on_status=None, is_aborted=None):
-    """authorization_code + PKCE でユーザー同意型トークンを取得する。
+    """Get a user-consent token via authorization_code + PKCE.
 
-    ローカルHTTPリスナ(既定 http://127.0.0.1:8020/callback)を立てて
-    ブラウザを開き、コールバックの code をトークンに交換する。
-    oauth.authorize_url が必須。client_secret あれば Basic 認証。
-    is_aborted() がTrueを返すと待機を打ち切ってApiErrorを返す。
-    @returns _oauth_request() のdict
+    Starts a local HTTP listener (default http://127.0.0.1:8020/callback),
+    opens the browser, and exchanges the callback code for a token.
+    oauth.authorize_url is required; client_secret enables Basic auth.
+    If is_aborted() returns True the wait is cut short with an ApiError.
+    @returns the dict from _oauth_request()
     """
     from http.server import BaseHTTPRequestHandler, HTTPServer
     aurl = oc.get("authorize_url") or ""
@@ -2145,8 +2149,8 @@ def _oauth_authorize(oc, timeout=180.0, on_status=None, is_aborted=None):
             ("127.0.0.1", urllib.parse.urlparse(redir).port or 8020),
             _H)
     except OSError:
-        # ポート占有時はエフェメラル。redirect_uriもそれに合わせる
-        # (RFC 8252ではloopbackはポート問わず許容)
+        # fall back to an ephemeral port if taken; redirect_uri follows
+        # (RFC 8252 allows loopback on any port)
         httpd = HTTPServer(("127.0.0.1", 0), _H)
         redir = (f"http://127.0.0.1:{httpd.server_address[1]}"
                  "/callback")
@@ -2188,7 +2192,7 @@ def _oauth_authorize(oc, timeout=180.0, on_status=None, is_aborted=None):
         httpd.server_close()
     if got.get("error"):
         raise ApiError(f"OAuth error: {got['error']} "
-                       f"{got.get('error_description') or ''}。" + hint)
+                       f"{got.get('error_description') or ''}. " + hint)
     if got.get("state") != state:
         raise ApiError("OAuth state mismatch (CSRF check)")
     try:
@@ -2198,16 +2202,16 @@ def _oauth_authorize(oc, timeout=180.0, on_status=None, is_aborted=None):
             "redirect_uri": redir,
             "code_verifier": ver}, timeout)
     except ApiError as e:
-        raise ApiError(f"{e}。{hint}") from e
+        raise ApiError(f"{e}. {hint}") from e
 
 
 class _McpHttp:
-    """MCP Streamable HTTPクライアント(POST→JSON or SSE)。
+    """MCP Streamable HTTP client (POST -> JSON or SSE).
 
-    cfg.oauth がある場合はトークンを取得し Authorization: Bearer
-    を付ける。authorize_url あれば authorization_code+PKCE
-    (ブラウザでユーザー同意、トークンは ~/.qgis-live/mcp_tokens.json
-    に永続化し refresh_token で更新)、無ければ client_credentials。
+    With cfg.oauth a token is obtained and sent as Authorization: Bearer.
+    With authorize_url it uses authorization_code+PKCE (user consent in
+    the browser, tokens persisted to ~/.qgis-live/mcp_tokens.json and
+    refreshed via refresh_token); otherwise client_credentials.
     """
 
     def __init__(self, cfg, name="", on_status=None, is_aborted=None):
@@ -2221,12 +2225,12 @@ class _McpHttp:
         self._status = on_status or (lambda m: None)
         self._aborted = is_aborted or (lambda: False)
         self._tok, self._tok_exp = None, 0.0
-        self._stale = False       # 401を受けたら保存トークンを疑う
+        self._stale = False       # a 401 makes us distrust the saved token
         self.session_id = None
         self._next = itertools.count(1)
 
     def _obtain_token(self, timeout):
-        """access_tokenを解決する: 保存済み→refresh→新規取得。"""
+        """Resolve an access_token: saved -> refresh -> fresh request."""
         oc = self.oauth
         st = _mcp_token_load(self.name)
         if st and st.get("access_token"):
@@ -2243,7 +2247,7 @@ class _McpHttp:
                     self._stale = False
                     return t["access_token"], t["expires_at"]
                 except ApiError:
-                    _mcp_token_delete(self.name)   # 再認可へ
+                    _mcp_token_delete(self.name)   # re-authorize
         if oc.get("authorize_url"):
             self._status(
                 f"MCP '{self.name}': complete OAuth sign-in in the browser")
@@ -2265,7 +2269,7 @@ class _McpHttp:
         return {"Authorization": f"Bearer {self._tok}"}
 
     def _post(self, msg, timeout):
-        # OAuth利用時は401でトークンを破棄して1回だけ再試行
+        # with OAuth, a 401 drops the token and retries exactly once
         for attempt in range(2 if self.oauth else 1):
             hdrs = {"Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
@@ -2277,7 +2281,7 @@ class _McpHttp:
                 self.url, data=json.dumps(msg).encode("utf-8"),
                 headers=hdrs, method="POST")
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # _require_http_schemeでhttp/httpsのみ許可
+                with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310  # http/https
                     sid = r.headers.get("Mcp-Session-Id")
                     if sid:
                         self.session_id = sid
@@ -2286,21 +2290,21 @@ class _McpHttp:
                     status = r.status
             except urllib.error.HTTPError as e:
                 if e.code == 401 and self.oauth and attempt == 0:
-                    # トークン失効→保存分も疑い、refresh/再認可で再試行
+                    # token expired -> distrust the saved one; retry via refresh
                     self._tok = None
                     self._stale = True
                     continue
                 detail = ""
                 try:
                     detail = e.read().decode("utf-8", "replace")[:300]
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
                 raise ApiError(
                     f"HTTP {e.code}: {detail or e.reason}") from e
             except urllib.error.URLError as e:
                 raise ApiError(f"Connection failed: {e.reason}") from e
             if status == 202 or not raw.strip():
-                return []                    # 通知応答(空)
+                return []                    # notification response (empty)
             return list(_iter_rpc_msgs(raw, ctype))
 
     def request(self, method, params, timeout=30.0):
@@ -2318,7 +2322,7 @@ class _McpHttp:
         try:
             self._post({"jsonrpc": "2.0", "method": method,
                         "params": params or {}}, 15.0)
-        except ApiError:  # nosec B110  # 設計上の許容
+        except ApiError:  # nosec B110  # acceptable by design
             pass
 
     def close(self):
@@ -2326,7 +2330,7 @@ class _McpHttp:
 
 
 class _McpStdio:
-    """MCP stdioクライアント(子プロセスと改行区切りJSON-RPC)。"""
+    """MCP stdio client (newline-delimited JSON-RPC to a child process)."""
 
     def __init__(self, cfg):
         command = cfg.get("command") or ""
@@ -2339,9 +2343,9 @@ class _McpStdio:
         kw = {}
         cf = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         if cf:
-            kw["creationflags"] = cf      # コンソール窓を出さない(Windows)
+            kw["creationflags"] = cf      # do not show a console window (Windows)
         try:
-            self._p = subprocess.Popen(  # nosec B603  # ユーザ設定のMCPサーバ起動(仕様)
+            self._p = subprocess.Popen(  # nosec B603  # launches the user-configured MCP server
                 [exe] + [str(a) for a in cfg.get("args") or []],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL, env=env, **kw)
@@ -2358,13 +2362,13 @@ class _McpStdio:
                 break
             try:
                 m = json.loads(line.decode("utf-8", "replace"))
-            except Exception:  # nosec B112  # 設計上の許容
+            except Exception:  # nosec B112  # acceptable by design
                 continue
             slot = self._pending.get(m.get("id"))
             if slot:
                 slot[1]["res"] = m
                 slot[0].set()
-        for ev, box in self._pending.values():   # プロセス終了→全失敗
+        for ev, box in self._pending.values():   # process exited -> fail all
             box["res"] = {"error": "MCP server exited"}
             ev.set()
 
@@ -2398,18 +2402,18 @@ class _McpStdio:
         try:
             self._send({"jsonrpc": "2.0", "method": method,
                         "params": params or {}})
-        except ApiError:  # nosec B110  # 設計上の許容
+        except ApiError:  # nosec B110  # acceptable by design
             pass
 
     def close(self):
         try:
             self._p.terminate()
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
 
 
 def _mcp_result_text(r):
-    """tools/call のresultをテキストにする。isErrorはApiError。"""
+    """Turn a tools/call result into text. isError raises ApiError."""
     if not isinstance(r, dict):
         return str(r)
     parts = [c.get("text", "") for c in r.get("content") or []
@@ -2423,9 +2427,9 @@ def _mcp_result_text(r):
 
 
 class McpSession:
-    """接続済みMCPサーバ。tools=TOOL形の一覧, call()で実行。
+    """A connected MCP server. tools = list in TOOL shape, call() runs.
 
-    transportはcfgで決まる: command→stdio / url→Streamable HTTP。
+    The transport comes from cfg: command -> stdio / url -> Streamable HTTP.
     """
 
     def __init__(self, name, cfg, timeout=30.0, on_status=None,
@@ -2455,16 +2459,16 @@ class McpSession:
 
 
 def _safe_name(s):
-    """OpenAIのツール名制約([A-Za-z0-9_-])に寄せる。"""
+    """Coerce to the OpenAI tool-name charset ([A-Za-z0-9_-])."""
     return re.sub(r"[^A-Za-z0-9_-]", "_", s or "")
 
 
 def mcp_discover(timeout=30.0, on_status=None, is_aborted=None):
-    """設定ファイルの全MCPサーバへ接続しツール一覧を集約する。
+    """Connect to every MCP server in the config and collect their tools.
 
-    @param on_status: 進行状況コールバック(OAuth認証待ち等をUIへ)
-    @param is_aborted: Trueを返すと接続処理を打ち切るコールバック
-    @returns {"tools": [mangled TOOL形], "callers": {name: fn},
+    @param on_status: progress callback (e.g. waiting for OAuth consent)
+    @param is_aborted: callback returning True to abort connecting
+    @returns {"tools": [mangled TOOL shape], "callers": {name: fn},
               "sessions": {name: McpSession}, "errors": {name: str}}
     """
     out = {"tools": [], "callers": {}, "sessions": {}, "errors": {}}
@@ -2501,9 +2505,9 @@ _EXTRA_TOOL_CALLERS = {}
 
 
 def register_extra_tools(tools, callers):
-    """外部MCP由来ツールを openai_tools/gemini_tools に反映する。
+    """Expose external MCP tools through openai_tools/gemini_tools.
 
-    呼び出しはパネルのワーカースレッド側で行う。
+    Calls are executed on the panel worker thread.
     """
     _EXTRA_TOOLS[:] = list(tools or [])
     _EXTRA_TOOL_CALLERS.clear()
@@ -2511,26 +2515,26 @@ def register_extra_tools(tools, callers):
 
 
 def run_extra_tool(name, args):
-    """外部MCPツールを実行してテキストを返す。"""
+    """Run an external MCP tool and return its text."""
     fn = _EXTRA_TOOL_CALLERS.get(name)
     if fn is None:
         raise ApiError(f"Unknown external tool: {name}")
     return fn(args or {})
 
 
-# ---- プロバイダ抽象化 ----
-# 各プロバイダは以下のインターフェースを持つ:
+# ---- Provider abstraction ----
+# Every provider exposes the following interface:
 #   build_messages(system, history, user_text, user_images=None)
-#       -> ワイヤ形式のメッセージ列
-#       historyの要素は {"role","content","images"?}(images=PNGパス列)、
-#       user_imagesは新規ユーザメッセージに添付するPNGパス列。
-#   send(base, key, model, system, msgs, timeout) -> 応答JSON
+#       -> message list in wire format
+#       history items are {"role","content","images"?} (images = PNG paths),
+#       user_images = PNG paths attached to the new user message.
+#   send(base, key, model, system, msgs, timeout) -> response JSON
 #   parse(data) -> {"text": str, "calls": [{"id","name","args"}], "raw": ...}
 #   append_exchange(msgs, turn, results)
-#       results: callsに対応する [{"text": str, "image": path|None}]
-#       raw assistant + プロバイダ固有のツール結果エントリをmsgsに積む
-#   list_models(base, key, timeout) -> [モデルID, ...]
-#   list_model_entries(base, key, timeout) -> [{id, メタ情報...}]
+#       results: [{"text": str, "image": path|None}] matching the calls
+#       appends the raw assistant turn + provider-specific tool results
+#   list_models(base, key, timeout) -> [model id, ...]
+#   list_model_entries(base, key, timeout) -> [{id, metadata...}]
 
 
 class OpenAIProvider:
@@ -2538,10 +2542,10 @@ class OpenAIProvider:
     label = PROVIDERS["openai"]["label"]
 
     def list_model_entries(self, base, key, timeout=30.0):
-        """GET {base}/models → [{id, 価格/modality等(あれば)}, ...]
+        """GET {base}/models -> [{id, price/modality etc. if any}, ...]
 
-        OpenRouter等は pricing・context_length・architecture.modality
-        を返すため、あれば拾ってメタ情報表示に使う。
+        OpenRouter and friends return pricing, context_length and
+        architecture.modality; pick them up for metadata display.
         """
         headers = {"Authorization": f"Bearer {key}"} if key else {}
         data = _get_json(openai_models_url(base), headers, timeout)
@@ -2565,7 +2569,7 @@ class OpenAIProvider:
         return sorted(out, key=lambda e: e["id"])
 
     def list_models(self, base, key, timeout=30.0):
-        """GET {base}/models → data[].id をソートして返す。"""
+        """GET {base}/models -> sorted data[].id."""
         return [e["id"] for e in self.list_model_entries(base, key, timeout)]
 
     def build_messages(self, system, history, user_text,
@@ -2573,7 +2577,7 @@ class OpenAIProvider:
         msgs = [{"role": "system", "content": system}]
         for m in history:
             d = dict(m)
-            imgs = d.pop("images", None)  # ワイヤ形式に無いキーは剥がす
+            imgs = d.pop("images", None)  # drop keys absent from wire format
             if imgs:
                 d["content"] = user_content(
                     m.get("content") or "", imgs)
@@ -2614,20 +2618,20 @@ class OpenAIProvider:
 
 
 class AnthropicProvider:
-    """Anthropic Messages API。
+    """Anthropic Messages API.
 
-    systemはトップレベルフィールド、ツールはinput_schema、
-    ツール結果はuserターンのtool_resultブロックで返す形式。
+    system is a top-level field, tools use input_schema, and tool
+    results come back as tool_result blocks in a user turn.
     """
     id = "anthropic"
     label = PROVIDERS["anthropic"]["label"]
 
     def list_model_entries(self, base, key, timeout=30.0):
-        """GET {base}/v1/models → [{id}, ...] (has_moreでページング)。"""
+        """GET {base}/v1/models -> [{id}, ...] (paged via has_more)."""
         url = anthropic_models_url(base)
         out = []
         after = None
-        for _ in range(20):              # ページ上限(暴走防止)
+        for _ in range(20):              # page cap (runaway guard)
             u = url + ("&" if "?" in url else "?") + "limit=1000"
             if after:
                 u += "&after_id=" + urllib.parse.quote(after)
@@ -2683,8 +2687,8 @@ class AnthropicProvider:
                 "usage": parse_usage(data)}
 
     def append_exchange(self, msgs, turn, results):
-        # assistantターン(contentブロック列)の直後に、全tool_resultを
-        # 1つのuserターンへまとめて返す
+        # right after the assistant turn (content block list), return all
+        # tool_result blocks together in a single user turn
         msgs.append(turn["raw"])
         parts = []
         for c, r in zip(turn["calls"], results):
@@ -2705,8 +2709,8 @@ class GeminiProvider:
     label = PROVIDERS["gemini"]["label"]
 
     def list_model_entries(self, base, key, timeout=30.0):
-        """GET {base}/models → generateContent対応モデルの
-        [{id, input/output_token_limit}, ...] を返す。"""
+        """GET {base}/models -> [{id, input/output_token_limit}, ...] for
+        models that support generateContent."""
         headers = {"x-goog-api-key": key} if key else {}
         data = _get_json(gemini_models_url(base), headers, timeout)
         items = data.get("models") if isinstance(data, dict) else None
@@ -2728,11 +2732,11 @@ class GeminiProvider:
                       key=lambda e: e["id"])
 
     def list_models(self, base, key, timeout=30.0):
-        """GET {base}/models → generateContent対応モデルを返す。
+        """GET {base}/models -> the models that support generateContent.
 
-        応答の models[].name は "models/<id>" 形式なので接頭辞を剥がす。
-        supportedGenerationMethods に generateContent が無いモデル
-        (embed等)は除外する。
+        models[].name comes as "models/<id>", so strip the prefix.
+        Models without generateContent in supportedGenerationMethods
+        (embeddings etc.) are excluded.
         """
         return [e["id"] for e in self.list_model_entries(base, key, timeout)]
 
@@ -2777,8 +2781,8 @@ class GeminiProvider:
                 "usage": parse_usage(data)}
 
     def append_exchange(self, msgs, turn, results):
-        # モデルのfunctionCallを含むcontentをそのまま積み、
-        # 全functionResponseを1つのuserターンにまとめて返す
+        # append the model content (with its functionCall) as-is, then
+        # return all functionResponse parts in a single user turn
         msgs.append(turn["raw"])
         parts = []
         for c, r in zip(turn["calls"], results):
@@ -2794,23 +2798,23 @@ class GeminiProvider:
 
 
 class CopilotProvider(OpenAIProvider):
-    """GitHub Copilot。
+    """GitHub Copilot.
 
-    メッセージ形式はOpenAI互換なので build_messages/parse/
-    append_exchange は OpenAIProvider を継承。違いは認証だけ:
-    APIキー欄のGitHubトークンを copilot_session() で短期トークンに
-    交換し、契約種別に応じたAPI先(endpoints.api)を使う。
+    Message format is OpenAI-compatible, so build_messages/parse/
+    append_exchange come from OpenAIProvider. Only auth differs: the
+    API-key field's GitHub token is swapped for a short-lived one by
+    copilot_session(), and endpoints.api depends on the plan type.
     """
     id = "copilot"
     label = PROVIDERS["copilot"]["label"]
 
     def list_model_entries(self, base, key, timeout=30.0):
-        """GET {api}/models → chat対応モデル一覧。
+        """GET {api}/models -> the list of chat-capable models.
 
-        Copilot APIの応答は capabilities.type / policy.state /
+        Copilot API entries carry capabilities.type / policy.state /
         capabilities.limits.max_context_window_tokens /
-        supports.vision を持つため、種別とコンテキスト長の判定に使う。
-        capabilitiesを持たない応答(互換プロキシ等)は全件採用する。
+        supports.vision, used to decide kind and context length.
+        Responses without capabilities (compatible proxies) are all kept.
         """
         tok, api_base = copilot_session(key, base)
         data = _get_json(
@@ -2840,8 +2844,8 @@ class CopilotProvider(OpenAIProvider):
             lim = caps.get("limits") or {}
             if lim.get("max_context_window_tokens"):
                 e["context_length"] = lim["max_context_window_tokens"]
-            # /responses 専用モデルを記録(GPT-6系等。
-            # supported_endpoints が無い応答は不明=chat送り)
+            # remember /responses-only models (GPT-6 family etc.;
+            # a response without supported_endpoints is unknown = chat)
             eps = m.get("supported_endpoints")
             if isinstance(eps, list):
                 if "/chat/completions" not in eps \
@@ -2863,7 +2867,7 @@ class CopilotProvider(OpenAIProvider):
             except ApiError as e:
                 if not _responses_only_error(e):
                     raise
-                # /responses専用モデルだった。学習して切替
+                # it was a /responses-only model; remember and switch
                 _RESPONSES_ONLY_MODELS[model] = True
         return responses_create(
             api_base, tok, model, msgs,
@@ -2878,23 +2882,23 @@ class CopilotProvider(OpenAIProvider):
 
 
 class AzureOpenAIProvider(OpenAIProvider):
-    """Azure OpenAI Service。
+    """Azure OpenAI Service.
 
-    メッセージ形式はOpenAI互換なので build_messages/parse/
-    append_exchange は OpenAIProvider を継承。違いはURLと認証:
-    {resource}/openai/deployments/<deployment>/chat/completions
-    ?api-version=… に api-key ヘッダで送る。model欄はデプロイ名
-    (api-version=2024-10-21以降のv1 APIではmodel指定は任意だが、
-    互換のためデプロイ名をそのまま送る)。
+    Message format is OpenAI-compatible, so build_messages/parse/
+    append_exchange come from OpenAIProvider. URL and auth differ:
+    POST {resource}/openai/deployments/<deployment>/chat/completions
+    ?api-version=... with an api-key header. The model field is the
+    deployment name (optional on the v1 API since api-version=2024-10-21,
+    but still sent for compatibility).
     """
     id = "azure"
     label = PROVIDERS["azure"]["label"]
 
     def list_model_entries(self, base, key, timeout=30.0):
-        """GET {resource}/openai/deployments → デプロイ名一覧。
+        """GET {resource}/openai/deployments -> the deployment names.
 
-        v1 APIのdeployments一覧が使えない環境では /openai/models
-        (基盤モデル名)にフォールバックする。
+        Where the v1 API's deployment listing is unavailable, fall back to
+        /openai/models (the underlying model names).
         """
         headers = {"api-key": key} if key else {}
         try:
@@ -2906,7 +2910,7 @@ class AzureOpenAIProvider(OpenAIProvider):
             if out:
                 return sorted(out, key=lambda e: e["id"])
         except ApiError:
-            pass                        # /openai/models へフォールバック
+            pass                        # fall back to /openai/models
         data = _get_json(azure_resource_url(base, "models"),
                          headers, timeout)
         items = data.get("data") if isinstance(data, dict) else None
@@ -2930,17 +2934,17 @@ class AzureOpenAIProvider(OpenAIProvider):
         return data
 
 
-# ---- Devin プロバイダ ----
+# ---- Devin providers ----
 #
-# "devin_bridge"(【ブリッジ】): 通常のOpenAI互換チャット + systemへ
-# 「qgis_devin_* ツールで実作業をDevinへ委譲せよ」という指示を注入
-# する疑似プロバイダ。ツールループはパネル側(従来どおり)。
-# "devin_acp"(【ACP】): Devin CLI の `devin acp` セッションをチャット
-# エンジンにする実プロバイダ。送信は session/prompt に流し、Devin
-# 自身がツールループを回す(geo_driver の /mcp をMCPサーバとして
-# 注入するので Devin からQGIS操作も可能)。APIキー不要でIDE認証を
-# 共有する。会話履歴はDevinセッション側に保持されるため、各ターン
-# は最新ユーザ発言だけを送る。
+# "devin_bridge" ([Bridge]): an ordinary OpenAI-compatible chat plus a
+# system instruction telling it to delegate the real work to Devin via
+# the qgis_devin_* tools. The tool loop stays on the panel side.
+# "devin_acp" ([ACP]): a real provider that uses a Devin CLI `devin acp`
+# session as the chat engine. Prompts go to session/prompt and Devin
+# runs its own tool loop (geo_driver's /mcp is injected as an MCP
+# server, so Devin can drive QGIS too). No API key; it shares the IDE
+# login. History lives in the Devin session, so each turn sends only
+# the latest user message.
 
 _DEVIN_BRIDGE_HINT = """\
 [DELEGATION MODE] You are a delegation assistant. For any task that
@@ -2958,16 +2962,16 @@ the same Devin session. Report Devin's results to the user."""
 _COPILOT_BRIDGE_HINT = _DEVIN_BRIDGE_HINT.replace(
     "Devin", "Copilot CLI").replace("qgis_devin_", "qgis_copilot_")
 
-# devin_acp セッションはcwd単位でモジュールに保持し、送信のたびに
-# 再利用する(プロバイダインスタンスは send ごとに作り直されるため)
+# devin_acp sessions are kept per cwd at module level and reused on every
+# send (provider instances are recreated for each send)
 _ACP_SESSIONS = {}
 
 
 def _acp_mcp_servers():
-    """geo_driver自身の /mcp を Devin セッションへ渡す定義を返す。
+    """Return the definition that hands geo_driver's own /mcp to Devin.
 
-    Devin 側のツールループから qgis_pyeval 等が直接使えるようにする。
-    ドライバ未起動・QGIS外では空を返す。
+    Lets Devin's tool loop use qgis_pyeval and friends directly.
+    Returns an empty list when the driver is not running or outside QGIS.
     """
     try:
         import qgis.utils  # noqa: PLC0415
@@ -2980,23 +2984,23 @@ def _acp_mcp_servers():
                      "url": f"http://127.0.0.1:{port}/mcp",
                      "headers": [{"name": "Authorization",
                                   "value": f"Bearer {tok}"}]}]
-    except Exception:  # nosec B110  # 設計上の許容
+    except Exception:  # nosec B110  # acceptable by design
         pass
     return []
 
 
 def close_acp_sessions():
-    """devin_acp で開いた全セッションを閉じる(パネル破棄時)。"""
+    """Close every session opened by devin_acp (on panel teardown)."""
     for s in list(_ACP_SESSIONS.values()):
         try:
             s.close()
-        except Exception:  # nosec B110  # 設計上の許容
+        except Exception:  # nosec B110  # acceptable by design
             pass
     _ACP_SESSIONS.clear()
 
 
 class DevinBridgeProvider(OpenAIProvider):
-    """【ブリッジ】OpenAI互換チャット + Devin委譲指示の注入。"""
+    """[Bridge] OpenAI-compatible chat plus the Devin delegation prompt."""
 
     id = "devin_bridge"
     label = PROVIDERS["devin_bridge"]["label"]
@@ -3009,7 +3013,7 @@ class DevinBridgeProvider(OpenAIProvider):
 
 
 class CopilotBridgeProvider(OpenAIProvider):
-    """【ブリッジ】OpenAI互換チャット + Copilot CLI委譲指示の注入。"""
+    """[Bridge] OpenAI-compatible chat plus the Copilot CLI delegation prompt."""
 
     id = "copilot_bridge"
     label = PROVIDERS["copilot_bridge"]["label"]
@@ -3022,12 +3026,12 @@ class CopilotBridgeProvider(OpenAIProvider):
 
 
 class DevinAcpProvider:
-    """【ACP】`devin acp` セッションをチャットエンジンにする。
+    """[ACP] Uses a `devin acp` session as the chat engine.
 
-    エンドポイント欄=セッションの作業ディレクトリ(cwd)、
-    APIキー欄=未使用(IDE認証を共有)、モデル欄=Devin側モデル
-    ("default"または空で未指定)。geo_driver の /mcp を
-    MCPサーバとして渡すので Devin からQGIS操作が可能。
+    Endpoint field = working directory of the session (cwd);
+    API-key field = unused (the IDE login is shared); model field = the
+    Devin-side model ("default" or empty for unspecified). geo_driver's
+    /mcp is passed as an MCP server, so Devin can drive QGIS.
     """
 
     id = "devin_acp"
@@ -3042,7 +3046,7 @@ class DevinAcpProvider:
 
     def build_messages(self, system, history, user_text,
                        user_images=None):
-        # 履歴はDevin側が保持するため表示用の簡易形式のみ
+        # Devin keeps the history, so this is just a display-only form
         msgs = [{"role": "system", "content": system}]
         for m in history:
             msgs.append({"role": m.get("role"),
@@ -3053,13 +3057,13 @@ class DevinAcpProvider:
         return msgs
 
     def _session(self, cwd, model):
-        """engine+cwd単位の常駐セッションを取得(無ければ生成)。"""
+        """Get the resident session per engine+cwd (creating it if needed)."""
         from . import devin_tasks  # noqa: PLC0415
         cwd = os.path.abspath(os.path.expanduser(cwd or "~"))
         skey = (self.ENGINE, cwd)
         s = _ACP_SESSIONS.get(skey)
         if s is not None and s._proc.poll() is not None:
-            s = None  # プロセスが死んでいたら作り直す
+            s = None  # recreate it if the process has died
         if s is None:
             s = devin_tasks.AcpSession(
                 cwd, mcp_servers=_acp_mcp_servers(), mode="bypass",
@@ -3069,9 +3073,9 @@ class DevinAcpProvider:
         return s
 
     def _make_session(self, base, key, model):
-        """send からのセッション取得フック。base=エンドポイント欄、
-        key=APIキー欄(ACP系では認証外の別用途に使える)。
-        既定は base を cwd とみなす"""
+        """Session hook used by send. base = endpoint field,
+        key = API-key field (ACP uses it for non-auth purposes).
+        By default base is treated as the cwd."""
         return self._session(base, model)
 
     def send(self, base, key, model, system, msgs, timeout=180.0):
@@ -3079,7 +3083,7 @@ class DevinAcpProvider:
         sess = self._make_session(base, key, model)
         last = msgs[-1] if msgs else {}
         text = last.get("content") or ""
-        # 新規セッションの最初の発言にだけ system(指示書類)を前置
+        # prepend system (instruction files) only to the first prompt
         if not getattr(sess, "_sys_sent", False):
             if system:
                 text = system + "\n\n---\n\n" + text
@@ -3111,7 +3115,7 @@ class DevinAcpProvider:
             if cb:
                 try:
                     cb(kind, u)
-                except Exception:  # nosec B110  # 設計上の許容
+                except Exception:  # nosec B110  # acceptable by design
                     pass
 
         sess.on_update = on_update
@@ -3134,22 +3138,22 @@ class DevinAcpProvider:
                 "usage": data.get("usage")}
 
     def append_exchange(self, msgs, turn, results):
-        # calls は常に空なので通常呼ばれない。テキストのみ積む
+        # calls is always empty so this is rarely used; keep text only
         msgs.append({"role": "assistant",
                      "content": turn.get("text") or ""})
 
     def abort(self):
-        """パネルの中断ボタン → session/cancel。"""
+        """Panel abort button -> session/cancel."""
         s = getattr(self, "_sess", None)
         if s is not None:
             s.cancel()
 
 
 class CopilotAcpProvider(DevinAcpProvider):
-    """【ACP】`copilot --acp --stdio` セッションをチャットエンジンにする。
+    """[ACP] Uses a `copilot --acp --stdio` session as the chat engine.
 
-    機構は DevinAcpProvider と同じで、エンジンと認証だけが異なる
-    (GitHub Copilot CLI の gh ログインを利用。windsurf_api_key 不要)。
+    Same mechanics as DevinAcpProvider; only the engine and auth differ
+    (it uses the GitHub Copilot CLI gh login; no windsurf_api_key needed).
     """
 
     id = "copilot_acp"
@@ -3158,10 +3162,10 @@ class CopilotAcpProvider(DevinAcpProvider):
 
 
 def _custom_acp_argv(command):
-    """起動コマンド文字列を argv に分解する。
+    """Split a launch command string into argv.
 
-    Windows の .cmd/.bat shim は直接 spawn できないため cmd /c 経由にする
-    (copilot.cmd 等と同じ対策)。
+    Windows .cmd/.bat shims cannot be spawned directly, so go through
+    cmd /c (the same workaround as for copilot.cmd and friends).
     """
     import shlex  # noqa: PLC0415
     try:
@@ -3181,13 +3185,13 @@ def _custom_acp_argv(command):
 
 
 class CustomAcpProvider(DevinAcpProvider):
-    """【ACP】任意の ACP 対応 CLI をチャットエンジンにする。
+    """[ACP] Uses any ACP-capable CLI as the chat engine.
 
-    エンドポイント欄=起動コマンド(例: `my-agent acp`)、
-    APIキー欄=セッションの作業ディレクトリ(cwd。省略時はホーム)。
-    認証は CLI 側のログインに委譲(authMethods が提示された場合のみ
-    先頭方式を best-effort で試行)。機構は DevinAcpProvider と同じ
-    (KASUGAI Canvas の【ACP】カスタムエージェントに相当)。
+    Endpoint field = launch command (e.g. `my-agent acp`);
+    API-key field = working directory of the session (cwd; home if empty).
+    Auth is delegated to the CLI's own login (only when authMethods is
+    offered, the first method is tried best-effort). Mechanics match
+    DevinAcpProvider (equivalent to KASUGAI Canvas's [ACP] custom agent).
     """
 
     id = "acp"
@@ -3206,7 +3210,7 @@ class CustomAcpProvider(DevinAcpProvider):
         skey = (self.ENGINE, command, cwd)
         s = _ACP_SESSIONS.get(skey)
         if s is not None and s._proc.poll() is not None:
-            s = None  # プロセスが死んでいたら作り直す
+            s = None  # recreate it if the process has died
         if s is None:
             s = devin_tasks.AcpSession(
                 cwd, exe=argv, mcp_servers=_acp_mcp_servers(),
@@ -3218,13 +3222,13 @@ class CustomAcpProvider(DevinAcpProvider):
 
 
 class ExternalAgentProvider(OpenAIProvider):
-    """【ブリッジ】任意のエージェント HTTP エンドポイントへ委譲する。
+    """[Bridge] Delegates to any agent HTTP endpoint.
 
     POST {endpoint} {"message", "system", "history", "model"?}
-      → {"reply": "..."} (reply/text/message/content のいずれか)。
-    KASUGAI Canvas のブリッジハブ /agent と同じ形式で、
-    hub の provider 振り分けは model 欄ではなく
-    body の "provider" 固定値は使わず直接プロバイダURLへ送る想定。
+      -> {"reply": "..."} (any of reply/text/message/content).
+    Same shape as the KASUGAI Canvas bridge hub /agent; the hub's provider
+    routing does not use the model field, and no fixed "provider" value is
+    put in the body -- requests go straight to the provider URL.
     """
 
     id = "agent"
@@ -3244,7 +3248,7 @@ class ExternalAgentProvider(OpenAIProvider):
         content = last.get("content")
         if isinstance(content, str):
             text = content
-        else:  # 画像付き等のマルチパート形式はテキスト部だけ結合
+        else:  # multipart (with images etc.): join the text parts only
             text = " ".join(
                 p.get("text", "") for p in (content or [])
                 if isinstance(p, dict))
@@ -3278,8 +3282,8 @@ class ExternalAgentProvider(OpenAIProvider):
         raise ApiError(f"Invalid agent response: {str(data)[:300]}")
 
     def append_exchange(self, msgs, turn, results):
-        # calls は常に空。応答 dict をそのまま積むと次の送信履歴を
-        # 壊すためテキストのみにする
+        # calls is always empty. Appending the response dict as-is would
+        # corrupt the next request history, so keep text only
         msgs.append({"role": "assistant",
                      "content": turn.get("text") or ""})
 
@@ -3296,7 +3300,7 @@ _PROVIDERS = {"openai": OpenAIProvider, "anthropic": AnthropicProvider,
 
 
 def get_provider(provider):
-    """プロバイダID → プロバイダインスタンス。"""
+    """Provider id -> provider instance."""
     try:
         return _PROVIDERS[provider]()
     except KeyError:
@@ -3304,14 +3308,14 @@ def get_provider(provider):
 
 
 def list_models(provider, base, key, timeout=30.0):
-    """プロバイダのエンドポイントから利用可能なモデルID一覧を返す。"""
+    """Return the model ids available at the provider endpoint."""
     return get_provider(provider).list_models(base, key, timeout)
 
 
 def list_model_infos(provider, base, key, timeout=30.0):
-    """モデル一覧をメタ情報付きで返す。
+    """Return the model list with metadata.
 
-    @returns [model_info()のdict, ...] (idでソート済み)
+    @returns [dict from model_info(), ...] (sorted by id)
     """
     entries = get_provider(provider).list_model_entries(base, key, timeout)
     return [model_info(e) for e in entries]
