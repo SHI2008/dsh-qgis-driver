@@ -74,6 +74,28 @@ Returns one background task's state. A finished task is returned once and then
 removed from the cache (`status` = `done` or `error`); a running task reports
 `status` = `running`.
 
+### Dedicated GIS tools
+
+| Tool | What it does |
+| --- | --- |
+| `qgis_list_layers` | List project layers (id, name, type, CRS, feature count, geometry). |
+| `qgis_layer_fields` | List a layer's fields (name, type, alias) — check this before writing expressions or edits. |
+| `qgis_list_layouts` | List print layout names. |
+| `qgis_list_algorithms` | List processing algorithms (optional keyword filter). |
+| `qgis_algorithm_help` | Show an algorithm's parameter names/types before running it. |
+| `qgis_run_processing` | Run a processing algorithm (spatial analysis). |
+| `qgis_query_features` | Query features by attribute expression; returns bounded JSON rows. |
+| `qgis_add_layer` | Load a file/service as a new project layer. |
+| `qgis_export_layer` | Export a vector layer to GPKG/GeoJSON/Shapefile/CSV. |
+| `qgis_render_map` | Offscreen-render the project map to PNG (returns a local image path). |
+| `qgis_export_layout` | Export a print layout to PNG/PDF (returns a local file path). |
+| `qgis_set_extent` | Set the map canvas extent (GUI sessions only). |
+| `qgis_zoom_to_layer` | Zoom the map canvas to a layer (GUI sessions only). |
+| `qgis_screenshot` | Capture the map canvas or the main window to PNG (GUI sessions only). |
+
+Image-returning tools write the PNG to a local temp file and return its path;
+open it with the `read_image` tool.
+
 ## Security
 
 - **Local mode** authenticates with the per-session bearer token from the registry file.

@@ -16,6 +16,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
   can use (`Authorization: Bearer <Key>`) instead of the per-session token.
   A non-loopback bind also drops the loopback Host/Origin guard. The bound
   host is now recorded in the registry JSON and shown in Connection Info.
+- DSH bundle: eight P0 daily-workflow tools — `qgis_layer_fields`,
+  `qgis_query_features`, `qgis_algorithm_help`, `qgis_add_layer`,
+  `qgis_export_layer`, `qgis_set_extent`, `qgis_zoom_to_layer` and
+  `qgis_screenshot` (canvas/main-window PNG path). The bundle now
+  registers 17 tools.
 
 ### Removed
 - The entire MCP surface: the `/mcp` Streamable HTTP endpoint and its

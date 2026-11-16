@@ -10,7 +10,10 @@
 //
 // Tools: execute_qgis_sync / submit_qgis_async / check_qgis_task (generic PyQGIS),
 // plus dedicated GIS tools: qgis_list_layers / qgis_list_layouts / qgis_list_algorithms /
-// qgis_run_processing / qgis_export_layout / qgis_render_map (image-returning).
+// qgis_run_processing / qgis_export_layout / qgis_render_map (image-returning),
+// and the P0 daily-workflow set: qgis_layer_fields / qgis_query_features /
+// qgis_algorithm_help / qgis_add_layer / qgis_export_layer / qgis_set_extent /
+// qgis_zoom_to_layer / qgis_screenshot.
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -127,6 +130,19 @@ const stringOutput = {
   schema: { type: 'string' },
   render: (_args, value) => [{ type: 'text', text: value }],
 }
+
+/** Python helper: resolve a layer by id or name (raises ValueError when missing). */
+const PY_FIND_LAYER = [
+  'from qgis.core import QgsProject',
+  'def _dsh_layer(name):',
+  '    p = QgsProject.instance()',
+  '    if name in p.mapLayers():',
+  '        return p.mapLayer(name)',
+  '    for lid, lay in p.mapLayers().items():',
+  '        if lay.name() == name:',
+  '            return lay',
+  "    raise ValueError('layer not found: ' + str(name))",
+]
 
 export function apply(ctx, config = {}) {
   const disposers = []
@@ -479,6 +495,394 @@ export function apply(ctx, config = {}) {
         image_path: writeTempFile(result.image_base64, 'png'),
         width: result.width,
         height: result.height,
+        hint: '使用 read_image 工具查看该图片路径',
+      })
+    },
+  }))
+
+  // ---- P0 daily-workflow tools ----
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_layer_fields',
+    description:
+      '列出指定图层的字段（名称、类型、别名）。写表达式、修改属性、字段计算前先用它确认字段名。' +
+      'layer 可传图层 id 或图层名称。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或图层名称。' },
+      },
+      required: ['layer'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const name = typeof args?.layer === 'string' ? args.layer.trim() : ''
+      if (!name) throw new Error('参数 layer 不能为空')
+      const code = [
+        ...PY_FIND_LAYER,
+        `lyr = _dsh_layer(${JSON.stringify(name)})`,
+        'fields = []',
+        'for f in lyr.fields():',
+        "    fields.append({'name': f.name(), 'type': f.typeName(), 'alias': f.alias()})",
+        "result = {'layer': lyr.name(), 'fields': fields}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_query_features',
+    description:
+      '按属性表达式查询图层要素，返回结构化行（默认 20 行、最多 200 行）。' +
+      'expression 为 QGIS 表达式（如 "pop" > 1000），留空表示全部要素；' +
+      'fields 限定返回字段（留空返回全部，几何默认不返回）。只是读取，不修改数据。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        expression: { type: 'string', description: 'QGIS 属性过滤表达式，留空 = 全部要素。' },
+        fields: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '只返回这些字段（留空 = 全部字段）。',
+        },
+        limit: { type: 'integer', description: '最多返回行数，默认 20，上限 200。' },
+        include_geometry: { type: 'boolean', description: '是否返回 WKT 几何，默认 false。' },
+      },
+      required: ['layer'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const name = typeof args?.layer === 'string' ? args.layer.trim() : ''
+      if (!name) throw new Error('参数 layer 不能为空')
+      const limit = Number.isInteger(args?.limit) && args.limit > 0 ? Math.min(args.limit, 200) : 20
+      const fields = Array.isArray(args?.fields) ? args.fields.filter((f) => typeof f === 'string') : []
+      const expr = typeof args?.expression === 'string' ? args.expression : ''
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsFeatureRequest',
+        `lyr = _dsh_layer(${JSON.stringify(name)})`,
+        `expr = ${JSON.stringify(expr)}`,
+        `wanted = ${JSON.stringify(fields)}`,
+        `limit = ${limit}`,
+        `want_geom = ${args?.include_geometry === true ? 'True' : 'False'}`,
+        'req = QgsFeatureRequest()',
+        'if expr:',
+        '    req.setFilterExpression(expr)',
+        'req.setLimit(limit + 1)',
+        'names = [f.name() for f in lyr.fields()]',
+        'if wanted:',
+        '    names = [n for n in names if n in set(wanted)]',
+        'rows = []',
+        'truncated = False',
+        'for feat in lyr.getFeatures(req):',
+        '    if len(rows) >= limit:',
+        '        truncated = True',
+        '        break',
+        '    row = {}',
+        '    for n in names:',
+        '        v = feat[n]',
+        '        row[n] = v if isinstance(v, (str, int, float, bool)) or v is None else str(v)',
+        '    if want_geom:',
+        '        g = feat.geometry()',
+        "        row['__geometry_wkt__'] = g.asWkt() if g is not None and not g.isEmpty() else None",
+        '    rows.append(row)',
+        "result = {'layer': lyr.name(), 'count': len(rows), 'truncated': truncated, 'rows': rows}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_algorithm_help',
+    description:
+      '查看一个处理算法的参数定义（参数名、说明、类型、是否可选）。' +
+      '调用 qgis_run_processing 前先用它确认参数名，避免盲猜导致失败。',
+    parameters: {
+      type: 'object',
+      properties: {
+        algorithm: { type: 'string', description: '算法 id，如 native:buffer。' },
+      },
+      required: ['algorithm'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const alg = typeof args?.algorithm === 'string' ? args.algorithm.trim() : ''
+      if (!alg) throw new Error('参数 algorithm 不能为空')
+      const code = [
+        'from qgis.core import QgsApplication, QgsProcessingParameterDefinition',
+        'from qgis.analysis import QgsNativeAlgorithms',
+        `alg_id = ${JSON.stringify(alg)}`,
+        'reg = QgsApplication.instance().processingRegistry()',
+        'if not reg.algorithms():',
+        '    reg.addProvider(QgsNativeAlgorithms(reg))',
+        'alg = reg.algorithmById(alg_id)',
+        'if alg is None:',
+        "    raise ValueError('algorithm not found: ' + alg_id)",
+        'flag_optional = getattr(QgsProcessingParameterDefinition, "FlagOptional", 0)',
+        'params = []',
+        'for p in alg.parameterDefinitions():',
+        '    try:',
+        '        optional = bool(p.flags() & int(flag_optional))',
+        '    except Exception:',
+        '        optional = None',
+        "    params.append({'name': p.name(), 'description': p.description(),",
+        "                   'type': type(p).__name__, 'optional': optional})",
+        "result = {'id': alg.id(), 'name': alg.displayName(), 'parameters': params}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_add_layer',
+    description:
+      '把一个数据源加载为图层并加入当前工程。path 为本地文件（GeoPackage/Shapefile/GeoJSON/GeoTIFF 等）' +
+      '或服务 URI（provider 为 xyz/wms 时）；provider 默认 auto（先矢量后栅格）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '文件路径或服务 URI。' },
+        name: { type: 'string', description: '图层名称，默认取文件名。' },
+        provider: {
+          type: 'string',
+          enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'],
+          description: '数据提供者，默认 auto。',
+        },
+      },
+      required: ['path'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const p = typeof args?.path === 'string' ? args.path.trim() : ''
+      if (!p) throw new Error('参数 path 不能为空')
+      const nm = typeof args?.name === 'string' ? args.name : ''
+      const prov = typeof args?.provider === 'string' && args.provider ? args.provider : 'auto'
+      const code = [
+        'import os',
+        'from qgis.core import QgsProject, QgsVectorLayer, QgsRasterLayer',
+        `path = ${JSON.stringify(p)}`,
+        `name = ${JSON.stringify(nm)}`,
+        `prov = ${JSON.stringify(prov)}`,
+        "lname = name or os.path.splitext(os.path.basename(path.split('|')[0]))[0] or 'layer'",
+        'layer = None',
+        "if prov in ('', 'auto'):",
+        "    for pv, cls in (('ogr', QgsVectorLayer), ('gdal', QgsRasterLayer)):",
+        '        cand = cls(path, lname, pv)',
+        '        if cand.isValid():',
+        '            layer = cand',
+        '            break',
+        'else:',
+        "    cls = QgsRasterLayer if prov in ('gdal', 'xyz', 'wms') else QgsVectorLayer",
+        '    cand = cls(path, lname, prov)',
+        '    if cand.isValid():',
+        '        layer = cand',
+        'if layer is None:',
+        "    raise ValueError('cannot load layer: ' + path)",
+        'QgsProject.instance().addMapLayer(layer)',
+        "t = getattr(layer.type(), 'name', str(layer.type()))",
+        "info = {'id': layer.id(), 'name': layer.name(), 'type': t,",
+        "        'crs': layer.crs().authid() if layer.crs().isValid() else None}",
+        "if hasattr(layer, 'featureCount'):",
+        '    try:',
+        "        info['feature_count'] = layer.featureCount()",
+        '    except Exception:',
+        '        pass',
+        'result = info',
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_export_layer',
+    description:
+      '把矢量图层导出为文件（GPKG/GeoJSON/Shapefile/CSV）。path 为输出绝对路径，' +
+      'format 留空时按扩展名推断。只支持矢量图层（栅格请用 qgis_run_processing/gdal）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        path: { type: 'string', description: '输出文件绝对路径。' },
+        format: {
+          type: 'string',
+          enum: ['gpkg', 'geojson', 'shp', 'csv'],
+          description: '输出格式，留空按扩展名推断。',
+        },
+      },
+      required: ['layer', 'path'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const name = typeof args?.layer === 'string' ? args.layer.trim() : ''
+      const out = typeof args?.path === 'string' ? args.path.trim() : ''
+      if (!name) throw new Error('参数 layer 不能为空')
+      if (!out) throw new Error('参数 path 不能为空')
+      const fmt = typeof args?.format === 'string' ? args.format : ''
+      const code = [
+        ...PY_FIND_LAYER,
+        'import os',
+        'from qgis.core import QgsProject, QgsVectorLayer, QgsVectorFileWriter',
+        `lyr = _dsh_layer(${JSON.stringify(name)})`,
+        `out = ${JSON.stringify(out)}`,
+        `fmt = ${JSON.stringify(fmt)}`,
+        'if not isinstance(lyr, QgsVectorLayer):',
+        "    raise ValueError('only vector layers are supported (use qgis_run_processing for raster export)')",
+        "drivers = {'gpkg': 'GPKG', 'geojson': 'GeoJSON', 'shp': 'ESRI Shapefile', 'csv': 'CSV'}",
+        "fmt = fmt or os.path.splitext(out)[1].lstrip('.').lower()",
+        'drv = drivers.get(fmt)',
+        'if not drv:',
+        "    raise ValueError('unsupported format: ' + str(fmt))",
+        'opts = QgsVectorFileWriter.SaveVectorOptions()',
+        'opts.driverName = drv',
+        "opts.fileEncoding = 'UTF-8'",
+        'ret = QgsVectorFileWriter.writeAsVectorFormatV3(',
+        '    lyr, out, QgsProject.instance().transformContext(), opts)',
+        'err = ret[0]',
+        'msg = ret[1]',
+        'if int(err) != 0:',
+        "    raise RuntimeError('export failed: ' + str(msg))",
+        "result = {'layer': lyr.name(), 'path': out, 'format': fmt,",
+        "          'size_bytes': os.path.getsize(out)}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_set_extent',
+    description:
+      '把 QGIS 地图画布范围设置为给定矩形（可指定坐标系，自动重投影到画布 CRS）。' +
+      '仅限 QGIS GUI 会话（需要地图画布）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        xmin: { type: 'number', description: '最小 X。' },
+        ymin: { type: 'number', description: '最小 Y。' },
+        xmax: { type: 'number', description: '最大 X。' },
+        ymax: { type: 'number', description: '最大 Y。' },
+        crs: { type: 'string', description: '矩形所用坐标系（如 EPSG:4326），留空按画布 CRS。' },
+      },
+      required: ['xmin', 'ymin', 'xmax', 'ymax'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const nums = ['xmin', 'ymin', 'xmax', 'ymax'].map((k) => Number(args?.[k]))
+      if (nums.some((v) => !Number.isFinite(v))) throw new Error('xmin/ymin/xmax/ymax 必须是数字')
+      const [xmin, ymin, xmax, ymax] = nums
+      if (xmin >= xmax || ymin >= ymax) throw new Error('范围无效：要求 xmin < xmax 且 ymin < ymax')
+      const crs = typeof args?.crs === 'string' ? args.crs : ''
+      const code = [
+        'from qgis.core import QgsRectangle, QgsProject, QgsCoordinateReferenceSystem, QgsCoordinateTransform',
+        `rect = QgsRectangle(${xmin}, ${ymin}, ${xmax}, ${ymax})`,
+        'canvas = iface.mapCanvas() if iface is not None else None',
+        'if canvas is None:',
+        "    raise RuntimeError('no map canvas：该工具需要在 QGIS GUI 会话中使用')",
+        `src = ${JSON.stringify(crs)}`,
+        'dst = canvas.mapSettings().destinationCrs()',
+        'if src and dst.isValid():',
+        '    sc = QgsCoordinateReferenceSystem(src)',
+        '    if sc.isValid() and sc != dst:',
+        '        tr = QgsCoordinateTransform(sc, dst, QgsProject.instance())',
+        '        rect = tr.transformBoundingBox(rect)',
+        'canvas.setExtent(rect)',
+        'canvas.refresh()',
+        "result = {'extent': [rect.xMinimum(), rect.yMinimum(), rect.xMaximum(), rect.yMaximum()],",
+        "          'crs': dst.authid() if dst.isValid() else None}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_zoom_to_layer',
+    description:
+      '把地图画布缩放到指定图层的范围（自动重投影到画布 CRS）。仅限 QGIS GUI 会话。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+      },
+      required: ['layer'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const name = typeof args?.layer === 'string' ? args.layer.trim() : ''
+      if (!name) throw new Error('参数 layer 不能为空')
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsProject, QgsCoordinateTransform',
+        `lyr = _dsh_layer(${JSON.stringify(name)})`,
+        'canvas = iface.mapCanvas() if iface is not None else None',
+        'if canvas is None:',
+        "    raise RuntimeError('no map canvas：该工具需要在 QGIS GUI 会话中使用')",
+        'dst = canvas.mapSettings().destinationCrs()',
+        'ext = lyr.extent()',
+        'if lyr.crs().isValid() and dst.isValid() and lyr.crs() != dst:',
+        '    tr = QgsCoordinateTransform(lyr.crs(), dst, QgsProject.instance())',
+        '    ext = tr.transformBoundingBox(ext)',
+        'canvas.setExtent(ext)',
+        'canvas.refresh()',
+        "result = {'layer': lyr.name(),",
+        "          'extent': [ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum()],",
+        "          'crs': dst.authid() if dst.isValid() else None}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_screenshot',
+    description:
+      '截取 QGIS 当前地图画布或主窗口，返回本地 PNG 文件路径（用 read_image 查看）。' +
+      'target=canvas 为地图画布，target=mainwindow 为整个 QGIS 主窗口。仅限 QGIS GUI 会话。',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          enum: ['canvas', 'mainwindow'],
+          description: '截图目标，默认 canvas。',
+        },
+      },
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const target = args?.target === 'mainwindow' ? 'mainwindow' : 'canvas'
+      const code = [
+        'import base64',
+        'from qgis.PyQt.QtCore import QBuffer, QIODevice',
+        'def _dsh_png_b64(obj):',
+        '    buf = QBuffer(); buf.open(QIODevice.OpenModeFlag.WriteOnly)',
+        "    ok = obj.save(buf, 'PNG')",
+        '    if not ok:',
+        "        raise RuntimeError('PNG encode failed')",
+        '    data = bytes(buf.data()); buf.close()',
+        '    return base64.b64encode(data).decode(), len(data)',
+        `target = ${JSON.stringify(target)}`,
+        "if target == 'mainwindow':",
+        '    if iface is None:',
+        "        raise RuntimeError('no iface：该工具需要在 QGIS GUI 会话中使用')",
+        '    pm = iface.mainWindow().grab()',
+        '    b64, n = _dsh_png_b64(pm)',
+        '    w, h = pm.width(), pm.height()',
+        'else:',
+        '    canvas = iface.mapCanvas() if iface is not None else None',
+        '    if canvas is None:',
+        "        raise RuntimeError('no map canvas：该工具需要在 QGIS GUI 会话中使用')",
+        '    img = canvas.grab().toImage()',
+        '    b64, n = _dsh_png_b64(img)',
+        '    w, h = img.width(), img.height()',
+        "result = {'image_base64': b64, 'width': w, 'height': h, 'target': target, 'size_bytes': n}",
+      ].join('\n')
+      const result = await runQgisSync(code, exec?.signal)
+      if (!result || typeof result.image_base64 !== 'string') return asText(result)
+      return asText({
+        image_path: writeTempFile(result.image_base64, 'png'),
+        width: result.width,
+        height: result.height,
+        target: result.target,
+        size_bytes: result.size_bytes,
         hint: '使用 read_image 工具查看该图片路径',
       })
     },
