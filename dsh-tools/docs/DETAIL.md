@@ -92,9 +92,42 @@ removed from the cache (`status` = `done` or `error`); a running task reports
 | `qgis_set_extent` | Set the map canvas extent (GUI sessions only). |
 | `qgis_zoom_to_layer` | Zoom the map canvas to a layer (GUI sessions only). |
 | `qgis_screenshot` | Capture the map canvas or the main window to PNG (GUI sessions only). |
+| `qgis_project_info` | Project overview: file, title, CRS, extent, layers, layouts, QGIS version. |
+| `qgis_select_features` | Select features in a layer by attribute expression. |
+| `qgis_selected_features` | Read the currently selected features' attributes. |
+| `qgis_add_feature` | Add one feature to an editable layer (optional WKT geometry). |
+| `qgis_update_features` | Bulk-update attributes by expression (requires `confirm`). |
+| `qgis_delete_features` | Delete features by expression (requires `confirm`). |
+| `qgis_set_layer_visibility` | Show/hide a layer in the layer tree. |
+| `qgis_remove_layer` | Remove a layer from the project (source file untouched). |
+| `qgis_save_project` | Save the current project (`.qgs`/`.qgz`). |
+| `qgis_layout_items` | List a print layout's items (id/type/uuid). |
+| `qgis_set_project_crs` | Change the project CRS (does not reproject existing layers). |
+| `qgis_set_layer_style` | Set a layer's base color and opacity. |
+| `qgis_plugin_status` | Diagnostic: QGIS version and whether the plugin is loaded/active. |
+
+Rarely-used and destructive tools (`qgis_add_feature`, `qgis_update_features`,
+`qgis_delete_features`, `qgis_save_project`, `qgis_layout_items`,
+`qgis_set_project_crs`, `qgis_set_layer_style`, `qgis_plugin_status`) are registered
+with `deferLoading: true`, so their descriptions load on demand.
 
 Image-returning tools write the PNG to a local temp file and return its path;
 open it with the `read_image` tool.
+
+## Autostart (local)
+
+When no live QGIS instance is found and the target is local (not a configured
+remote `host:port`), the bundle launches QGIS via the bundled
+`scripts/start-qgis.cmd`, then waits for it to publish its registry file.
+
+The launcher: locates `qgis-bin.exe`; syncs this repo's `qgis-plugin/` into the
+QGIS profile plugin directory (skip with `QGIS_LIVE_AUTOSTART_SYNC=0`); enables the
+plugin by writing `dsh_qgis_driver=true` into the QGIS4.ini `[PythonPlugins]`
+section (QGIS 4 stores this in the INI, not the Windows registry); then starts QGIS.
+
+Override the command via config `autostart.command` or env `QGIS_LIVE_AUTOSTART_CMD`;
+tune the wait with `autostart.timeoutMs` (default 90000) or
+`QGIS_LIVE_AUTOSTART_TIMEOUT_MS`.
 
 ## Security
 

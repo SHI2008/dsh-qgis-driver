@@ -19,8 +19,20 @@ Versions are kept in sync with `version` in `metadata.txt`.
 - DSH bundle: eight P0 daily-workflow tools — `qgis_layer_fields`,
   `qgis_query_features`, `qgis_algorithm_help`, `qgis_add_layer`,
   `qgis_export_layer`, `qgis_set_extent`, `qgis_zoom_to_layer` and
-  `qgis_screenshot` (canvas/main-window PNG path). The bundle now
-  registers 17 tools.
+  `qgis_screenshot` (canvas/main-window PNG path).
+- DSH bundle: thirteen P1/P2 tools — `qgis_project_info`, `qgis_select_features`,
+  `qgis_selected_features`, `qgis_add_feature`, `qgis_update_features`,
+  `qgis_delete_features`, `qgis_set_layer_visibility`, `qgis_remove_layer`,
+  `qgis_save_project`, `qgis_layout_items`, `qgis_set_project_crs`,
+  `qgis_set_layer_style`, `qgis_plugin_status`. Eight of them use
+  `deferLoading: true` (destructive or rarely used). The bundle now
+  registers 30 tools.
+- DSH bundle autostart: when no live QGIS is found locally, the bundle
+  launches QGIS via the bundled `scripts/start-qgis.cmd` (locates
+  `qgis-bin.exe`, syncs the plugin into the QGIS profile, enables it in
+  QGIS4.ini `[PythonPlugins]`, then starts QGIS) and waits for the registry
+  file. Override with config `autostart.command`/`autostart.timeoutMs` or
+  `QGIS_LIVE_AUTOSTART_CMD`/`QGIS_LIVE_AUTOSTART_TIMEOUT_MS`.
 
 ### Removed
 - The entire MCP surface: the `/mcp` Streamable HTTP endpoint and its

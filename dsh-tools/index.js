@@ -8,15 +8,23 @@
 //      vars QGIS_LIVE_REMOTE_HOST / QGIS_LIVE_REMOTE_PORT / QGIS_LIVE_REMOTE_KEY
 //      (the Key is the remote QGIS's QGIS_LIVE_API_KEY).
 //
-// Tools: execute_qgis_sync / submit_qgis_async / check_qgis_task (generic PyQGIS),
-// plus dedicated GIS tools: qgis_list_layers / qgis_list_layouts / qgis_list_algorithms /
-// qgis_run_processing / qgis_export_layout / qgis_render_map (image-returning),
-// and the P0 daily-workflow set: qgis_layer_fields / qgis_query_features /
-// qgis_algorithm_help / qgis_add_layer / qgis_export_layer / qgis_set_extent /
-// qgis_zoom_to_layer / qgis_screenshot.
+// Tools: 3 generic PyQGIS tools (execute_qgis_sync / submit_qgis_async /
+// check_qgis_task), 6 read/analysis tools (list_layers / list_layouts /
+// list_algorithms / run_processing / export_layout / render_map), 8 P0 daily-workflow
+// tools (layer_fields / query_features / algorithm_help / add_layer / export_layer /
+// set_extent / zoom_to_layer / screenshot) and 13 P1/P2 tools (selection, feature
+// CRUD, layer visibility/remove, project info/save/CRS, layout items, style, plugin
+// status). P1/P2 tools marked `deferLoading: true` only load their description when
+// the model needs them, keeping the first-turn prompt small.
+//
+// Optional autostart: when no local QGIS instance is found, the bundle can launch one
+// from `config.autostart.command` (cordis.patch.yml) or QGIS_LIVE_AUTOSTART_CMD, then
+// poll the registry until the plugin reports ready.
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
 
 export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
@@ -44,7 +52,7 @@ function resolveRemoteTarget(config) {
 }
 
 /** Find a live QGIS instance: newest registry files first, health-probed. */
-async function findActiveQgis() {
+async function findActiveQgis(startedAt = 0) {
   let names
   try {
     names = fs.readdirSync(REGISTRY_DIR)
@@ -57,7 +65,7 @@ async function findActiveQgis() {
     .map((p) => {
       try { return { p, mtime: fs.statSync(p).mtimeMs } } catch { return null }
     })
-    .filter(Boolean)
+    .filter((c) => c && c.mtime >= startedAt - 2000)
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, 3)
 
@@ -86,6 +94,64 @@ async function findActiveQgis() {
   throw new Error(
     '未找到活跃的 dsh-qgis-driver 实例（请确认 QGIS 正在运行且 dsh_qgis_driver 插件已启动，' +
     '或配置远程连接 QGIS_LIVE_REMOTE_HOST/PORT/KEY）')
+}
+
+const DEFAULT_AUTOSTART_TIMEOUT_MS = 90000
+const DEFAULT_AUTOSTART_SCRIPT = fileURLToPath(new URL('./scripts/start-qgis.cmd', import.meta.url))
+
+/** Autostart config: `config.autostart` ({command, timeoutMs, env}) or QGIS_LIVE_AUTOSTART_CMD. */
+function resolveAutostart(config) {
+  const a = config?.autostart
+  if (a === false) return null
+  if (a && typeof a === 'object' && typeof a.command === 'string' && a.command.trim()) {
+    const timeoutMs = Number(a.timeoutMs)
+    return {
+      command: a.command.trim(),
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_AUTOSTART_TIMEOUT_MS,
+      env: a.env && typeof a.env === 'object' ? a.env : {},
+    }
+  }
+  const envCommand = String(process.env.QGIS_LIVE_AUTOSTART_CMD || '').trim()
+  if (envCommand) return { command: envCommand, timeoutMs: DEFAULT_AUTOSTART_TIMEOUT_MS, env: {} }
+  // Ship-with-the-bundle launcher: present → autostart is on by default.
+  try {
+    if (fs.existsSync(DEFAULT_AUTOSTART_SCRIPT)) {
+      return { command: `"${DEFAULT_AUTOSTART_SCRIPT}"`, timeoutMs: 120000, env: {} }
+    }
+  } catch {
+    /* ignore */
+  }
+  return null
+}
+
+/** Launch the start command detached, then wait for a fresh registry entry. */
+async function autostartQgis(auto) {
+  const startedAt = Date.now()
+  try {
+    const child = spawn(auto.command, {
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, ...auto.env },
+      windowsHide: false,
+    })
+    child.unref()
+  } catch (e) {
+    throw new Error(`QGIS 自动启动失败（${auto.command}）：${e.message}`)
+  }
+  const deadline = Date.now() + auto.timeoutMs
+  let lastError = null
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    try {
+      return await findActiveQgis(startedAt)
+    } catch (e) {
+      lastError = e
+    }
+  }
+  throw new Error(
+    `已执行自动启动命令，但 ${Math.round(auto.timeoutMs / 1000)} 秒内没有检测到 QGIS dsh_qgis_driver 实例` +
+    `（命令：${auto.command}）。${lastError ? `最后错误：${lastError.message}` : ''}`)
 }
 
 /** Call one REST endpoint and unwrap { result } / { error }. */
@@ -165,7 +231,32 @@ export function apply(ctx, config = {}) {
       }
       return remote
     }
-    return findActiveQgis()
+    try {
+      return await findActiveQgis()
+    } catch (localError) {
+      const auto = resolveAutostart(config)
+      if (!auto) throw localError
+      return await autostartQgis(auto)
+    }
+  }
+
+  /** Read a required string argument. */
+  function needStr(args, key) {
+    const v = args?.[key]
+    if (typeof v !== 'string' || !v.trim()) throw new Error(`参数 ${key} 不能为空`)
+    return v.trim()
+  }
+
+  /** Parse an integer argument with bounds and a default. */
+  function clampInt(value, dflt, min, max) {
+    const n = Number(value)
+    if (!Number.isFinite(n) || !Number.isInteger(n)) return dflt
+    return Math.min(max, Math.max(min, n))
+  }
+
+  /** Register one tool with the standard string output schema. */
+  function registerTool(def) {
+    disposers.push(ctx.tools.register({ ...def, output: stringOutput }))
   }
 
   /** Run one PyQGIS snippet synchronously (main thread) and unwrap its `result`. */
@@ -887,6 +978,473 @@ export function apply(ctx, config = {}) {
       })
     },
   }))
+
+
+  // ------------------------------------------------------------------
+  // P1: selection / feature CRUD / layer ops / project / layouts
+  // ------------------------------------------------------------------
+
+  registerTool({
+    name: 'qgis_select_features',
+    description:
+      '在图层中按属性表达式选中要素（mode：replace 替换、add 追加、remove 排除），返回选中数量。' +
+      '只改变选择状态，不修改数据；expression 留空表示全部要素。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        expression: { type: 'string', description: 'QGIS 属性表达式，留空 = 全部要素。' },
+        mode: { type: 'string', enum: ['replace', 'add', 'remove'], description: '选择模式，默认 replace。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const expr = typeof args?.expression === 'string' ? args.expression : ''
+      const mode = ['add', 'remove'].includes(args?.mode) ? args.mode : 'replace'
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsVectorLayer',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `expr = ${JSON.stringify(expr)}`,
+        `mode = ${JSON.stringify(mode)}`,
+        'sb = getattr(QgsVectorLayer, "SelectBehavior", None)',
+        'if sb is not None:',
+        '    behavior = {"replace": sb.SetSelection, "add": sb.AddToSelection, "remove": sb.RemoveFromSelection}[mode]',
+        'else:',
+        '    behavior = {"replace": QgsVectorLayer.SetSelection, "add": QgsVectorLayer.AddToSelection, "remove": QgsVectorLayer.RemoveFromSelection}[mode]',
+        'if expr:',
+        '    lyr.selectByExpression(expr, behavior)',
+        'elif mode == "remove":',
+        '    lyr.removeSelection()',
+        'else:',
+        '    lyr.selectAll()',
+        "result = {'layer': lyr.name(), 'selected': lyr.selectedFeatureCount(), 'mode': mode}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_selected_features',
+    description:
+      '返回图层当前选中要素的行（fid + 属性，默认 20 行、上限 200）。先用 qgis_select_features 选中。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        limit: { type: 'integer', description: '最多返回行数，默认 20，上限 200。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const limit = clampInt(args?.limit, 20, 1, 200)
+      const code = [
+        ...PY_FIND_LAYER,
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `limit = ${limit}`,
+        'names = [f.name() for f in lyr.fields()]',
+        'rows = []',
+        'for f in lyr.selectedFeatures():',
+        '    if len(rows) >= limit:',
+        '        break',
+        '    rows.append({' + '"fid": f.id(), **{n: (None if f[n] is None else str(f[n])) for n in names}})',
+        "result = {'layer': lyr.name(), 'selected': lyr.selectedFeatureCount(), 'fields': names, 'rows': rows}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_add_feature',
+    deferLoading: true,
+    description:
+      '向可编辑图层新增一个要素：values 为 {字段名: 值}，可选 geometry_wkt 指定几何（WKT）。' +
+      '会临时进入编辑模式并提交；失败时返回原因。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        values: { type: 'object', description: '字段名到值的映射。', additionalProperties: true },
+        geometry_wkt: { type: 'string', description: '可选 WKT 几何，例如 POINT(116 39)。' },
+      },
+      required: ['layer', 'values'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const wkt = typeof args?.geometry_wkt === 'string' ? args.geometry_wkt : ''
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsFeature, QgsGeometry',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        'import json',
+        `vals = ${pyJson(args?.values)}`,
+        `wkt = ${JSON.stringify(wkt)}`,
+        'if not lyr.isEditable() and not lyr.startEditing():',
+        "    raise RuntimeError('cannot start editing: ' + lyr.name())",
+        'f = QgsFeature(lyr.fields())',
+        'if wkt:',
+        '    g = QgsGeometry.fromWkt(wkt)',
+        '    if g is None or g.isEmpty():',
+        "        raise ValueError('invalid geometry_wkt')",
+        '    f.setGeometry(g)',
+        'for k, v in vals.items():',
+        '    i = lyr.fields().indexFromName(k)',
+        '    if i < 0:',
+        "        raise ValueError('unknown field: ' + str(k))",
+        '    f.setAttribute(i, v)',
+        'ok = lyr.addFeature(f)',
+        'if not lyr.commitChanges():',
+        "    raise RuntimeError('commitChanges failed: ' + str(lyr.commitErrors()))",
+        "result = {'added': bool(ok), 'feature_id': f.id(), 'count': lyr.featureCount(), 'layer': lyr.name()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_update_features',
+    deferLoading: true,
+    description:
+      '按表达式批量修改要素属性：values 为 {字段名: 新值}。confirmation 必须为 true 才会执行；' +
+      '单次最多 5000 个要素。返回修改数量。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        expression: { type: 'string', description: '要修改的要素表达式（必填）。' },
+        values: { type: 'object', description: '字段名到新值的映射。', additionalProperties: true },
+        confirm: { type: 'boolean', description: '必须为 true，确认执行写操作。' },
+        limit: { type: 'integer', description: '最多修改数量，默认 1000，上限 5000。' },
+      },
+      required: ['layer', 'expression', 'values', 'confirm'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const expr = needStr(args, 'expression')
+      if (args?.confirm !== true) throw new Error('写操作需要 confirm=true')
+      const limit = clampInt(args?.limit, 1000, 1, 5000)
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsFeatureRequest',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `expr = ${JSON.stringify(expr)}`,
+        'import json',
+        `vals = ${pyJson(args?.values)}`,
+        `limit = ${limit}`,
+        'req = QgsFeatureRequest().setFilterExpression(expr)',
+        'ids = [f.id() for f in lyr.getFeatures(req)]',
+        'if len(ids) > limit:',
+        "    raise RuntimeError('matched ' + str(len(ids)) + ' features > limit ' + str(limit) + '; refine the expression')",
+        'fields = lyr.fields()',
+        'for k in vals:',
+        '    if fields.indexFromName(k) < 0:',
+        "        raise ValueError('unknown field: ' + str(k))",
+        'if not lyr.isEditable() and not lyr.startEditing():',
+        "    raise RuntimeError('cannot start editing: ' + lyr.name())",
+        'for fid in ids:',
+        '    for k, v in vals.items():',
+        '        lyr.changeAttributeValue(fid, fields.indexFromName(k), v)',
+        'if not lyr.commitChanges():',
+        "    raise RuntimeError('commitChanges failed: ' + str(lyr.commitErrors()))",
+        "result = {'updated': len(ids), 'layer': lyr.name(), 'count': lyr.featureCount()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_delete_features',
+    deferLoading: true,
+    description:
+      '按表达式删除要素。confirm 必须为 true；单次最多 5000 个。返回删除数量。删除不可撤销。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        expression: { type: 'string', description: '要删除的要素表达式（必填）。' },
+        confirm: { type: 'boolean', description: '必须为 true，确认执行删除。' },
+        limit: { type: 'integer', description: '最多删除数量，默认 1000，上限 5000。' },
+      },
+      required: ['layer', 'expression', 'confirm'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const expr = needStr(args, 'expression')
+      if (args?.confirm !== true) throw new Error('删除操作需要 confirm=true')
+      const limit = clampInt(args?.limit, 1000, 1, 5000)
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsFeatureRequest',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `expr = ${JSON.stringify(expr)}`,
+        `limit = ${limit}`,
+        'req = QgsFeatureRequest().setFilterExpression(expr)',
+        'ids = [f.id() for f in lyr.getFeatures(req)]',
+        'if len(ids) > limit:',
+        "    raise RuntimeError('matched ' + str(len(ids)) + ' features > limit ' + str(limit) + '; refine the expression')",
+        'if not lyr.isEditable() and not lyr.startEditing():',
+        "    raise RuntimeError('cannot start editing: ' + lyr.name())",
+        'ok = lyr.deleteFeatures(ids)',
+        'if not lyr.commitChanges():',
+        "    raise RuntimeError('commitChanges failed: ' + str(lyr.commitErrors()))",
+        "result = {'deleted': len(ids), 'ok': bool(ok), 'layer': lyr.name(), 'count': lyr.featureCount()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_set_layer_visibility',
+    description: '设置图层在图层树中的可见性（true/false）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        visible: { type: 'boolean', description: '是否可见。' },
+      },
+      required: ['layer', 'visible'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const visible = args?.visible !== false
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsProject',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `visible = ${visible ? 'True' : 'False'}`,
+        'node = QgsProject.instance().layerTreeRoot().findLayer(lyr.id())',
+        'if node is not None:',
+        '    node.setItemVisibilityChecked(visible)',
+        'lyr.triggerRepaint()',
+        "result = {'layer': lyr.name(), 'visible': visible, 'tree_node_found': node is not None}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_remove_layer',
+    deferLoading: true,
+    description: '从当前工程移除一个图层（不删除源文件）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import QgsProject',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        'lid = lyr.id()',
+        'lname = lyr.name()',
+        'QgsProject.instance().removeMapLayer(lid)',
+        "result = {'removed': lid, 'name': lname, 'remaining': len(QgsProject.instance().mapLayers())}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_project_info',
+    description:
+      '返回当前工程概况：文件路径、标题、坐标系、范围、图层列表（id/名称/类型）、打印布局、QGIS 版本。',
+    parameters: { type: 'object', properties: {} },
+    async execute(_args, exec) {
+      const code = [
+        'from qgis.core import Qgis, QgsProject',
+        'p = QgsProject.instance()',
+        'mgr = p.layoutManager()',
+        'layouts = [l.name() for l in mgr.printLayouts()] if mgr is not None else []',
+        'ext = p.extent() if hasattr(p, "extent") else None',
+        'result = {',
+        "    'file': p.fileName() or None,",
+        "    'title': p.title() or '',",
+        "    'crs': p.crs().authid(),",
+        "    'crs_description': p.crs().description(),",
+        "    'extent': [ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum()] if ext is not None and not ext.isNull() else None,",
+        "    'layer_count': len(p.mapLayers()),",
+        "    'layers': [{'id': lid, 'name': lay.name(), 'type': str(getattr(lay.type(), 'name', ''))} for lid, lay in list(p.mapLayers().items())[:100]],",
+        "    'layouts': layouts,",
+        "    'qgis_version': Qgis.QGIS_VERSION,",
+        '}',
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_save_project',
+    deferLoading: true,
+    description: '保存当前工程；path 留空则保存到已有工程文件，未保存过的工程必须提供 path。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '可选的工程输出路径（.qgs/.qgz）。' },
+      },
+    },
+    async execute(args, exec) {
+      const pathArg = typeof args?.path === 'string' ? args.path : ''
+      const code = [
+        'from qgis.core import QgsProject',
+        'p = QgsProject.instance()',
+        `target = ${JSON.stringify(pathArg)} or p.fileName()`,
+        'if not target:',
+        "    raise ValueError('当前工程未保存过，请传 path 指定输出路径')",
+        'ok = p.write(target)',
+        "result = {'saved': bool(ok), 'file': target}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_layout_items',
+    deferLoading: true,
+    description: '列出某个打印布局里的所有条目（id/类型/uuid），用于检查布局结构。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layout_name: { type: 'string', description: '打印布局名称。' },
+      },
+      required: ['layout_name'],
+    },
+    async execute(args, exec) {
+      const name = needStr(args, 'layout_name')
+      const code = [
+        'from qgis.core import QgsProject',
+        `name = ${JSON.stringify(name)}`,
+        'mgr = QgsProject.instance().layoutManager()',
+        'lyt = None',
+        'for l in mgr.printLayouts():',
+        '    if l.name() == name:',
+        '        lyt = l',
+        '        break',
+        'if lyt is None:',
+        "    raise ValueError('layout not found: ' + name)",
+        'from qgis.core import QgsLayoutItem',
+        'items = []',
+        'for it in lyt.items():',
+        '    if not isinstance(it, QgsLayoutItem):',
+        '        continue',
+        '    items.append({"id": it.id(), "type": it.__class__.__name__, "uuid": str(getattr(it, "uuid", lambda: "")())})',
+        "result = {'layout': name, 'count': len(items), 'items': items[:100]}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_set_project_crs',
+    deferLoading: true,
+    description: '设置当前工程的坐标系（例如 EPSG:3857）。只改工程 CRS，不重投影已有图层数据。',
+    parameters: {
+      type: 'object',
+      properties: {
+        crs: { type: 'string', description: '目标坐标系，如 EPSG:3857 或 urn:ogc:def:crs:EPSG::3857。' },
+      },
+      required: ['crs'],
+    },
+    async execute(args, exec) {
+      const crs = needStr(args, 'crs')
+      const code = [
+        'from qgis.core import QgsCoordinateReferenceSystem, QgsProject',
+        `crs = QgsCoordinateReferenceSystem(${JSON.stringify(crs)})`,
+        'if not crs.isValid():',
+        "    raise ValueError('invalid CRS: ' + str(crs))",
+        'QgsProject.instance().setCrs(crs)',
+        "result = {'crs': crs.authid(), 'description': crs.description()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_set_layer_style',
+    deferLoading: true,
+    description:
+      '设置图层的基础样式：color 为十六进制颜色（如 #e6194b），opacity 为 0-1 不透明度。' +
+      '只对符号化渲染器生效（分类/分级渲染器请先用 run_processing 或 pyeval 调整）。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称（仅矢量图层）。' },
+        color: { type: 'string', description: '可选，十六进制颜色，如 #3366cc。' },
+        opacity: { type: 'number', description: '可选，不透明度 0-1。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const color = typeof args?.color === 'string' ? args.color : ''
+      const opacity = typeof args?.opacity === 'number' ? args.opacity : null
+      if (!color && opacity === null) throw new Error('color 和 opacity 至少给一个')
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.PyQt.QtGui import QColor',
+        'from qgis.core import QgsRenderContext',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `color = ${JSON.stringify(color)}`,
+        `opacity = ${opacity === null ? 'None' : String(opacity)}`,
+        'changed = []',
+        'if color:',
+        '    r = lyr.renderer()',
+        '    if hasattr(r, "symbol") and callable(getattr(r, "symbol", None)):',
+        '        syms = [r.symbol()]',
+        '    elif hasattr(r, "symbols"):',
+        '        syms = r.symbols(QgsRenderContext())',
+        '    else:',
+        '        syms = []',
+        '    if not syms:',
+        "        raise RuntimeError('该图层渲染器无法统一着色: ' + r.__class__.__name__)",
+        '    for s_ in syms:',
+        '        s_.setColor(QColor(color))',
+        "    changed.append('color')",
+        'if opacity is not None:',
+        '    o = float(opacity)',
+        '    if o < 0 or o > 1:',
+        "        raise ValueError('opacity 必须在 0-1 之间')",
+        '    lyr.setOpacity(o)',
+        "    changed.append('opacity')",
+        'lyr.triggerRepaint()',
+        "result = {'layer': lyr.name(), 'changed': changed, 'opacity': lyr.opacity(), 'color': color or None}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_plugin_status',
+    deferLoading: true,
+    description: '诊断用：返回 QGIS 版本与 dsh_qgis_driver 插件是否已加载及其版本。',
+    parameters: { type: 'object', properties: {} },
+    async execute(_args, exec) {
+      const code = [
+        'import sys',
+        'from qgis.core import Qgis',
+        'res = {"qgis_version": Qgis.QGIS_VERSION, "qgis_release": getattr(Qgis, "QGIS_RELEASE_NAME", "")}',
+        'module_loaded = "dsh_qgis_driver" in sys.modules',
+        'res["plugin_module_loaded"] = module_loaded',
+        'try:',
+        '    import qgis.utils as qu',
+        '    pl = qu.plugins.get("dsh_qgis_driver")',
+        '    res["plugin_loaded"] = pl is not None',
+        '    res["plugin_active"] = res["plugin_loaded"] or module_loaded',
+        '    if pl is not None:',
+        '        meta = getattr(pl, "metadata", lambda: {})()',
+        '        res["plugin_version"] = meta.get("version") if isinstance(meta, dict) else None',
+        'except Exception as e:',
+        '    res["plugin_error"] = str(e)',
+        'result = res',
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
 
   return () => { for (const d of disposers) d() }
 }

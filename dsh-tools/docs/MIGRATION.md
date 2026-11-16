@@ -90,7 +90,9 @@ With **no** `host`+`port` configured, the bundle falls back to automatic localho
 
 ---
 
-## 3. The three tools
+## 3. Tools
+
+The bundle registers 30 tools. Three core ones:
 
 | Tool | Purpose |
 | --- | --- |
@@ -98,4 +100,20 @@ With **no** `host`+`port` configured, the bundle falls back to automatic localho
 | `submit_qgis_async` | Run code in a background thread (no QGIS objects); returns a `task_id` immediately. |
 | `check_qgis_task` | Poll an async task by `task_id`; returns the result once done (and consumes it). |
 
-These are the same three tools regardless of whether the connection is local or remote — the transport is chosen at startup.
+Plus 27 dedicated GIS tools (layers, features, layouts, algorithms, rendering,
+export, styling, project/save, selection) — see `docs/DETAIL.md` for the full
+table. The transport is chosen at startup: a configured remote `host:port+Key`
+wins; otherwise local registry discovery; otherwise local autostart (below).
+
+## 4. Local autostart
+
+When QGIS is on the same machine and no live instance is found, the bundle runs
+`scripts/start-qgis.cmd` and waits for the registry file. The launcher locates
+`qgis-bin.exe`, syncs `qgis-plugin/` into the QGIS profile plugins directory
+(`%APPDATA%\QGIS\QGIS4\profiles\default\python\plugins\dsh_qgis_driver`), enables
+the plugin in `QGIS4.ini` `[PythonPlugins]` (skip either step with
+`QGIS_LIVE_AUTOSTART_SYNC=0` / a pre-enabled profile), then starts QGIS.
+
+Override the launch command with config `autostart.command` or
+`QGIS_LIVE_AUTOSTART_CMD`; tune the wait with `autostart.timeoutMs` /
+`QGIS_LIVE_AUTOSTART_TIMEOUT_MS`.
