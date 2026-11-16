@@ -23,9 +23,9 @@ def _tr(s):
     return QCoreApplication.translate("geo_driver", s)
 
 
-def _curl_example(port, token):
+def _curl_example(host, port, token):
     return (f'curl.exe -H "Authorization: Bearer {token}" '
-            f"http://127.0.0.1:{port}/api/status")
+            f"http://{host}:{port}/api/status")
 
 
 def _repo_status(plugin_dir):
@@ -41,7 +41,7 @@ def _off_msg():
     return _tr(
         "Remote control is OFF.\\n"
         "Enable it via Plugins > QGIS Live Driver > "
-        "Remote Control (localhost only), then press Refresh.")
+        "Remote Control, then press Refresh.")
 
 
 def build_sections(plugin):
@@ -72,15 +72,16 @@ def build_sections(plugin):
         rest = off
     else:
         port = drv.http_port
+        host = getattr(drv, "http_host", None) or "127.0.0.1"
         fields["livedir"] = drv.dir
         fields["token"] = drv.token
         snippets["livedir"] = drv.dir
         snippets["token"] = drv.token
         status = _tr("Remote control is enabled.")
         if port:
-            status += f"  (http://127.0.0.1:{port})"
-            snippets["curl"] = _curl_example(port, drv.token)
-            rest = (f"REST API base: http://127.0.0.1:{port}/api"
+            status += f"  (http://{host}:{port})"
+            snippets["curl"] = _curl_example(host, port, drv.token)
+            rest = (f"REST API base: http://{host}:{port}/api"
                     "\\n\\n--- " + _tr("REST example (curl)") + " ---\\n"
                     + snippets["curl"])
         else:

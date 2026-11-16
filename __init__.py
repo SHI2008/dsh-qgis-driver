@@ -69,21 +69,26 @@ def _restrict_file(path):
 class GeoDriverPlugin:
     """Control-only plugin with no UI.
 
-    Enabled by two paths (both localhost-only and require a token):
+    Enabled by two paths (both require a token):
       - WEBENGINE_LIVE_DIR env set → enabled immediately at startup (development)
       - Menu toggle → stored in QSettings, auto-enabled from the next startup
 
     Exposed surfaces:
       - File JSONL (commands.jsonl/results.jsonl) — language-neutral base
-      - HTTP 127.0.0.1:<auto port> (/api/* = REST)
+      - HTTP (default 127.0.0.1:<auto port>; set QGIS_LIVE_HOST=0.0.0.0 and
+        QGIS_LIVE_PORT=<port> for cross-machine access) (/api/* = REST)
       - ~/.qgis-live/<pid>-geo_driver.json — connection info + token (discovery)
+
+    Auth: every endpoint except /api/health requires a token (Bearer/X-Api-Key/
+    api-key). The per-session token is in the registry; QGIS_LIVE_API_KEY is a
+    stable extra key for remote clients (use it as the "Key" with host:port).
     """
 
     SETTING_ENABLED = "geo_driver/enabled"
     SETTING_AI_PANEL = "geo_driver/ai_panel_open"
     _MENU_NAME = "QGIS Live Driver"
     # Menu action source strings (English); they are translated for display
-    _ACTION_SOURCES = ("Remote Control (localhost only)",
+    _ACTION_SOURCES = ("Remote Control",
                        "AI Assistant",
                        "Connection Info",
                        "Hot Reload",
@@ -251,7 +256,7 @@ class GeoDriverPlugin:
 
         self._action = QAction(
             QCoreApplication.translate(
-                "geo_driver", "Remote Control (localhost only)"),
+                "geo_driver", "Remote Control"),
             self.iface.mainWindow())
         self._action.setCheckable(True)
         self._action.toggled.connect(self._on_toggle)
@@ -585,7 +590,7 @@ class GeoDriverPlugin:
                 self.iface.mainWindow(), "QGIS Live Driver",
                 QCoreApplication.translate(
                     "geo_driver",
-                    "Local (localhost) clients will be able to remotely "
+                    "Clients will be able to remotely "
                     "control this QGIS process.\n"
                     "pyeval executes arbitrary Python inside QGIS.\n\n"
                     "Access is protected by a per-session token stored "
@@ -623,23 +628,33 @@ class GeoDriverPlugin:
                  + traceback.format_exc())
             return
 
-        # Auth: session token mandatory; QGIS_LIVE_API_KEY is an optional extra key
+        # Auth: session token mandatory; QGIS_LIVE_API_KEY is an optional extra
+        # stable key. For cross-machine access set QGIS_LIVE_HOST=0.0.0.0 and a
+        # known QGIS_LIVE_PORT, and give the remote client the QGIS_LIVE_API_KEY.
         api_keys = {self.driver.token}
         env_key = os.environ.get("QGIS_LIVE_API_KEY") or None
         if env_key:
             api_keys.add(env_key)
-        port = None
+        host = os.environ.get("QGIS_LIVE_HOST", "").strip() or "127.0.0.1"
+        is_loopback = host in ("127.0.0.1", "localhost", "::1")
+        try:
+            port = int(os.environ.get("QGIS_LIVE_PORT", "0") or "0")
+        except ValueError:
+            port = 0
         try:
             from .http_api import start_http
             self._http, port = start_http(
-                self.driver, api_keys=api_keys,
-                allowed=_http_allowed())
+                self.driver, host=host, port=port, api_keys=api_keys,
+                allowed=_http_allowed(), allow_remote=not is_loopback)
             self.driver.http_port = port
-            _log(f"geo_driver HTTP API: http://127.0.0.1:{port}/ "
+            self.driver.http_host = host
+            _log(f"geo_driver HTTP API: http://{host}:{port}/ "
+                 f"remote={'yes' if not is_loopback else 'no'} "
                  f"tools={sorted(_http_allowed()) if _http_allowed() else 'all'}")
         except Exception:
             _log("geo_driver HTTP failed:\n"
                  + traceback.format_exc())
+            port = None
 
         try:
             reg_dir = _registry_dir()
@@ -651,6 +666,7 @@ class GeoDriverPlugin:
                     "pid": os.getpid(),
                     "plugin_id": __package__,
                     "live_dir": live_dir,
+                    "host": host,
                     "http_port": port,
                     "token": self.driver.token,
                     "http_tools": (sorted(_http_allowed())

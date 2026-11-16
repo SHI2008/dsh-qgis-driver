@@ -10,6 +10,12 @@ Versions are kept in sync with `version` in `metadata.txt`.
   `task_id` immediately and `GET /api/tasks/<task_id>` polls the result
   (live_driver.py `TaskRegistry` + `submit_pyeval_async`; http_api.py
   routes). Async code runs in a fresh namespace on a background thread.
+- Cross-machine (remote) access: `QGIS_LIVE_HOST` selects the bind address
+  (default `127.0.0.1`; `0.0.0.0` for all interfaces), `QGIS_LIVE_PORT`
+  fixes the port, and `QGIS_LIVE_API_KEY` is a stable Key remote clients
+  can use (`Authorization: Bearer <Key>`) instead of the per-session token.
+  A non-loopback bind also drops the loopback Host/Origin guard. The bound
+  host is now recorded in the registry JSON and shown in Connection Info.
 
 ### Removed
 - The entire MCP surface: the `/mcp` Streamable HTTP endpoint and its
@@ -26,6 +32,8 @@ Versions are kept in sync with `version` in `metadata.txt`.
 - Devin/Copilot ACP sessions no longer receive geo_driver's `/mcp` as an
   MCP server (`mcpServers: []`).
 - i18n catalogs: removed the `_McpDialog` context and all MCP keys.
+- Menu label "Remote Control (localhost only)" → "Remote Control", and the
+  connection-info / enablement dialogs no longer claim localhost-only.
 
 ### Notes
 - This fork is not intended to be merged upstream.

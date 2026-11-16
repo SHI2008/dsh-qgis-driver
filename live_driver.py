@@ -515,6 +515,7 @@ class LiveDriver:
         self.cmd_path = os.path.join(live_dir, "commands.jsonl")
         self.res_path = os.path.join(live_dir, "results.jsonl")
         self.http_port = None  # set by __init__.py after start_http
+        self.http_host = None  # set by __init__.py after start_http
         # Skip to the end so past commands are not re-executed when the driver is rebuilt
         self.offset = os.path.getsize(self.cmd_path) if os.path.exists(self.cmd_path) else 0
         # Auth token shared by all channels. commands.jsonl can be appended by
@@ -836,6 +837,7 @@ class LiveDriver:
             "pid": os.getpid(),
             "plugin": __package__,
             "live_dir": self.dir,
+            "host": self.http_host,
             "http_port": self.http_port,
             "view": self.view is not None,
             "plugins": plugs,

@@ -23,20 +23,25 @@ With plugin_id, eval/pyeval/screenshot/devreload are forwarded to that plugin's
 LiveDriver (hub route). open_plugin/reload_plugin/bridge_call/status are
 handled by this driver with plugin_id as a command argument.
 
-Binds to 127.0.0.1 only, port 0 (free port picked automatically).
-pyeval runs arbitrary code, so remote exposure is not a use case.
+Binds to 127.0.0.1:0 by default (loopback + a free port). For cross-machine
+access set QGIS_LIVE_HOST=0.0.0.0 and QGIS_LIVE_PORT=<port> (see __init__.py):
+that also disables the loopback Host/Origin guard, because the client is then
+a remote machine, not a browser.
 
-Auth (localhost-only operation):
+Auth:
   Every endpoint (other than /api/health) requires a session token match.
   The token is generated at driver start and written only to user-only files
   (live_dir/token and the registry JSON).
   Local clients just read it from there.
   Send it as Authorization: Bearer, X-Api-Key, or api-key.
-  Requests whose Host is not loopback, or whose Origin points outside
-  loopback, are also rejected (DNS rebinding and browser-based attacks).
-  Setting QGIS_LIVE_API_KEY accepts that key as well.
+  Setting QGIS_LIVE_API_KEY accepts that stable key as well — use it as the
+  "Key" when a remote machine connects (the per-session token changes on restart).
+  On loopback-only binds, requests whose Host is not loopback, or whose Origin
+  points outside loopback, are also rejected (DNS rebinding and browser attacks).
   QGIS_LIVE_TOOLS    comma-separated command kinds to expose (e.g. "status,screenshot").
                      Unset or "*" allows everything.
+  QGIS_LIVE_HOST     bind address (default 127.0.0.1). Use 0.0.0.0 for remote access.
+  QGIS_LIVE_PORT     fixed port (default 0 = auto). Set a known port for remote access.
 """
 
 import hmac
@@ -392,7 +397,13 @@ class _Handler(BaseHTTPRequestHandler):
         Guards against DNS rebinding and browser-based attacks: a request whose
         Host points outside loopback, or whose Origin points at a non-loopback
         site, is rejected. Local web apps (localhost origin) are allowed.
+
+        When allow_remote is set (QGIS_LIVE_HOST bound to a non-loopback
+        address), this guard is skipped: the client is a remote machine, not a
+        browser, and the bearer/API key is the only remaining gate.
         """
+        if getattr(self.server, "allow_remote", False):
+            return True
         host = self.headers.get("Host", "")
         if host:
             h = host.strip()
@@ -561,17 +572,20 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def start_http(driver, host="127.0.0.1", port=0,
-               api_keys=None, allowed=None):
+               api_keys=None, allowed=None, allow_remote=False):
     """Start the HTTP server on a daemon thread and return the actual port.
 
     api_keys: set of accepted tokens. Required (empty rejects every request).
     allowed: set of permitted command kinds. None allows all.
+    allow_remote: skip the loopback Host/Origin guard (set when host is a
+        non-loopback bind address, e.g. QGIS_LIVE_HOST=0.0.0.0).
     """
     httpd = ThreadingHTTPServer((host, port), _Handler)
     httpd.daemon_threads = True
     httpd.driver = driver
     httpd.api_keys = set(api_keys or ())
     httpd.allowed = allowed
+    httpd.allow_remote = allow_remote
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
     return httpd, httpd.server_address[1]

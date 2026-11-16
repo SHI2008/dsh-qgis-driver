@@ -13,8 +13,8 @@
 
 ## Overview
 
-A UI-less, control-only plugin that lets clients on the **same PC** (AI
-tools, etc.) remotely operate a running QGIS process. It exposes QGIS
+A UI-less, control-only plugin that lets clients — on the **same PC** or a
+**remote machine** — remotely operate a running QGIS process. It exposes QGIS
 internals (`iface`, `QgsProject`, map canvas) as automation primitives
 over file-JSONL and REST (`/api/*`).
 
@@ -27,6 +27,27 @@ over file-JSONL and REST (`/api/*`).
   Azure OpenAI / GitHub Copilot / ACP agents) with tool-loop execution
 - Hot reload of managed plugins, GeoSuite shared toolbar (mode badge),
   layer_org layer-organization service, Deploy Mode switching
+
+## Remote access (cross-machine)
+
+By default the HTTP server binds to `127.0.0.1` (localhost only). To accept
+connections from another machine, set these environment variables before QGIS
+starts (or in the QGIS launch environment), then enable Remote Control:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `QGIS_LIVE_HOST` | Bind address; `0.0.0.0` = all interfaces | `127.0.0.1` |
+| `QGIS_LIVE_PORT` | Fixed TCP port; `0` = auto-assign | `0` |
+| `QGIS_LIVE_API_KEY` | Stable **Key** for remote clients (in addition to the per-session token) | *(unset)* |
+
+A remote client connects to `http://<host>:<port>/api/*` with
+`Authorization: Bearer <QGIS_LIVE_API_KEY>` (the "port + Key" form). When
+`QGIS_LIVE_HOST` is a non-loopback address, the plugin also drops the
+localhost Host/Origin guard. The effective host/port and token are written to
+the registry file `~/.qgis-live/<pid>-geo_driver.json`.
+
+> The per-session token (in the registry) still works for the local machine;
+> `QGIS_LIVE_API_KEY` is the stable key to share with the second machine.
 
 ## Links
 
