@@ -324,30 +324,30 @@ class _GenericBridge:
             "version": _plugin_metadata(self._pid, "version"),
             "summary": _plugin_metadata(self._pid, "description"),
             "when_to_use": [
-                "このプラグインのメニュー/ツールバー操作を実行したい",
-                "プラグインのダイアログやドックを開閉したい",
-                "専用bridge未搭載プラグインを最低限操作したい",
+                "Run this plugin's menu / toolbar actions",
+                "Open or close a plugin's dialogs or docks",
+                "Do minimal control of a plugin that has no dedicated bridge",
             ],
             "invoke": {"type": "bridge_call", "plugin_id": self._pid,
                        "method": "<method>", "args": []},
             "methods": [
                 {"name": "pluginInfo", "signature": "pluginInfo()",
-                 "description": "metadata由来の自己記述を返す"},
+                 "description": "Return the metadata-derived self-description"},
                 {"name": "status", "signature": "status()",
-                 "description": "ダイアログ有無・アクション数等の状態を返す"},
+                 "description": "Return state such as dialog presence and action count"},
                 {"name": "actions", "signature": "actions()",
-                 "description": "プラグインのQAction一覧(index/text/enabled)"},
+                 "description": "List the plugin's QActions (index/text/enabled)"},
                 {"name": "trigger", "signature": "trigger(action)",
-                 "description": "アクションを非同期で実行(index/テキスト。"
-                                "modalダイアログを開いても応答は即返る)"},
+                 "description": "Run an action asynchronously (index/text; returns immediately even if a "
+                                "modal dialog opens)"},
                 {"name": "run", "signature": "run()",
-                 "description": "plugin.run()を非同期で実行"
-                                "(modalダイアログを開いても応答は即返る)"},
+                 "description": "Run plugin.run() asynchronously (returns immediately even if a modal "
+                                "dialog opens)"},
                 {"name": "openDialog", "signature": "openDialog()",
-                 "description": "dialog/dlg/dockwidget属性のウィジェットを"
-                                "表示(無ければrun()を非同期実行)"},
+                 "description": "Show the widget in the dialog/dlg/dockwidget attribute (falls back to "
+                                "async run())"},
                 {"name": "closeDialog", "signature": "closeDialog()",
-                 "description": "dialog/dlg/dockwidget属性のウィジェットを閉じる"},
+                 "description": "Close the widget in the dialog/dlg/dockwidget attribute"},
             ],
         })
 

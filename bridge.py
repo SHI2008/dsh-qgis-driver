@@ -12,22 +12,24 @@ _PLUGIN_ID = "geo_driver"
 
 _COMMANDS = [
     {"name": "pyeval", "signature": "pyeval(code)",
-     "description": "QGISプロセス内で任意Pythonを実行(iface/QgsProject等にアクセス可)"},
+     "description": "Run arbitrary Python inside the QGIS process (access to iface, "
+                    "QgsProject, etc.)"},
     {"name": "eval", "signature": "eval(code)",
-     "description": "WebEngineプラグインのページ内でJS実行(view必須)"},
+     "description": "Run JavaScript inside a WebEngine plugin page (view required)"},
     {"name": "status", "signature": "status()",
-     "description": "ドライバ・ロード中プラグイン・bridge有無の一覧"},
+     "description": "List the driver, loaded plugins, and bridge availability"},
     {"name": "describe_plugins", "signature": "describe_plugins()",
-     "description": "全プラグインのAI利用可能機能カタログ(pluginInfo集約)"},
+     "description": "AI-usable capability catalog of all plugins (aggregated pluginInfo)"},
     {"name": "bridge_call", "signature": "bridge_call(plugin_id, method, args)",
-     "description": "プラグインのbridgeメソッドを直接呼ぶ"
-                    "(bridge未搭載プラグインは汎用アダプタが応答)"},
+     "description": "Call a plugin's bridge method directly (a generic adapter answers for "
+                    "plugins without a bridge)"},
     {"name": "open_plugin", "signature": "open_plugin(plugin_id)",
-     "description": "プラグインをロード+run()で開く"},
+     "description": "Load a plugin and open it via run()"},
     {"name": "reload_plugin", "signature": "reload_plugin(plugin_id)",
-     "description": "プラグインを再読み込み(junction配置ならコード即反映)"},
+     "description": "Reload a plugin (with a junction install, code changes apply "
+                    "immediately)"},
     {"name": "screenshot", "signature": "screenshot(target, path)",
-     "description": "地図キャンバス/mainwindow/dockのPNG撮影"},
+     "description": "Capture a PNG of the map canvas, main window, or dock"},
 ]
 
 
@@ -52,114 +54,106 @@ class GeoDriverBridge:
         return self._ok({
             "id": _PLUGIN_ID,
             "name": "QGIS Live Driver",
-            "summary": "QGISプロセス内の遠隔制御ハブ。pyeval/status/"
-                       "bridge_call/describe_plugins等をファイルJSONL・"
-                       "REST・MCPの全経路で提供する。layer_org サービスで"
-                       "追加レイヤのグループ整理・命名を標準化できる。"
-                       "scale_style サービスで縮尺に応じた標準線幅の"
-                       "提案・適用(実幅m/縮尺帯ルール)ができる",
+            "summary": "Remote-control hub inside the QGIS process. Exposes "
+                       "pyeval/status/bridge_call/describe_plugins and friends over file JSONL, "
+                       "REST, and MCP. The layer_org service standardizes grouping and naming of "
+                       "imported layers; the scale_style service suggests and applies standard "
+                       "line widths by scale (real-world metres / scale-band rules).",
             "when_to_use": [
-                "QGIS内部(iface/QgsProject/地物/レイヤ)を直接操作・検査したい",
-                "他プラグインの機能をbridge_callで呼び出したい",
-                "地図キャンバスやウィンドウのスクリーンショットが欲しい",
-                "プラグインのロード・再読み込みを行いたい",
-                "取り込んだレイヤをルールでグループ整理・リネームしたい",
-                "レイヤの線幅を現在縮尺に適した標準値にしたい",
-                "線幅を実世界の幅(m)で設定してズームに連動させたい",
-                "縮尺帯で線幅が変わるルールベースレンダラを作りたい",
+                "Inspect or manipulate QGIS internals directly (iface, QgsProject, "
+                "features, layers)",
+                "Call another plugin's features through bridge_call",
+                "Take screenshots of the map canvas or windows",
+                "Load or reload plugins",
+                "Group and rename imported layers by rule",
+                "Set layer line widths to standard values for the current scale",
+                "Set line widths in real-world metres and keep them tied to zoom",
+                "Build rule-based renderers whose line width changes by scale band",
             ],
             "invoke": {"type": "command",
-                       "note": "bridge_callではなくドライバのコマンド面"
-                               "(qgis_pyeval等のMCPツール)を使う",
+                       "note": "Use the driver's command surface (MCP tools such as qgis_pyeval) instead "
+                               "of bridge_call",
                        "commands": _COMMANDS},
             "methods": [
                 {"name": "pluginInfo", "signature": "pluginInfo()",
-                 "description": "この自己記述を返す"},
+                 "description": "Return this self-description"},
                 {"name": "status", "signature": "status()",
-                 "description": "ドライバ稼働状態(live_dir/http_port/pid)"},
+                 "description": "Driver runtime status (live_dir/http_port/pid)"},
                 {"name": "deployMode", "signature": "deployMode()",
-                 "description": "deployモード(dev/use)と各プラグインの"
-                                "配置形態(junction/dir)を返す(読取専用)"},
+                 "description": "Return the deploy mode (dev/use) and each plugin's install form "
+                                "(junction/dir); read-only"},
                 {"name": "layerOrgProfiles",
                  "signature": "layerOrgProfiles()",
-                 "description": "レイヤ整理プロファイル一覧とアクティブ"
-                                "(~/.qgis-live/layer_org/*.json + 同梱)"},
+                 "description": "Layer-organization profiles and the active one "
+                                "(~/.qgis-live/layer_org/*.json + bundled)"},
                 {"name": "layerOrgRules",
                  "signature": "layerOrgRules(profile=None)",
-                 "description": "プロファイルのルール一覧を返す"
-                                "(省略時=アクティブ)"},
+                 "description": "Return a profile's rule list (default: active)"},
                 {"name": "setLayerOrgProfile",
                  "signature": "setLayerOrgProfile(name)",
-                 "description": "アクティブプロファイルを切替(QSettings永続化)"},
+                 "description": "Switch the active profile (persisted in QSettings)"},
                 {"name": "organizeLayers",
                  "signature": "organizeLayers(profile=None, dry=False)",
-                 "description": "全レイヤをルールで再配置(dry=Trueでプレビュー)"},
+                 "description": "Reorganize all layers by rule (dry=True previews)"},
                 {"name": "placeLayer",
                  "signature": "placeLayer(layer_id=None, ctx=None)",
-                 "description": "単一レイヤをルールへ配置"
-                                "(省略時=アクティブレイヤ)"},
+                 "description": "Place a single layer by rule (default: active layer)"},
                 {"name": "scaleStyleProfiles",
                  "signature": "scaleStyleProfiles()",
-                 "description": "標準線幅プロファイル一覧とアクティブを返す"
-                                "(~/.qgis-live/scale_style/*.json + 同梱)"},
+                 "description": "Return the line-width profiles and the active one "
+                                "(~/.qgis-live/scale_style/*.json + bundled)"},
                 {"name": "scaleStyleTable",
                  "signature": "scaleStyleTable(profile=None)",
-                 "description": "プロファイルの縮尺帯・カテゴリ別線幅"
-                                "テーブルを返す(省略時=アクティブ)"},
+                 "description": "Return a profile's scale-band / category line-width table (default: "
+                                "active)"},
                 {"name": "setScaleStyleProfile",
                  "signature": "setScaleStyleProfile(name)",
-                 "description": "アクティブな線幅プロファイルを切替"
-                                "(QSettings永続化)"},
+                 "description": "Switch the active line-width profile (persisted in QSettings)"},
                 {"name": "suggestScaleWidth",
                  "signature": "suggestScaleWidth(layer_id=None, "
                               "category=None, scale=None, profile=None)",
-                 "description": "レイヤ/カテゴリと縮尺から標準的な線幅を"
-                                "提案する。scale省略時=現在のキャンバス縮尺。"
-                                "category省略時はレイヤ名から推定"
-                                "(road/boundary/river等)。"
-                                "width_mm(紙面幅)とreal_width_m(実幅)を返す"},
+                 "description": "Suggest a standard line width from the layer/category and scale. If "
+                                "scale is omitted, the current canvas scale is used; if category is "
+                                "omitted it is inferred from the layer name (road/boundary/river, etc.). "
+                                "Returns width_mm (paper width) and real_width_m (real-world width)."},
                 {"name": "applyScaleWidth",
                  "signature": "applyScaleWidth(layer_id=None, category=None,"
                               " scale=None, mode='mm', profile=None,"
                               " dry=False)",
-                 "description": "レイヤに標準線幅を適用する。"
-                                "mode='mm'=現縮尺向けの紙面幅を固定設定、"
-                                "'meters'=実世界幅(m)で設定しズーム連動、"
-                                "'rules'=縮尺帯ごとに幅が切替わるルール"
-                                "レンダラを生成(geo_legendロード時は"
-                                "applyRulesへ委譲)。dry=Trueで予定のみ"},
+                 "description": "Apply a standard line width to a layer. mode='mm' fixes a paper width "
+                                "for the current scale; 'meters' sets a real-world width (m) tied to "
+                                "zoom; 'rules' generates a rule-based renderer whose width changes per "
+                                "scale band (delegated to applyRules when geo_legend is loaded). dry=True "
+                                "returns the plan only."},
                 {"name": "openAiPanel",
                  "signature": "openAiPanel()",
-                 "description": "AIアシスタントパネル(ドック)を開く"},
+                 "description": "Open the AI assistant panel (dock)"},
                 {"name": "openConnInfo",
                  "signature": "openConnInfo()",
-                 "description": "接続情報ダイアログ(MCP/REST接続先)を開く"},
+                 "description": "Open the connection info dialog (MCP/REST endpoints)"},
                 {"name": "openDeployMode",
                  "signature": "openDeployMode()",
-                 "description": "Deploy Mode切替ダイアログを開く"
-                                "(切替はダイアログ上のUI操作)"},
+                 "description": "Open the Deploy Mode dialog (switching is done in the dialog UI)"},
                 {"name": "listDevPlugins",
                  "signature": "listDevPlugins()",
-                 "description": "ホットリロード対象(junction配置の開発中"
-                                "プラグインID)を返す"},
+                 "description": "Return hot-reload targets (ids of in-development plugins installed as "
+                                "junctions)"},
                 {"name": "hotReload",
                  "signature": "hotReload(plugin_ids=None)",
-                 "description": "開発中プラグインをsys.modules掃除+"
-                                "reloadPluginで即再読込(省略時=全対象)"},
+                 "description": "Immediately reload in-development plugins (sys.modules cleanup + "
+                                "reloadPlugin; default: all targets)"},
                 {"name": "remoteControl",
                  "signature": "remoteControl(enabled=None)",
-                 "description": "リモート制御(ファイルJSONL/HTTP面)の"
-                                "有効状態を取得/設定する"},
+                 "description": "Get/set whether remote control (file JSONL / HTTP surface) is enabled"},
                 {"name": "auditLog",
                  "signature": "auditLog(n=50, filter=None)",
-                 "description": "監査ログ(~/.qgis-live/audit-*.jsonl)の"
-                                "直近n件を新しい順に返す。filterは"
-                                "フィールド一致dictまたは部分一致文字列"},
+                 "description": "Return the latest n audit-log entries (~/.qgis-live/audit-*.jsonl), "
+                                "newest first. filter is a field-match dict or a substring"},
                 {"name": "auditSettings",
                  "signature": "auditSettings(enabled=None, max_bytes=None,"
                               " max_files=None)",
-                 "description": "監査ログの有効化・ファイルサイズ/世代数"
-                                "上限を取得/設定(QSettings永続化)"},
+                 "description": "Get/set audit-log enablement and size/generation limits (persisted in "
+                                "QSettings)"},
             ],
         })
 

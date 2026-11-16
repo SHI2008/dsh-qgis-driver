@@ -39,7 +39,7 @@
     "Enter also sends. While sending it changes to \"Abort\" and\nstops the ongoing round trip (in-flight API responses/tool executions cannot be interrupted).": "Enterでも送信できる。送信中は「中断」に変わり\n実行中の往復を止める(進行中のAPI応答/ツール実行の\n完了待ちは中断できない)",
     "Enter instructions (Enter to send / Shift+Enter for a new line / Ctrl+V or drag & drop to attach images).\nUse /agent and /skill to edit instructions directly (/help)": "指示を入力 (Enterで送信 / Shift+Enterで改行 / Ctrl+Vやドラッグ&ドロップで画像添付)。\n/agent・/skill で指示書を直接編集 (/help)",
     "Entering code {0} on GitHub…": "GitHubでコード {0} を入力中…",
-    "Explain the provider type tags 【API】/【ACP】/【ブリッジ】": "プロバイダ種別タグ【API】/【ACP】/【ブリッジ】の説明",
+    "Explain the provider type tags 【API】/【ACP】/【Bridge】": "プロバイダ種別タグ【API】/【ACP】/【Bridge】の説明",
     "Failed to fetch the model list: {0}": "モデル一覧の取得に失敗: {0}",
     "Failed to get a device code for sign-in: {0}": "サインイン用デバイスコードの取得に失敗: {0}",
     "Failed to save the attached image: {0}": "添付画像の保存に失敗: {0}",

@@ -38,7 +38,7 @@
     "Enter also sends. While sending it changes to \"Abort\" and\nstops the ongoing round trip (in-flight API responses/tool executions cannot be interrupted).": "Enter также отправляет. Во время отправки меняется на \"Прервать\" и\nостанавливает текущий цикл (выполняющиеся ответы API/вызовы инструментов не прерываются).",
     "Enter instructions (Enter to send / Shift+Enter for a new line / Ctrl+V or drag & drop to attach images).\nUse /agent and /skill to edit instructions directly (/help)": "Введите инструкции (Enter — отправить / Shift+Enter — новая строка / Ctrl+V или перетаскивание для вложения изображений).\nИспользуйте /agent и /skill для прямого редактирования инструкций (/help)",
     "Entering code {0} on GitHub…": "Ввод кода {0} на GitHub…",
-    "Explain the provider type tags 【API】/【ACP】/【ブリッジ】": "Пояснение тегов типа провайдера 【API】/【ACP】/【ブリッジ】",
+    "Explain the provider type tags 【API】/【ACP】/【Bridge】": "Пояснение тегов типа провайдера 【API】/【ACP】/【Bridge】",
     "Failed to fetch the model list: {0}": "Не удалось получить список моделей: {0}",
     "Failed to get a device code for sign-in: {0}": "Не удалось получить код устройства для входа: {0}",
     "Failed to save the attached image: {0}": "Не удалось сохранить вложенное изображение: {0}",

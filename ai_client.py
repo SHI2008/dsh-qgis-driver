@@ -240,7 +240,7 @@ PROVIDERS = {
     },
     "devin_bridge": {
         "label": "Devin",
-        "tag": "【ブリッジ】",
+        "tag": "【Bridge】",
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
@@ -255,7 +255,7 @@ PROVIDERS = {
     },
     "copilot_bridge": {
         "label": "GitHub Copilot",
-        "tag": "【ブリッジ】",
+        "tag": "【Bridge】",
         "base": DEFAULT_BASE_URL,
         "model": DEFAULT_MODEL,
         "key_hint": QT_TRANSLATE_NOOP(
@@ -270,7 +270,7 @@ PROVIDERS = {
     },
     "agent": {
         "label": QT_TRANSLATE_NOOP("geo_driver", "External agent"),
-        "tag": "【ブリッジ】",
+        "tag": "【Bridge】",
         "base": "",
         "model": "default",
         "key_hint": QT_TRANSLATE_NOOP(
@@ -302,7 +302,7 @@ PROVIDER_TAGS = {
         "engine and runs its own tool loop (the panel is a chat UI; "
         "no API key needed — uses the CLI/IDE sign-in; the endpoint "
         "field is the working directory)"),
-    "【ブリッジ】": QT_TRANSLATE_NOOP(
+    "【Bridge】": QT_TRANSLATE_NOOP(
         "geo_driver",
         "Delegation chat — a normal API chat with injected "
         "instructions to hand substantial work to an agent CLI via "
@@ -1702,14 +1702,13 @@ def delete_instruction(kind, item_id):
 _KIND_PROP = {"type": "string",
               "enum": ["agents", "skills", "prompts"],
               "description":
-                  "agents=役割・方針・出力様式など常時注入の指示書"
-                  "(同時に1件のみ有効。人格や「常に〜して」系の依頼向け) / "
-                  "skills=特定タスクの手順・レシピ"
-                  "(複数共存し必要時だけ読まれる。「この手順を覚えて」"
-                  "系の依頼向け) / "
-                  "prompts=チャット入力欄へ挿入する定型文"
-                  "(パネルのおすすめ一覧に出る。「この指示をおすすめに"
-                  "登録して」系の依頼向け。本文=挿入される指示文)"}
+                  "agents = persistent instructions (role, policy, output style) injected "
+                  "into the system prompt (only one is active at a time; for persona / "
+                  "\"always do ...\" requests) / skills = task procedures and recipes (many "
+                  "coexist, read on demand; for \"remember this procedure\" requests) / "
+                  "prompts = canned prompt text inserted into the chat input (shown in the "
+                  "panel's suggestion list; for \"add this instruction to the suggestions\" "
+                  "requests; body = the text inserted)"}
 
 INSTRUCTION_TOOLS = [
     {
@@ -1728,7 +1727,7 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {"kind": _KIND_PROP,
                                        "id": {"type": "string",
-                                              "description": "ファイル名(stem)"}},
+                                              "description": "File name (stem)"}},
                         "required": ["kind", "id"]},
     },
     {
@@ -1751,9 +1750,9 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {"kind": _KIND_PROP,
                                        "name": {"type": "string",
-                                                "description": "ファイル名(stem)"},
+                                                "description": "File name (stem)"},
                                        "text": {"type": "string",
-                                                "description": "ファイル本文(Markdown)"}},
+                                                "description": "File body (Markdown)"}},
                         "required": ["kind", "name", "text"]},
     },
     {
@@ -1764,7 +1763,7 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {"kind": _KIND_PROP,
                                        "id": {"type": "string",
-                                              "description": "ファイル名(stem)"}},
+                                              "description": "File name (stem)"}},
                         "required": ["kind", "id"]},
     },
     {
@@ -1776,7 +1775,7 @@ INSTRUCTION_TOOLS = [
         "inputSchema": {"type": "object",
                         "properties": {
                             "id": {"type": "string",
-                                   "description": "エージェントid(空=解除)"}},
+                                   "description": "Agent id (empty = clear)"}},
                         "required": ["id"]},
     },
 ]

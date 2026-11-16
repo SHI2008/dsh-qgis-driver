@@ -332,8 +332,7 @@ class AiPanel(QDockWidget):
         btn_prov_help = QPushButton("?", prov_row)
         btn_prov_help.setFixedWidth(24)
         btn_prov_help.setToolTip(
-            self.tr("Explain the provider type tags "
-                    "【API】/【ACP】/【ブリッジ】"))
+            self.tr("Explain the provider type tags 【API】/【ACP】/【Bridge】"))
         btn_prov_help.clicked.connect(self._provider_help)
         pr.addWidget(btn_prov_help)
         form.addRow(self.tr("Provider"), prov_row)
@@ -506,7 +505,7 @@ class AiPanel(QDockWidget):
     def _provider_help(self):
         """「?」ボタン: 【API】/【ACP】/【ブリッジ】の違いを説明する。"""
         lines = []
-        for tag in ("【API】", "【ブリッジ】", "【ACP】"):
+        for tag in ("【API】", "【Bridge】", "【ACP】"):
             names = [ai_client.tr_label(ai_client.PROVIDERS[p]["label"])
                      for p in _PROVIDER_IDS
                      if ai_client.PROVIDERS[p].get("tag") == tag]
