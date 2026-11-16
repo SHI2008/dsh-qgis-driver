@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "QGIS Driver 工具",
+    "description": "从 DeepSeek Harness 驱动正在运行的 QGIS（geo_driver 插件）：在 QGIS 主线程执行代码、提交后台任务并轮询结果——本地通过注册表自动发现，远程通过 host + 端口 + Key 连接。",
+    "detail": "docs/DETAIL.md"
+  }
+}
