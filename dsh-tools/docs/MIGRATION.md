@@ -1,11 +1,11 @@
 # Migration / cross-machine setup
 
-`geo_driver` is split into two portable ends that talk to each other over HTTP:
+`dsh_qgis_driver` is split into two portable ends that talk to each other over HTTP:
 
 | End | What it is | Where it lives |
 | --- | --- | --- |
-| **QGIS plugin** (`geo_driver`) | The server: runs inside QGIS, exposes a token-authenticated HTTP API | `H:\shichencai\Code\Python\qgis-plugin-geo_driver` (this machine) |
-| **DSH bundle** (`@local/qgis-driver-tools`) | The client: registers `execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task` tools that call the QGIS API | `H:\shichencai\Code\qgis-driver-dsh-tools` (this machine) |
+| **QGIS plugin** (`dsh_qgis_driver`) | The server: runs inside QGIS, exposes a token-authenticated HTTP API | `H:\shichencai\Code\Python\qgis-plugin-dsh_qgis_driver` (this machine) |
+| **DSH bundle** (`@local/dsh-qgis-driver`) | The client: registers `execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task` tools that call the QGIS API | `H:\shichencai\Code\dsh-qgis-driver\dsh-tools` (this machine) |
 
 The two ends can live on **the same PC** (default: automatic localhost discovery) or on **two different machines** (remote mode: the client connects to the server's `host:port` using a shared **Key**).
 
@@ -16,8 +16,8 @@ The two ends can live on **the same PC** (default: automatic localhost discovery
 On the machine that runs QGIS:
 
 1. Copy the whole plugin folder into QGIS's plugins directory:
-   - Windows: `C:\Users\<user>\AppData\Roaming\QGIS\QGIS4\profiles\default\python\plugins\geo_driver`
-   - Linux: `~/.local/share/QGIS/QGIS4/profiles/default/python/plugins/geo_driver`
+   - Windows: `C:\Users\<user>\AppData\Roaming\QGIS\QGIS4\profiles\default\python\plugins\dsh_qgis_driver`
+   - Linux: `~/.local/share/QGIS/QGIS4/profiles/default/python/plugins/dsh_qgis_driver`
 2. Enable it in **Plugins → Manage and Install Plugins → Installed** (or leave the plugin's auto-start setting on).
 
 ### Make it reachable from another machine
@@ -44,7 +44,7 @@ After QGIS starts, confirm the server is up:
 
 ```bash
 curl -s http://<server-ip>:8200/api/health
-# {"id": ..., "result": {"ok": true, "pid": ..., "plugin": "geo_driver"}}
+# {"id": ..., "result": {"ok": true, "pid": ..., "plugin": "dsh_qgis_driver"}}
 ```
 
 (No token is needed for `/api/health`; all other endpoints require the Key.)
@@ -62,8 +62,8 @@ On the machine that runs DeepSeek Harness:
 
    ```yaml
    - insert:
-       - id: qgis-driver-tools
-         name: '@local/qgis-driver-tools'
+       - id: dsh-qgis-driver
+         name: '@local/dsh-qgis-driver'
          config:
            host: 192.168.1.50   # the QGIS machine's IP / hostname
            port: 8200
@@ -80,7 +80,7 @@ On the machine that runs DeepSeek Harness:
 
 3. Re-enable the bundle so it picks up the new config (Plugins → toggle it off and back on).
 
-With **no** `host`+`port` configured, the bundle falls back to automatic localhost discovery (`~/.qgis-live/*-geo_driver.json`), which is what you want for same-PC use.
+With **no** `host`+`port` configured, the bundle falls back to automatic localhost discovery (`~/.qgis-live/*-dsh_qgis_driver.json`), which is what you want for same-PC use.
 
 ### Handshake rules
 

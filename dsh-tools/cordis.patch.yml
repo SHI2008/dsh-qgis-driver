@@ -1,4 +1,4 @@
 - insert:
-    - id: qgis-driver-tools
-      name: '@local/qgis-driver-tools'
+    - id: dsh-qgis-driver
+      name: '@local/dsh-qgis-driver'
       config: {}

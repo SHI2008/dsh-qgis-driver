@@ -1,5 +1,5 @@
 {
-  "name": "@local/qgis-driver-tools",
+  "name": "@local/dsh-qgis-driver",
   "version": "1.0.0",
   "private": true,
   "type": "module",

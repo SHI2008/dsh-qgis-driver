@@ -1,8 +1,8 @@
-// qgis-driver-tools — DSH Host bundle.
-// Exposes a running QGIS (geo_driver plugin) as three DSH tools over its REST API.
+// dsh-qgis-driver — DSH Host bundle.
+// Exposes a running QGIS (dsh_qgis_driver plugin) as three DSH tools over its REST API.
 //
 // Two connection modes:
-//   1. Local discovery — newest ~/.qgis-live/<pid>-geo_driver.json registry entry,
+//   1. Local discovery — newest ~/.qgis-live/<pid>-dsh_qgis_driver.json registry entry,
 //      health-probed for liveness (uses the registry's host + Bearer session token).
 //   2. Remote target — host + port + Key from cordis.patch.yml `config:` or the env
 //      vars QGIS_LIVE_REMOTE_HOST / QGIS_LIVE_REMOTE_PORT / QGIS_LIVE_REMOTE_KEY
@@ -11,7 +11,7 @@ import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const name = 'qgis-driver-tools'
+export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
@@ -42,10 +42,10 @@ async function findActiveQgis() {
   try {
     names = fs.readdirSync(REGISTRY_DIR)
   } catch {
-    throw new Error('未找到活跃的 QGIS Driver 实例：~/.qgis-live 目录不存在')
+    throw new Error('未找到活跃的 dsh-qgis-driver 实例：~/.qgis-live 目录不存在')
   }
   const candidates = names
-    .filter((n) => n.endsWith('-geo_driver.json'))
+    .filter((n) => n.endsWith('-dsh_qgis_driver.json'))
     .map((n) => path.join(REGISTRY_DIR, n))
     .map((p) => {
       try { return { p, mtime: fs.statSync(p).mtimeMs } } catch { return null }
@@ -77,7 +77,7 @@ async function findActiveQgis() {
     }
   }
   throw new Error(
-    '未找到活跃的 QGIS Driver 实例（请确认 QGIS 正在运行且 geo_driver 插件已启动，' +
+    '未找到活跃的 dsh-qgis-driver 实例（请确认 QGIS 正在运行且 dsh_qgis_driver 插件已启动，' +
     '或配置远程连接 QGIS_LIVE_REMOTE_HOST/PORT/KEY）')
 }
 

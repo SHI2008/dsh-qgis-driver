@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "QGIS Driver Tools",
-    "description": "Drive a running QGIS (geo_driver plugin) from DeepSeek Harness: execute code on the QGIS main thread, submit background tasks, and poll results — locally via registry discovery, or remotely via host + port + Key.",
+    "title": "dsh-qgis-driver",
+    "description": "Drive a running QGIS (dsh_qgis_driver plugin) from DeepSeek Harness: execute code on the QGIS main thread, submit background tasks, and poll results — locally via registry discovery, or remotely via host + port + Key.",
     "detail": "docs/DETAIL.md"
   }
 }

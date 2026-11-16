@@ -1,12 +1,12 @@
-# QGIS Driver Tools
+# dsh-qgis-driver
 
 Drive a running QGIS from DeepSeek Harness. This bundle registers three tools that
-call the `geo_driver` plugin's REST API — either on the **same machine** (auto
+call the `dsh_qgis_driver` plugin's REST API — either on the **same machine** (auto
 discovery) or a **remote machine** (host + port + Key).
 
 ## Prerequisites
 
-1. QGIS 4.x with the `geo_driver` plugin installed and running.
+1. QGIS 4.x with the `dsh_qgis_driver` plugin installed and running.
 2. The plugin's HTTP server is started (Remote Control enabled).
 
 ## Connection modes
@@ -14,7 +14,7 @@ discovery) or a **remote machine** (host + port + Key).
 ### Local (default)
 
 The bundle auto-discovers a running QGIS: it picks the newest
-`~/.qgis-live/<pid>-geo_driver.json` registry entry (up to 3 candidates) and probes
+`~/.qgis-live/<pid>-dsh_qgis_driver.json` registry entry (up to 3 candidates) and probes
 `GET /api/health` with the stored per-session token. A `401` is reported as an
 expired/invalid credential; a dead or refused instance falls through to the next
 candidate. No configuration is needed.
@@ -26,8 +26,8 @@ To drive a QGIS on **another machine**, configure the target in the bundle's
 
 ```yaml
 - insert:
-    - id: qgis-driver-tools
-      name: '@local/qgis-driver-tools'
+    - id: dsh-qgis-driver
+      name: '@local/dsh-qgis-driver'
       config:
         host: 192.168.1.20   # the remote machine's reachable address
         port: 8000           # QGIS_LIVE_PORT on the remote QGIS
