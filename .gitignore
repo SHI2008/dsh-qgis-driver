@@ -1,5 +1,21 @@
+# Python caches
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Editor / OS noise
+.idea/
+.vscode/
 .DS_Store
 Thumbs.db
+
+# Local scratch
 *.log
+*.bak
+*.tmp
