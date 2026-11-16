@@ -539,6 +539,112 @@ export function apply(ctx, config = {}) {
   }))
 
   disposers.push(ctx.tools.register({
+    name: 'qgis_export_atlas',
+    description:
+      '将指定打印布局的图集(atlas)导出为多页 PDF 或单页 PNG 图片。' +
+      '要求该布局已在 QGIS 中启用了 atlas 并设置了覆盖图层。PDF 为多页合订文件；' +
+      'PNG 只导出当前(第一)页，图集建议用 pdf。PNG 会写入本地临时文件并返回路径（用 read_image 查看）；' +
+      'PDF 返回文件路径。返回结果包含页数 pages。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layout_name: {
+          type: 'string',
+          description: '打印布局名称（用 qgis_list_layouts 查询，需已启用 atlas）。',
+        },
+        format: {
+          type: 'string',
+          enum: ['pdf', 'png'],
+          description: '导出格式，默认 pdf。图集推荐 pdf（多页合订）。',
+        },
+        dpi: {
+          type: 'integer',
+          description: 'PNG 导出分辨率 DPI，默认 300。',
+        },
+      },
+      required: ['layout_name'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const name = typeof args?.layout_name === 'string' ? args.layout_name : ''
+      if (!name.trim()) throw new Error('参数 layout_name 不能为空')
+      const fmt = args?.format === 'png' ? 'png' : 'pdf'
+      const dpi = Number.isInteger(args?.dpi) && args.dpi > 0 ? args.dpi : 300
+      const code = [
+        'import base64, tempfile, os',
+        'from qgis.core import QgsProject, QgsLayoutExporter',
+        'lm = QgsProject.instance().layoutManager()',
+        `lay = lm.layoutByName(${JSON.stringify(name)})`,
+        'if lay is None:',
+        `    raise ValueError('layout not found: ' + ${JSON.stringify(name)})`,
+        'atlas = lay.atlas()',
+        'if not atlas.enabled():',
+        "    raise ValueError('layout atlas is not enabled (enable it in QGIS: Layout > Atlas Settings)')",
+        'atlas.updateFeatures()',
+        'n_pages = atlas.count()',
+        `stem = 'dsh_qgis_' + ''.join(c if c.isalnum() else '_' for c in ${JSON.stringify(name)})`,
+        `if ${JSON.stringify(fmt)} == 'pdf':`,
+        "    p = os.path.join(tempfile.gettempdir(), stem + '.pdf')",
+        '    r = QgsLayoutExporter(lay).exportToPdf(p, QgsLayoutExporter.PdfExportSettings())',
+        'else:',
+        "    p = os.path.join(tempfile.gettempdir(), stem + '.png')",
+        `    s = QgsLayoutExporter.ImageExportSettings(); s.dpi = ${dpi}`,
+        '    r = QgsLayoutExporter(lay).exportToImage(p, s)',
+        'if int(r) != int(QgsLayoutExporter.Success):',
+        "    raise RuntimeError('atlas export failed: ' + str(r))",
+        "with open(p, 'rb') as f:",
+        `    result = {'format': ${JSON.stringify(fmt)}, 'file_base64': base64.b64encode(f.read()).decode(), 'size_bytes': os.path.getsize(p), 'pages': n_pages}`,
+      ].join('\n')
+      const result = await runQgisSync(code, exec?.signal)
+      if (!result || typeof result.file_base64 !== 'string') return asText(result)
+      const ext = result.format === 'pdf' ? 'pdf' : 'png'
+      const filePath = writeTempFile(result.file_base64, ext)
+      if (ext === 'png') {
+        return asText({
+          image_path: filePath,
+          pages: result.pages,
+          size_bytes: result.size_bytes,
+          hint: '使用 read_image 工具查看该图片路径',
+        })
+      }
+      return asText({ file_path: filePath, pages: result.pages, size_bytes: result.size_bytes })
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
+    name: 'qgis_create_layout',
+    description:
+      '在当前 QGIS 项目中新建一个空白打印布局。创建后可回到 QGIS GUI 向其中添加地图、图例、比例尺等元素，' +
+      '再用 qgis_export_layout / qgis_export_atlas 导出。布局名必须唯一。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layout_name: {
+          type: 'string',
+          description: '新打印布局的名称（必填，不能与现有布局重名）。',
+        },
+      },
+      required: ['layout_name'],
+    },
+    output: stringOutput,
+    async execute(args, exec) {
+      const name = typeof args?.layout_name === 'string' ? args.layout_name.trim() : ''
+      if (!name) throw new Error('参数 layout_name 不能为空')
+      const code = [
+        'from qgis.core import QgsProject, QgsPrintLayout',
+        'lm = QgsProject.instance().layoutManager()',
+        `if lm.layoutByName(${JSON.stringify(name)}) is not None:`,
+        `    raise ValueError('layout already exists: ' + ${JSON.stringify(name)})`,
+        `lay = QgsPrintLayout(QgsProject.instance()); lay.setName(${JSON.stringify(name)})`,
+        'lay.initializeDefaults()',
+        'lm.addLayout(lay)',
+        "result = {'name': lay.name(), 'layouts': [l.name() for l in lm.layouts()]}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  }))
+
+  disposers.push(ctx.tools.register({
     name: 'qgis_render_map',
     description:
       '将当前 QGIS 项目地图画布（全部图层、项目范围）离屏渲染为 PNG 图片，' +
