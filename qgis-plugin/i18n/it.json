@@ -218,6 +218,13 @@
     "ACP launch command for an arbitrary agent CLI (e.g. my-agent acp)": "Comando di avvio ACP per una CLI agente arbitraria (es. my-agent acp)",
     "External agent": "Agente esterno",
     "Bearer token for the agent endpoint (optional)": "Token Bearer per l'endpoint dell'agente (opzionale)",
-    "agent endpoint URL accepting POST {message,...} and replying {reply: ...} (e.g. http://127.0.0.1:8511/agent)": "URL dell'endpoint dell'agente che accetta POST {message,...} e risponde {reply: ...} (es. http://127.0.0.1:8511/agent)"
+    "agent endpoint URL accepting POST {message,...} and replying {reply: ...} (e.g. http://127.0.0.1:8511/agent)": "URL dell'endpoint dell'agente che accetta POST {message,...} e risponde {reply: ...} (es. http://127.0.0.1:8511/agent)",
+    "Settings": "Settings",
+    "dsh-qgis-driver — Settings": "dsh-qgis-driver — Settings",
+    "Bind address": "Bind address",
+    "Port (0 = auto)": "Port (0 = auto)",
+    "API key (optional)": "API key (optional)",
+    "auto": "auto",
+    "Changes apply after the plugin restarts (toggle Remote Control off and on, or restart QGIS). Leave the API key empty to use only the per-session token. For cross-machine access, set the bind address to 0.0.0.0 and a fixed port, then share the API key with the remote client.": "Changes apply after the plugin restarts (toggle Remote Control off and on, or restart QGIS). Leave the API key empty to use only the per-session token. For cross-machine access, set the bind address to 0.0.0.0 and a fixed port, then share the API key with the remote client."
   }
 }

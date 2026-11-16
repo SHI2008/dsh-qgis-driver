@@ -269,6 +269,12 @@ class GeoDriverPlugin:
         self._conn_action.triggered.connect(self._open_conn_info)
         self.iface.addPluginToMenu("dsh-qgis-driver", self._conn_action)
 
+        self._settings_action = QAction(
+            QCoreApplication.translate("dsh_qgis_driver", "Settings"),
+            self.iface.mainWindow())
+        self._settings_action.triggered.connect(self._open_settings)
+        self.iface.addPluginToMenu("dsh-qgis-driver", self._settings_action)
+
         self._hot_menu = self._build_hot_menu()
         self.iface.addPluginToMenu("dsh-qgis-driver",
                                    self._hot_menu.menuAction())
@@ -384,6 +390,17 @@ class GeoDriverPlugin:
             self._conn_dlg = show_dialog(self)
         except Exception:
             _log("connection info dialog failed:\n"
+                 + traceback.format_exc())
+
+    def _open_settings(self):
+        """Open the connection settings dialog (host / port / API key)."""
+        try:
+            from .settings_dialog import SettingsDialog
+            dlg = SettingsDialog(self.iface.mainWindow())
+            self._settings_dlg = dlg  # keep a reference against GC
+            dlg.exec()
+        except Exception:
+            _log("settings dialog failed:\n"
                  + traceback.format_exc())
 
     # ---- Deploy mode switch ----
@@ -631,16 +648,15 @@ class GeoDriverPlugin:
         # Auth: session token mandatory; QGIS_LIVE_API_KEY is an optional extra
         # stable key. For cross-machine access set QGIS_LIVE_HOST=0.0.0.0 and a
         # known QGIS_LIVE_PORT, and give the remote client the QGIS_LIVE_API_KEY.
+        # Values come from the Settings dialog (QSettings) or the env vars.
+        from .settings_dialog import get_api_key, get_host, get_port
         api_keys = {self.driver.token}
-        env_key = os.environ.get("QGIS_LIVE_API_KEY") or None
-        if env_key:
-            api_keys.add(env_key)
-        host = os.environ.get("QGIS_LIVE_HOST", "").strip() or "127.0.0.1"
+        key = get_api_key() or None
+        if key:
+            api_keys.add(key)
+        host = get_host()
         is_loopback = host in ("127.0.0.1", "localhost", "::1")
-        try:
-            port = int(os.environ.get("QGIS_LIVE_PORT", "0") or "0")
-        except ValueError:
-            port = 0
+        port = get_port()
         try:
             from .http_api import start_http
             self._http, port = start_http(
