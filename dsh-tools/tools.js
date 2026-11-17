@@ -32,7 +32,10 @@ def _prj_extent():
             continue
         if e.isEmpty():
             continue
-        ext = QgsRectangle(e) if ext is None else ext.combineExtentWith(e)
+        if ext is None:
+            ext = QgsRectangle(e)
+        else:
+            ext.combineExtentWith(e)
     return None if ext is None or ext.isEmpty() else ext
 _OUT = os.path.join(tempfile.gettempdir(), 'dsh-qgis-driver')
 try:
@@ -755,7 +758,7 @@ const ANALYSIS_BODY = {
 kw = (P.get('keyword') or '').lower()
 reg = QgsApplication.processingRegistry()
 if reg.algorithms() == [] or True:
-    from qgis.core import QgsNativeAlgorithms
+    from qgis.analysis import QgsNativeAlgorithms
     try:
         reg.addProvider(QgsNativeAlgorithms())
     except Exception:
@@ -781,21 +784,54 @@ result = {'id': alg.id(), 'name': alg.displayName(), 'parameters': params}`,
   run: `
 from qgis import processing
 alg = P['algorithm']
-params = P.get('params') or {}
+params = dict(P.get('params') or {})
+reg = QgsApplication.processingRegistry()
+ad = reg.algorithmById(alg)
+if ad is None:
+    from qgis.analysis import QgsNativeAlgorithms
+    try:
+        reg.addProvider(QgsNativeAlgorithms())
+    except Exception:
+        pass
+    ad = reg.algorithmById(alg)
+if ad is None:
+    raise ValueError('algorithm not found: ' + alg)
 mapped = {}
 for k, v in params.items():
     if isinstance(v, str) and prj.mapLayersByName(v):
         mapped[k] = prj.mapLayersByName(v)[0]
     else:
         mapped[k] = v
-out = processing.run(alg, mapped)
+# fill missing OUTPUT sinks so the caller does not have to know they exist
+for pdef in ad.parameterDefinitions():
+    n = pdef.name()
+    if n in mapped:
+        continue
+    try:
+        optional = bool(pdef.flags() & 8)
+    except Exception:
+        optional = False
+    if optional:
+        continue
+    if n.upper().startswith('OUTPUT'):
+        mapped[n] = 'memory:'
+try:
+    out = processing.run(alg, mapped)
+except Exception as e:
+    raise ValueError('%s —— 参数可能不完整，先用 action=help 查看 %s 的参数；也可显式传 params.OUTPUT。' % (e, alg))
+added = []
 clean = {}
 for k, v in (out or {}).items():
     if hasattr(v, 'source'):
         clean[k] = v.source()
+        try:
+            prj.addMapLayer(v)
+            added.append(v.name())
+        except Exception:
+            pass
     else:
         clean[k] = v
-result = {'algorithm': alg, 'outputs': clean}`,
+result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}`,
 };
 
 export function registerConsolidatedTools(deps) {
