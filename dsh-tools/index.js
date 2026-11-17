@@ -2195,6 +2195,7 @@ export function apply(ctx, config = {}) {
       host: null,
       error: null,
       detail: null,
+      canLaunch: !!resolveAutostart(config),
     }
     if (remote) {
       status.target = 'remote'
@@ -2316,6 +2317,48 @@ export function apply(ctx, config = {}) {
       if (typeof unregisterCfg === 'function') disposers.push(() => { unregisterCfg() })
     } catch (e) {
       // Non-fatal: the Settings section simply reports "config unavailable".
+    }
+  }
+
+  // ---- Client GUI: launch endpoint (click the red badge to start QGIS) ----
+  // POST starts the autostart command in the background; the widget keeps polling
+  // `/status` until it turns green.
+  let launching = false
+  if (connection && connection.fetch && typeof connection.fetch.register === 'function') {
+    try {
+      const unregisterLaunch = connection.fetch.register({
+        path: '/api/dsh-qgis-driver/launch',
+        methods: ['POST'],
+        requestBody: 'buffered',
+        fetch: async () => {
+          const now = findLocalLiveDir()
+          if (now) {
+            return new Response(JSON.stringify({ started: false, connected: true }), {
+              status: 200, headers: { 'content-type': 'application/json' },
+            })
+          }
+          if (launching) {
+            return new Response(JSON.stringify({ started: true, connected: false, pending: true }), {
+              status: 200, headers: { 'content-type': 'application/json' },
+            })
+          }
+          const auto = resolveAutostart(config)
+          if (!auto) {
+            return new Response(JSON.stringify({
+              started: false,
+              error: '未配置自动启动（config.autostart.command 或 QGIS_LIVE_AUTOSTART_CMD）',
+            }), { status: 400, headers: { 'content-type': 'application/json' } })
+          }
+          launching = true
+          autostartQgis(auto).catch(() => {}).finally(() => { launching = false })
+          return new Response(JSON.stringify({ started: true, connected: false, pending: true }), {
+            status: 200, headers: { 'content-type': 'application/json' },
+          })
+        },
+      })
+      if (typeof unregisterLaunch === 'function') disposers.push(() => { unregisterLaunch() })
+    } catch (e) {
+      // Non-fatal: the widget falls back to reporting the connection only.
     }
   }
 

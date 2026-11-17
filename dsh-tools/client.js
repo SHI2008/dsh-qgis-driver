@@ -32,9 +32,11 @@ window.__ModuleLoader__.load({
     function StatusWidget() {
       const [status, setStatus] = React.useState(null)
       const [open, setOpen] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
 
       React.useEffect(() => {
         let alive = true
+        let timer = null
         async function poll() {
           let next = { dock: false, connected: false, target: null, host: null, error: '无法读取连接状态' }
           try {
@@ -44,45 +46,67 @@ window.__ModuleLoader__.load({
           } catch (e) {
             next.error = e && e.message ? e.message : String(e)
           }
-          if (alive) setStatus(next)
+          if (!alive) return
+          setStatus(next)
+          timer = setTimeout(poll, next.connected ? 4000 : 1500)
         }
         poll()
-        const timer = setInterval(poll, 4000)
-        return () => { alive = false; clearInterval(timer) }
+        return () => { alive = false; if (timer) clearTimeout(timer) }
       }, [])
+
+      const connected = !!(status && status.connected)
+
+      async function onBadge() {
+        if (connected) { setOpen((v) => !v); return }
+        setOpen(true)
+        if (busy) return
+        setBusy(true)
+        try {
+          await fetch('/api/dsh-qgis-driver/launch', { method: 'POST' })
+        } catch (e) {
+          /* the poller will report the failure */
+        }
+        setTimeout(() => setBusy(false), 2500)
+      }
 
       // Not enabled in Settings → render nothing.
       if (!status || !status.dock) return null
 
-      const connected = !!status.connected
       const dot = h('span', {
         style: {
           display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
           background: connected ? GREEN : RED, marginRight: 5, flexShrink: 0,
         },
       })
+
       const channel = status.channel === 'file' ? '文件通道' : (status.channel === 'http' ? 'REST' : '')
-      const detail = connected
-        ? (status.target === 'remote'
-            ? '远程 ' + (status.host || '') + (channel ? ' · ' + channel : '')
-            : '本地 ' + (status.host || '') + (channel ? ' · ' + channel : ''))
-        : String(status.detail || status.error || '未检测到 QGIS，请启动 QGIS 或在设置中配置 host/port/Key')
+      const place = status.target === 'remote'
+        ? '远程 ' + (status.host || '')
+        : '本地 ' + (status.host || '')
+
+      let head
+      let bodyText
+      if (connected) {
+        head = status.target === 'remote' ? '远程 QGIS 已连接' : '本地 QGIS 已连接'
+        bodyText = [place, channel].filter(Boolean).join(' · ')
+      } else if (busy) {
+        head = '正在启动 QGIS…'
+        bodyText = '首次启动需要十几秒，启动完成后此处会自动变为已连接。'
+      } else {
+        head = 'QGIS 未连接'
+        bodyText = '点击此处启动 QGIS；直接调用任一 qgis_* 工具也会自动拉起。'
+      }
 
       return h('div', {
         style: {
-          position: 'relative',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'flex-end',
-          flex: '0 0 auto',
-          minWidth: 0,
-          alignSelf: 'center',
+          position: 'relative', display: 'inline-flex', alignItems: 'center',
+          flex: '0 0 auto', minWidth: 0, alignSelf: 'center',
         },
       },
         h('button', {
           type: 'button',
-          onClick: () => setOpen((v) => !v),
-          title: 'QGIS 连接状态（可在设置中开关）',
+          onClick: onBadge,
+          title: connected ? '点击查看连接通道' : '点击启动 QGIS',
           style: {
             display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap',
             background: 'transparent', border: 'none', padding: '0 2px',
@@ -90,18 +114,25 @@ window.__ModuleLoader__.load({
             lineHeight: '16px', cursor: 'pointer', userSelect: 'none',
             flex: '0 0 auto',
           },
-        }, dot, connected ? 'QGIS 已连接' : 'QGIS 未连接'),
+        }, dot, connected ? 'QGIS 已连接' : (busy ? 'QGIS 启动中…' : 'QGIS 未连接')),
         open
           ? h('div', {
               style: {
-                position: 'absolute', bottom: '100%', right: 0, zIndex: 5,
-                marginBottom: 4, padding: '4px 8px', borderRadius: 6,
-                background: SURFACE, border: '1px solid ' + BORDER,
-                fontSize: 11, color: MUTED, lineHeight: '15px',
-                maxWidth: 320, textAlign: 'right', whiteSpace: 'normal',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.45)',
+                position: 'absolute', bottom: '100%', right: 0, zIndex: 20,
+                marginBottom: 6, width: 232, boxSizing: 'border-box',
+                padding: '9px 11px', borderRadius: 8,
+                background: '#16161b', border: '1px solid ' + BORDER,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                textAlign: 'left', whiteSpace: 'normal', wordBreak: 'break-word',
+                fontSize: 11.5, lineHeight: '17px',
               },
-            }, detail)
+            },
+              h('div', { style: { color: connected ? GREEN : RED, fontWeight: 600, marginBottom: 3 } }, head),
+              h('div', { style: { color: MUTED } }, bodyText),
+              connected && status.detail
+                ? h('div', { style: { color: '#6f6f7a', marginTop: 4, fontSize: 10.5 } }, status.detail)
+                : null,
+            )
           : null,
       )
     }
