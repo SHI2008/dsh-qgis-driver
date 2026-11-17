@@ -186,7 +186,7 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsPanel(props) {
-      const [form, setForm] = React.useState({ host: '', port: 0, key: '', dock: false })
+      const [form, setForm] = React.useState({ host: '', port: 0, key: '', dock: false, headless: true })
       const [loaded, setLoaded] = React.useState(false)
       const [saving, setSaving] = React.useState(false)
       const [msg, setMsg] = React.useState(null)
@@ -205,6 +205,7 @@ window.__ModuleLoader__.load({
                 port: (c && Number.isInteger(c.port)) ? c.port : 0,
                 key: (c && typeof c.key === 'string') ? c.key : '',
                 dock: !!c?.dock,
+                headless: c?.headless !== false,
               })
               setLoaded(true)
             }
@@ -228,6 +229,7 @@ window.__ModuleLoader__.load({
               port: Number(form.port) || 0,
               key: form.key,
               dock: !!form.dock,
+              headless: !!form.headless,
             }),
           })
           const b = await r.json().catch(() => ({}))
@@ -255,6 +257,12 @@ window.__ModuleLoader__.load({
             h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
               '在消息输入框右侧显示 QGIS 连接状态徽标，点击可启动 QGIS 或查看通道（默认关闭）。')),
           Switch({ checked: !!form.dock, onChange: (v) => setForm((f) => ({ ...f, dock: v })) })),
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } },
+            h('span', { style: { fontSize: 13 } }, '自动启动使用无头模式'),
+            h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
+              '自动拉起 QGIS 时不显示窗口；只有需要地图画布的工具（平移/缩放/截图）才启动 GUI。关闭则总是启动 GUI。')),
+          Switch({ checked: !!form.headless, onChange: (v) => setForm((f) => ({ ...f, headless: v })) })),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
           h('button', { onClick: save, disabled: saving, style: { ...btnStyle, opacity: saving ? 0.6 : 1 } },
             saving ? '保存中…' : '保存'),

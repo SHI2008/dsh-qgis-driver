@@ -36,6 +36,7 @@ export const Config = z.object({
   port: z.number().default(0),
   key: z.string().default(''),
   dock: z.boolean().default(false),
+  headless: z.boolean().default(true),
 })
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
@@ -98,11 +99,12 @@ function registryCandidates(startedAt = 0) {
  * whenever the plugin wrote its registry. Stale registry files (dead PID) are
  * skipped.
  */
-function findLocalLiveDir(startedAt = 0) {
+function findLocalLiveDir(startedAt = 0, requireGui = false) {
   for (const { p } of registryCandidates(startedAt)) {
     let reg
     try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
     if (reg.pid && !pidAlive(reg.pid)) continue
+    if (requireGui && reg.gui !== true) continue
     const liveDir = reg.live_dir
     if (!liveDir) continue
     let token = ''
@@ -121,16 +123,18 @@ function findLocalLiveDir(startedAt = 0) {
       host: reg.host || '127.0.0.1',
       port: reg.http_port || 0,
       pid: reg.pid,
+      gui: reg.gui === true,
     }
   }
   return null
 }
 
 /** Find a live QGIS instance reachable over HTTP (fallback path). */
-async function findActiveQgis(startedAt = 0) {
+async function findActiveQgis(startedAt = 0, requireGui = false) {
   for (const { p } of registryCandidates(startedAt)) {
     let reg
     try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
+    if (requireGui && reg.gui !== true) continue
     const host = reg.host || '127.0.0.1'
     const port = reg.http_port
     const token = reg.token
@@ -147,6 +151,7 @@ async function findActiveQgis(startedAt = 0) {
           token,
           host,
           port,
+          gui: reg.gui === true,
           liveDir: reg.live_dir || '',
         }
       }
@@ -166,9 +171,10 @@ async function findActiveQgis(startedAt = 0) {
 
 const DEFAULT_AUTOSTART_TIMEOUT_MS = 90000
 const DEFAULT_AUTOSTART_SCRIPT = fileURLToPath(new URL('./scripts/start-qgis.cmd', import.meta.url))
+const DEFAULT_HEADLESS_SCRIPT = fileURLToPath(new URL('./scripts/start-qgis-headless.cmd', import.meta.url))
 
 /** Autostart config: `config.autostart` ({command, timeoutMs, env}) or QGIS_LIVE_AUTOSTART_CMD. */
-function resolveAutostart(config) {
+function resolveAutostart(config, gui = false) {
   const a = config?.autostart
   if (a === false) return null
   if (a && typeof a === 'object' && typeof a.command === 'string' && a.command.trim()) {
@@ -181,10 +187,17 @@ function resolveAutostart(config) {
   }
   const envCommand = String(process.env.QGIS_LIVE_AUTOSTART_CMD || '').trim()
   if (envCommand) return { command: envCommand, timeoutMs: DEFAULT_AUTOSTART_TIMEOUT_MS, env: {} }
-  // Ship-with-the-bundle launcher: present → autostart is on by default.
+  // Ship-with-the-bundle launchers: headless by default, GUI when the call
+  // genuinely needs a map canvas (config.headless=false forces the GUI one).
+  const wantHeadless = !gui && config?.headless !== false
+  const primary = wantHeadless ? DEFAULT_HEADLESS_SCRIPT : DEFAULT_AUTOSTART_SCRIPT
+  const fallback = wantHeadless ? DEFAULT_AUTOSTART_SCRIPT : DEFAULT_HEADLESS_SCRIPT
   try {
-    if (fs.existsSync(DEFAULT_AUTOSTART_SCRIPT)) {
-      return { command: `"${DEFAULT_AUTOSTART_SCRIPT}"`, timeoutMs: 120000, env: {} }
+    if (fs.existsSync(primary)) {
+      return { command: `"${primary}"`, timeoutMs: 120000, env: {}, gui: !wantHeadless }
+    }
+    if (fs.existsSync(fallback)) {
+      return { command: `"${fallback}"`, timeoutMs: 120000, env: {}, gui: wantHeadless }
     }
   } catch {
     /* ignore */
@@ -193,7 +206,7 @@ function resolveAutostart(config) {
 }
 
 /** Launch the start command detached, then wait for a fresh registry entry. */
-async function autostartQgis(auto) {
+async function autostartQgis(auto, requireGui = false) {
   const startedAt = Date.now()
   try {
     const child = spawn(auto.command, {
@@ -211,10 +224,10 @@ async function autostartQgis(auto) {
   let lastError = null
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1500))
-    const local = findLocalLiveDir(startedAt)
+    const local = findLocalLiveDir(startedAt, requireGui)
     if (local) return local
     try {
-      return await findActiveQgis(startedAt)
+      return await findActiveQgis(startedAt, requireGui)
     } catch (e) {
       lastError = e
     }
@@ -401,7 +414,7 @@ export function apply(ctx, config = {}) {
   const remote = resolveRemoteTarget(config)
 
   /** Resolve the connection target (health-checked remote, or local discovery). */
-  async function resolveTarget() {
+  async function resolveTarget(opts = {}) {
     if (remote) {
       try {
         const resp = await fetch(`${remote.base}/api/health`, {
@@ -418,14 +431,15 @@ export function apply(ctx, config = {}) {
       return remote
     }
     // Local: prefer the plugin's file channel (no port, no auth header).
-    const local = findLocalLiveDir()
+    const requireGui = !!(opts && opts.gui)
+    const local = findLocalLiveDir(0, requireGui)
     if (local) return local
     try {
-      return await findActiveQgis()
+      return await findActiveQgis(0, requireGui)
     } catch (localError) {
-      const auto = resolveAutostart(config)
+      const auto = resolveAutostart(config, requireGui)
       if (!auto) throw localError
-      return await autostartQgis(auto)
+      return await autostartQgis(auto, requireGui)
     }
   }
 
@@ -449,8 +463,8 @@ export function apply(ctx, config = {}) {
   }
 
   /** Run one PyQGIS snippet synchronously (main thread) and unwrap its `result`. */
-  async function runQgisSync(code, signal) {
-    const target = await resolveTarget()
+  async function runQgisSync(code, signal, opts) {
+    const target = await resolveTarget(opts)
     return callQgis('/api/pyeval', 'POST', { code }, signal, target)
   }
 
@@ -1182,7 +1196,7 @@ export function apply(ctx, config = {}) {
         "result = {'extent': [rect.xMinimum(), rect.yMinimum(), rect.xMaximum(), rect.yMaximum()],",
         "          'crs': dst.authid() if dst.isValid() else None}",
       ].join('\n')
-      return asText(await runQgisSync(code, exec?.signal))
+      return asText(await runQgisSync(code, exec?.signal, { gui: true }))
     },
   }))
 
@@ -1220,7 +1234,7 @@ export function apply(ctx, config = {}) {
         "          'extent': [ext.xMinimum(), ext.yMinimum(), ext.xMaximum(), ext.yMaximum()],",
         "          'crs': dst.authid() if dst.isValid() else None}",
       ].join('\n')
-      return asText(await runQgisSync(code, exec?.signal))
+      return asText(await runQgisSync(code, exec?.signal, { gui: true }))
     },
   }))
 
@@ -1269,7 +1283,7 @@ export function apply(ctx, config = {}) {
         '    w, h = img.width(), img.height()',
         "result = {'image_base64': b64, 'width': w, 'height': h, 'target': target, 'size_bytes': n}",
       ].join('\n')
-      const result = await runQgisSync(code, exec?.signal)
+      const result = await runQgisSync(code, exec?.signal, { gui: true })
       if (!result || typeof result.image_base64 !== 'string') return asText(result)
       return asText({
         image_path: writeTempFile(result.image_base64, 'png'),
@@ -2195,6 +2209,8 @@ export function apply(ctx, config = {}) {
       host: null,
       error: null,
       detail: null,
+      headless: config?.headless !== false,
+      gui: null,
       canLaunch: !!resolveAutostart(config),
     }
     if (remote) {
@@ -2223,7 +2239,8 @@ export function apply(ctx, config = {}) {
       status.connected = true
       status.channel = 'file'
       status.host = local.host
-      status.detail = `文件通道：${local.liveDir}`
+      status.gui = !!local.gui
+      status.detail = `文件通道：${local.liveDir}（${local.gui ? 'GUI' : '无头'}）`
       return status
     }
     status.channel = 'http'
@@ -2231,7 +2248,8 @@ export function apply(ctx, config = {}) {
       const t = await findActiveQgis()
       status.connected = true
       status.host = t.base.replace(/^http:\/\//, '')
-      status.detail = `HTTP 通道：${t.base}`
+      status.gui = !!t.gui
+      status.detail = `HTTP 通道：${t.base}（${t.gui ? 'GUI' : '无头'}）`
     } catch (e) {
       status.error = '未检测到 QGIS'
       status.detail = e && e.message ? e.message : String(e)
@@ -2280,6 +2298,7 @@ export function apply(ctx, config = {}) {
             port: (config && Number.isInteger(config.port)) ? config.port : 0,
             key: (config && typeof config.key === 'string') ? config.key : '',
             dock: !!config?.dock,
+            headless: config?.headless !== false,
           }
           if (request.method !== 'POST') {
             return new Response(JSON.stringify(current), {
@@ -2300,8 +2319,9 @@ export function apply(ctx, config = {}) {
           const port = (Number.isInteger(rawPort) && rawPort >= 0 && rawPort <= 65535) ? rawPort : current.port
           const key = (typeof body.key === 'string') ? body.key : current.key
           const dock = (typeof body.dock === 'boolean') ? body.dock : current.dock
+          const headless = (typeof body.headless === 'boolean') ? body.headless : current.headless
           try {
-            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), host, port, key, dock }))
+            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), host, port, key, dock, headless }))
             return new Response(JSON.stringify({ ok: true }), {
               status: 200,
               headers: { 'content-type': 'application/json' },

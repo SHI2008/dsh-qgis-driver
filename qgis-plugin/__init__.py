@@ -685,6 +685,7 @@ class GeoDriverPlugin:
                     "host": host,
                     "http_port": port,
                     "token": self.driver.token,
+                    "gui": self.iface is not None,
                     "http_tools": (sorted(_http_allowed())
                                    if _http_allowed() else "all"),
                     "started": time.time(),

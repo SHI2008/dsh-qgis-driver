@@ -5,6 +5,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+- **Changed**: autostart is headless by default — `scripts/start-qgis-headless.cmd`
+  boots a windowless QGIS (Processing initialised) and only map-canvas tools
+  (`set_extent` / `zoom_to_layer` / `screenshot`) bring up the GUI; the registry
+  now records `gui: true|false` and the `headless` config toggle (on by default)
+  is exposed in the Settings form.
 - **Changed**: translation support reduced to English + Simplified Chinese; the de/es/fr/hi/it/ja/pt/ru catalogs were removed (every `zh*` locale uses `i18n/zh.json`, everything else falls back to English).
 
 ### Added
