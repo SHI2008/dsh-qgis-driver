@@ -2057,5 +2057,63 @@ export function apply(ctx, config = {}) {
     }
   }
 
+  // ---- Client GUI: config endpoint (read/write host/port/key/dock from Settings) ----
+  // The client's Settings section has no config service, so it reads/writes through
+  // this same-origin route. GET returns the current (resolved) config; POST persists
+  // via configEditor.edit (which restarts the plugin so `apply` re-resolves remote).
+  const configEditor = typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined
+  const configEntry = (ctx && ctx.fiber && ctx.fiber.entry) ? ctx.fiber.entry : undefined
+  if (connection && connection.fetch && typeof connection.fetch.register === 'function') {
+    try {
+      const unregisterCfg = connection.fetch.register({
+        path: '/api/dsh-qgis-driver/config',
+        methods: ['GET', 'POST'],
+        requestBody: 'buffered',
+        fetch: async (request) => {
+          const current = {
+            host: (config && typeof config.host === 'string') ? config.host : '',
+            port: (config && Number.isInteger(config.port)) ? config.port : 0,
+            key: (config && typeof config.key === 'string') ? config.key : '',
+            dock: !!config?.dock,
+          }
+          if (request.method !== 'POST') {
+            return new Response(JSON.stringify(current), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+          if (!configEditor || !configEntry) {
+            return new Response(JSON.stringify({ ok: false, error: '配置编辑器不可用' }), {
+              status: 500,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+          let body = {}
+          try { body = await request.json() } catch { /* keep defaults */ }
+          const host = (typeof body.host === 'string') ? body.host : current.host
+          const rawPort = Number(body.port)
+          const port = (Number.isInteger(rawPort) && rawPort >= 0 && rawPort <= 65535) ? rawPort : current.port
+          const key = (typeof body.key === 'string') ? body.key : current.key
+          const dock = (typeof body.dock === 'boolean') ? body.dock : current.dock
+          try {
+            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), host, port, key, dock }))
+            return new Response(JSON.stringify({ ok: true }), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            })
+          } catch (e) {
+            return new Response(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }), {
+              status: 400,
+              headers: { 'content-type': 'application/json' },
+            })
+          }
+        },
+      })
+      if (typeof unregisterCfg === 'function') disposers.push(() => { unregisterCfg() })
+    } catch (e) {
+      // Non-fatal: the Settings section simply reports "config unavailable".
+    }
+  }
+
   return () => { for (const d of disposers) d() }
 }
