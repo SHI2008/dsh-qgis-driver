@@ -1,22 +1,26 @@
 # -*- coding: utf-8 -*-
 """Headless QGIS runtime for the dsh-qgis-driver bundle (no window, no GUI).
 
-Started by ``start-qgis-headless.cmd``. It boots a ``QgsApplication`` without a
-GUI, makes the Processing framework usable, loads the ``dsh_qgis_driver``
-plugin from the QGIS profile plugin directory and hands control to Qt's event
-loop so the plugin's live driver (file channel + REST) serves tool calls.
+Started **directly** by the bundle (``index.js`` → ``apps/Python312/python.exe``
+with the OSGeo4W environment), never through a ``.cmd`` wrapper.
+
+It boots a ``QgsApplication`` without a GUI, makes the Processing framework
+usable, loads the ``dsh_qgis_driver`` plugin straight from the repository
+(``QGIS_LIVE_PLUGIN_ROOT``, falling back to the QGIS profile plugin directory)
+and hands control to Qt's event loop so the plugin's live driver (file channel +
+REST) serves tool calls.
 
 Only the tools that genuinely need a GUI (map canvas: set_extent /
-zoom_to_layer / screenshot, or WebEngine) require the GUI launcher instead.
+zoom_to_layer / screenshot) require the GUI launcher instead.
 """
 
+import importlib.util
 import os
 import sys
 import traceback
 
-PLUGIN_DIR = os.environ.get("QGIS_LIVE_PLUGIN_DIR", "")
-if PLUGIN_DIR and PLUGIN_DIR not in sys.path:
-    sys.path.insert(0, PLUGIN_DIR)
+PKG = os.environ.get("QGIS_LIVE_PLUGIN_PKG", "dsh_qgis_driver")
+REPO_ROOT = os.environ.get("QGIS_LIVE_PLUGIN_ROOT", "")
 
 from qgis.core import QgsApplication  # noqa: E402
 
@@ -40,14 +44,32 @@ try:
 except Exception:  # nosec B110 - Processing is optional
     traceback.print_exc()
 
-pkg = os.environ.get("QGIS_LIVE_PLUGIN_PKG", "dsh_qgis_driver")
-base = os.environ.get("WEBENGINE_LIVE_DIR") or os.path.join(
-    os.path.expanduser("~"), ".qgis-live", "run")
+
+def _load_from_repo():
+    """Import the package straight from <repo>/qgis-plugin as `dsh_qgis_driver`."""
+    if not REPO_ROOT:
+        return None
+    pkg_dir = os.path.join(REPO_ROOT, "qgis-plugin")
+    init = os.path.join(pkg_dir, "__init__.py")
+    if not os.path.isfile(init):
+        return None
+    spec = importlib.util.spec_from_file_location(
+        PKG, init, submodule_search_locations=[pkg_dir])
+    if spec is None or spec.loader is None:
+        return None
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[PKG] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
 
 try:
-    mod = __import__(pkg)
-    plugin = mod.classFactory(None)
-    plugin._start(base)
+    module = _load_from_repo()
+    if module is None:
+        module = __import__(PKG)
+    plugin = module.classFactory(None)
+    plugin._start(os.environ.get("WEBENGINE_LIVE_DIR") or os.path.join(
+        os.path.expanduser("~"), ".qgis-live", "run"))
 except Exception:
     traceback.print_exc()
     sys.exit(3)

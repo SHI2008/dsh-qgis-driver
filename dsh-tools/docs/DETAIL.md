@@ -149,31 +149,30 @@ open it with the `read_image` tool.
 ## Autostart (local)
 
 When no live QGIS instance is found and the target is local (not a configured
-remote `host:port`), the bundle launches QGIS itself and waits for it to publish
-its registry file.
+remote `host:port`), the bundle starts QGIS by spawning it directly — no
+`cmd.exe`, no batch wrapper, so quoting/locale differences cannot break it.
 
-**Two launchers, headless first:**
+**Two modes, headless first:**
 
-- `scripts/start-qgis-headless.cmd` → `scripts/qgis-headless.py` starts a
-  windowless `QgsApplication` (Processing framework initialised, so
-  `qgis_run_processing` works there too) and loads the plugin from the QGIS
-  profile. This is the default: fast, no window, no desktop session needed.
-- `scripts/start-qgis.cmd` starts the normal QGIS GUI. It is used only when the
-  call needs a map canvas — `qgis_set_extent`, `qgis_zoom_to_layer`,
-  `qgis_screenshot` — or when the `headless` config toggle is off.
+- **Headless (default)** — `apps/Python312/python.exe -u scripts/qgis-headless.py`
+  with an OSGeo4W-style environment built in-process. The script boots a
+  windowless `QgsApplication`, initialises the Processing framework (so
+  `qgis_run_processing` works there too) and imports the plugin straight from
+  this repository's `qgis-plugin/` — no profile copy needed.
+- **GUI** — `bin/qgis-bin.exe`, used only when the call needs a map canvas
+  (`qgis_set_extent` / `qgis_zoom_to_layer` / `qgis_screenshot`) or when the
+  `headless` config toggle is off. This path copies `qgis-plugin/` into the
+  QGIS profile plugin dir and writes `dsh_qgis_driver=true` into the QGIS4.ini
+  `[PythonPlugins]` section.
 
-Registry entries now carry `"gui": true|false`, so a GUI-only tool never lands on
-a headless instance: it looks for a GUI instance and launches one if missing.
+Registry entries carry `"gui": true|false`, so a GUI-only tool never lands on a
+headless instance: it looks for a GUI instance and launches one if missing.
 
-Both launchers sync this repo's `qgis-plugin/` into the QGIS profile plugin
-directory (skip with `QGIS_LIVE_AUTOSTART_SYNC=0`); the GUI one additionally
-writes `dsh_qgis_driver=true` into the QGIS4.ini `[PythonPlugins]` section
-(QGIS 4 stores this in the INI, not the Windows registry).
-
-Override the command via config `autostart.command` or env `QGIS_LIVE_AUTOSTART_CMD`
-(applies to both modes); tune the wait with `autostart.timeoutMs` (default 90000)
-or `QGIS_LIVE_AUTOSTART_TIMEOUT_MS`; force GUI launches with the `headless`
-config toggle off.
+Override the launcher with config `autostart.command` or env
+`QGIS_LIVE_AUTOSTART_CMD` (runs through `cmd.exe /d /s /c <command>`);
+tune the wait with `autostart.timeoutMs` (default 90000) or
+`QGIS_LIVE_AUTOSTART_TIMEOUT_MS`; force GUI launches with the `headless`
+config toggle off; point at a non-standard install with `QGIS_ROOT`.
 
 ## Security
 

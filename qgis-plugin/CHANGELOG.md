@@ -5,11 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
-- **Changed**: autostart is headless by default — `scripts/start-qgis-headless.cmd`
-  boots a windowless QGIS (Processing initialised) and only map-canvas tools
-  (`set_extent` / `zoom_to_layer` / `screenshot`) bring up the GUI; the registry
-  now records `gui: true|false` and the `headless` config toggle (on by default)
-  is exposed in the Settings form.
+- **Changed**: autostart is headless by default and no longer goes through a
+  `.cmd`/`.bat` wrapper — the bundle spawns `apps/Python312/python.exe` directly
+  with the OSGeo4W environment it builds itself (PATH/PYTHONHOME/PYTHONPATH/
+  QGIS_PREFIX_PATH/QT_PLUGIN_PATH/GDAL/PROJ), boots a windowless QGIS
+  (`scripts/qgis-headless.py`, Processing initialised, plugin imported straight
+  from `qgis-plugin/`) and only map-canvas tools (`set_extent` /
+  `zoom_to_layer` / `screenshot`) bring up the GUI. The registry records
+  `gui: true|false` and the `headless` config toggle (on by default) is exposed
+  in the Settings form.
 - **Changed**: translation support reduced to English + Simplified Chinese; the de/es/fr/hi/it/ja/pt/ru catalogs were removed (every `zh*` locale uses `i18n/zh.json`, everything else falls back to English).
 
 ### Added
@@ -47,11 +51,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
   `qgis_set_layer_style`, `qgis_plugin_status`. Eight of them use
   `deferLoading: true` (destructive or rarely used). The bundle now
   registers 30 tools.
-- DSH bundle autostart: when no live QGIS is found locally, the bundle
-  launches QGIS via the bundled `scripts/start-qgis.cmd` (locates
-  `qgis-bin.exe`, syncs the plugin into the QGIS profile, enables it in
-  QGIS4.ini `[PythonPlugins]`, then starts QGIS) and waits for the registry
-  file. Override with config `autostart.command`/`autostart.timeoutMs` or
+- DSH bundle autostart: when no live QGIS is found locally, the bundle starts
+  QGIS itself and waits for the registry file — headless `python.exe` by
+  default, `qgis-bin.exe` when a map canvas is needed (the GUI path syncs the
+  plugin into the QGIS profile and enables it in QGIS4.ini `[PythonPlugins]`).
+  Override with config `autostart.command`/`autostart.timeoutMs` or
   `QGIS_LIVE_AUTOSTART_CMD`/`QGIS_LIVE_AUTOSTART_TIMEOUT_MS`.
 - DSH bundle: two P1 layout tools — `qgis_create_layout` (new empty print
   layout) and `qgis_export_atlas` (export a layout's atlas to multi-page

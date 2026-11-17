@@ -107,12 +107,16 @@ wins; otherwise local registry discovery; otherwise local autostart (below).
 
 ## 4. Local autostart
 
-When QGIS is on the same machine and no live instance is found, the bundle runs
-`scripts/start-qgis.cmd` and waits for the registry file. The launcher locates
-`qgis-bin.exe`, syncs `qgis-plugin/` into the QGIS profile plugins directory
-(`%APPDATA%\QGIS\QGIS4\profiles\default\python\plugins\dsh_qgis_driver`), enables
-the plugin in `QGIS4.ini` `[PythonPlugins]` (skip either step with
-`QGIS_LIVE_AUTOSTART_SYNC=0` / a pre-enabled profile), then starts QGIS.
+When QGIS is on the same machine and no live instance is found, the bundle
+spawns QGIS directly and waits for the registry file — headless
+`apps/Python312/python.exe -u scripts/qgis-headless.py` by default (no window,
+Processing initialised, plugin imported straight from `qgis-plugin/`), and
+`bin/qgis-bin.exe` only for map-canvas tools (`set_extent` / `zoom_to_layer` /
+`screenshot`) or when the `headless` toggle is off. The GUI path syncs
+`qgis-plugin/` into
+`%APPDATA%\QGIS\QGIS4\profiles\default\python\plugins\dsh_qgis_driver` and
+enables the plugin in `QGIS4.ini` `[PythonPlugins]` (skip the copy with
+`QGIS_LIVE_AUTOSTART_SYNC=0`).
 
 Override the launch command with config `autostart.command` or
 `QGIS_LIVE_AUTOSTART_CMD`; tune the wait with `autostart.timeoutMs` /

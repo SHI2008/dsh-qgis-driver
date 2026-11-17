@@ -170,10 +170,159 @@ async function findActiveQgis(startedAt = 0, requireGui = false) {
 }
 
 const DEFAULT_AUTOSTART_TIMEOUT_MS = 90000
-const DEFAULT_AUTOSTART_SCRIPT = fileURLToPath(new URL('./scripts/start-qgis.cmd', import.meta.url))
-const DEFAULT_HEADLESS_SCRIPT = fileURLToPath(new URL('./scripts/start-qgis-headless.cmd', import.meta.url))
 
-/** Autostart config: `config.autostart` ({command, timeoutMs, env}) or QGIS_LIVE_AUTOSTART_CMD. */
+/** Candidate QGIS installation roots (first hit wins). */
+function findQgisRoot() {
+  const cands = []
+  if (process.env.QGIS_ROOT) cands.push(process.env.QGIS_ROOT)
+  if (process.env.QGIS_BIN) cands.push(path.dirname(path.dirname(process.env.QGIS_BIN)))
+  if (process.env.QGIS_PREFIX_PATH) {
+    // <root>/apps/qgis → <root>
+    const p = process.env.QGIS_PREFIX_PATH.replace(/[\\/]+$/, '')
+    cands.push(path.dirname(path.dirname(p)))
+  }
+  cands.push('H:\\QGIS')
+  for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'C:\\Program Files (x86)']) {
+    if (!base) continue
+    try {
+      for (const d of fs.readdirSync(base)) {
+        if (/^QGIS/i.test(d)) cands.push(path.join(base, d))
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const root of cands) {
+    try {
+      if (root && fs.existsSync(path.join(root, 'apps', 'Python312', 'python.exe'))) return root
+    } catch {
+      /* ignore */
+    }
+  }
+  return null
+}
+
+/** Environment for a QGIS runtime, mirroring bin/python-qgis.bat + etc/ini/*.bat. */
+function qgisEnv(root) {
+  const env = { ...process.env }
+  const sys = [process.env.windir || 'C:\\Windows']
+  env.OSGEO4W_ROOT = root
+  env.PATH = [
+    path.join(root, 'bin'),
+    path.join(root, 'apps', 'Python312', 'Scripts'),
+    path.join(root, 'apps', 'Python312'),
+    path.join(root, 'apps', 'qgis', 'bin'),
+    path.join(root, 'apps', 'qt6', 'bin'),
+    path.join(sys[0], 'system32'),
+    sys[0],
+    process.env.PATH || '',
+  ].join(';')
+  env.PYTHONHOME = path.join(root, 'apps', 'Python312')
+  env.PYTHONPATH = path.join(root, 'apps', 'qgis', 'python')
+  env.PYTHONUTF8 = '1'
+  env.PYTHONEXECUTABLE = path.join(root, 'bin', 'python3.exe')
+  env.QGIS_PREFIX_PATH = path.join(root, 'apps', 'qgis').replace(/\\/g, '/')
+  env.QT_PLUGIN_PATH = [
+    path.join(root, 'apps', 'qgis', 'qtplugins'),
+    path.join(root, 'apps', 'qt6', 'plugins'),
+  ].join(';')
+  env.QT_QPA_PLATFORM_PLUGIN_PATH = path.join(root, 'apps', 'qt6', 'plugins', 'platforms')
+  env.GDAL_DATA = path.join(root, 'apps', 'gdal', 'share', 'gdal')
+  env.GDAL_DRIVER_PATH = path.join(root, 'apps', 'gdal', 'lib', 'gdalplugins')
+  env.PROJ_DATA = path.join(root, 'share', 'proj')
+  env.CURL_CA_BUNDLE = path.join(root, 'bin', 'curl-ca-bundle.crt')
+  env.SSL_CERT_FILE = path.join(root, 'bin', 'curl-ca-bundle.crt')
+  env.SSL_CERT_DIR = path.join(root, 'apps', 'openssl', 'certs')
+  env.GDAL_FILENAME_IS_UTF8 = 'YES'
+  env.VSI_CACHE = 'TRUE'
+  env.VSI_CACHE_SIZE = '1000000'
+  if (!env.WEBENGINE_LIVE_DIR) {
+    env.WEBENGINE_LIVE_DIR = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'qgis-live-autostart')
+  }
+  if (!env.QGIS_LIVE_PORT) env.QGIS_LIVE_PORT = '0'
+  return env
+}
+
+/** Bundle repo root (parent of dsh-tools/). */
+function bundleRepoRoot() {
+  return path.resolve(fileURLToPath(new URL('.', import.meta.url)), '..')
+}
+
+/**
+ * Copy `qgis-plugin/` into the QGIS profile plugin dir and enable it in
+ * QGIS4.ini — needed only for the GUI launcher (the headless one imports the
+ * package straight from the repo).
+ */
+function ensureProfilePlugin(root) {
+  const src = path.join(bundleRepoRoot(), 'qgis-plugin')
+  if (!fs.existsSync(path.join(src, 'metadata.txt'))) return
+  if (process.env.QGIS_LIVE_AUTOSTART_SYNC === '0') return
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming')
+  const profile = path.join(appData, 'QGIS', 'QGIS4', 'profiles', 'default')
+  const dst = path.join(profile, 'python', 'plugins', 'dsh_qgis_driver')
+  try {
+    fs.rmSync(dst, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
+  try {
+    fs.cpSync(src, dst, { recursive: true, filter: (p) => !/[\\/](\.git|__pycache__)([\\/]|$)/.test(p) })
+  } catch {
+    /* the GUI launcher still works when a previous copy is present */
+  }
+  // QGIS 4 keeps enable-state in the profile INI, not the registry.
+  const ini = path.join(profile, 'QGIS', 'QGIS4.ini')
+  try {
+    let text = fs.existsSync(ini) ? fs.readFileSync(ini, 'utf8') : ''
+    if (!/^\s*dsh_qgis_driver\s*=/m.test(text)) {
+      if (/\[PythonPlugins\]/i.test(text)) {
+        text = text.replace(/\[PythonPlugins\]([^\r\n]*)/i, (m0, tail) => `[PythonPlugins]${tail}\r\ndsh_qgis_driver=true`)
+      } else {
+        text += '\r\n[PythonPlugins]\r\ndsh_qgis_driver=true\r\n'
+      }
+      fs.writeFileSync(ini, text, 'utf8')
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Spawn QGIS itself (no cmd.exe / batch wrapper). */
+function launchBuiltin(mode) {
+  const root = findQgisRoot()
+  if (!root) {
+    throw new Error('未找到 QGIS 安装：请设置 QGIS_ROOT，或把 QGIS 装到 H:\\QGIS / Program Files 下')
+  }
+  const env = qgisEnv(root)
+  if (mode === 'headless') {
+    const py = path.join(root, 'apps', 'Python312', 'python.exe')
+    const script = path.join(bundleRepoRoot(), 'dsh-tools', 'scripts', 'qgis-headless.py')
+    env.QGIS_LIVE_PLUGIN_ROOT = bundleRepoRoot()
+    const child = spawn(py, ['-u', script], {
+      env,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    child.unref()
+    return
+  }
+  ensureProfilePlugin(root)
+  const bin = path.join(root, 'bin', 'qgis-bin.exe')
+  const child = spawn(bin, [], {
+    env,
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: false,
+  })
+  child.unref()
+}
+
+/**
+ * Autostart plan: an explicit `config.autostart.command` (or
+ * QGIS_LIVE_AUTOSTART_CMD) wins; otherwise the built-in PyQGIS launcher runs —
+ * headless by default, GUI when the call needs a map canvas.
+ */
 function resolveAutostart(config, gui = false) {
   const a = config?.autostart
   if (a === false) return null
@@ -186,39 +335,35 @@ function resolveAutostart(config, gui = false) {
     }
   }
   const envCommand = String(process.env.QGIS_LIVE_AUTOSTART_CMD || '').trim()
-  if (envCommand) return { command: envCommand, timeoutMs: DEFAULT_AUTOSTART_TIMEOUT_MS, env: {} }
-  // Ship-with-the-bundle launchers: headless by default, GUI when the call
-  // genuinely needs a map canvas (config.headless=false forces the GUI one).
-  const wantHeadless = !gui && config?.headless !== false
-  const primary = wantHeadless ? DEFAULT_HEADLESS_SCRIPT : DEFAULT_AUTOSTART_SCRIPT
-  const fallback = wantHeadless ? DEFAULT_AUTOSTART_SCRIPT : DEFAULT_HEADLESS_SCRIPT
-  try {
-    if (fs.existsSync(primary)) {
-      return { command: `"${primary}"`, timeoutMs: 120000, env: {}, gui: !wantHeadless }
-    }
-    if (fs.existsSync(fallback)) {
-      return { command: `"${fallback}"`, timeoutMs: 120000, env: {}, gui: wantHeadless }
-    }
-  } catch {
-    /* ignore */
+  if (envCommand) {
+    return { command: envCommand, timeoutMs: DEFAULT_AUTOSTART_TIMEOUT_MS, env: {} }
   }
-  return null
+  const wantHeadless = !gui && config?.headless !== false
+  return { builtin: wantHeadless ? 'headless' : 'gui', timeoutMs: 120000, gui: !wantHeadless }
 }
 
-/** Launch the start command detached, then wait for a fresh registry entry. */
+/** Launch QGIS (built-in launcher or a custom command), then wait for a fresh registry. */
 async function autostartQgis(auto, requireGui = false) {
   const startedAt = Date.now()
-  try {
-    const child = spawn(auto.command, {
-      shell: true,
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, ...auto.env },
-      windowsHide: false,
-    })
-    child.unref()
-  } catch (e) {
-    throw new Error(`QGIS 自动启动失败（${auto.command}）：${e.message}`)
+  if (auto.builtin) {
+    try {
+      launchBuiltin(auto.builtin)
+    } catch (e) {
+      throw new Error(`QGIS 自动启动失败：${e && e.message ? e.message : e}`)
+    }
+  } else {
+    try {
+      // args array (no shell string) avoids cmd.exe quote mangling.
+      const child = spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', auto.command], {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env, ...auto.env },
+        windowsHide: true,
+      })
+      child.unref()
+    } catch (e) {
+      throw new Error(`QGIS 自动启动失败（${auto.command}）：${e.message}`)
+    }
   }
   const deadline = Date.now() + auto.timeoutMs
   let lastError = null
@@ -233,8 +378,8 @@ async function autostartQgis(auto, requireGui = false) {
     }
   }
   throw new Error(
-    `已执行自动启动命令，但 ${Math.round(auto.timeoutMs / 1000)} 秒内没有检测到 QGIS dsh_qgis_driver 实例` +
-    `（命令：${auto.command}）。${lastError ? `最后错误：${lastError.message}` : ''}`)
+    `已启动 QGIS（${auto.builtin || auto.command}），但 ${Math.round(auto.timeoutMs / 1000)} 秒内没有检测到实例` +
+    `${lastError ? `。最后错误：${lastError.message}` : ''}`)
 }
 
 const FILE_CHANNEL_TIMEOUT_MS = 60000
