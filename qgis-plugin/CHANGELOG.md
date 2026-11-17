@@ -6,6 +6,19 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Added
+- DSH client UI: a QGIS connection-status widget in the composer dock
+  (`conversation.composer.dock`, off by default, toggled by the `dock`
+  setting). It is a compact right-aligned badge that shows the channel
+  (file / REST) and expands the detail line on click.
+- DSH client UI: a dedicated **Settings** section (`settings.section`) with
+  an editable host/port/Key/dock form, read and written through the Host's
+  same-origin `/api/dsh-qgis-driver/config` route (persisted with
+  `configEditor.edit`).
+- DSH bundle: dual connection channels. Local calls now go through the
+  plugin's JSONL file channel (`<live_dir>/commands.jsonl` →
+  `<live_dir>/results.jsonl`, same token, same `_dispatch`, no HTTP port);
+  remote calls keep using REST. The status widget reports which channel is
+  in use (`QGIS_LIVE_FILE_TIMEOUT_MS` overrides the 60 s reply timeout).
 - REST async execution channel: `POST /api/pyeval_async` returns a
   `task_id` immediately and `GET /api/tasks/<task_id>` polls the result
   (live_driver.py `TaskRegistry` + `submit_pyeval_async`; http_api.py

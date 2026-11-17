@@ -60,15 +60,26 @@ function resolveRemoteTarget(config) {
   return { base: `http://${host}:${port}`, token: key }
 }
 
-/** Find a live QGIS instance: newest registry files first, health-probed. */
-async function findActiveQgis(startedAt = 0) {
+/** Whether a PID is alive (used to skip stale registry files). */
+function pidAlive(pid) {
+  if (!pid) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return !!(e && e.code === 'EPERM')
+  }
+}
+
+/** Newest registry entries (mtime desc, at most 3). */
+function registryCandidates(startedAt = 0) {
   let names
   try {
     names = fs.readdirSync(REGISTRY_DIR)
   } catch {
-    throw new Error('未找到活跃的 dsh-qgis-driver 实例：~/.qgis-live 目录不存在')
+    return []
   }
-  const candidates = names
+  return names
     .filter((n) => n.endsWith('-dsh_qgis_driver.json'))
     .map((n) => path.join(REGISTRY_DIR, n))
     .map((p) => {
@@ -77,8 +88,47 @@ async function findActiveQgis(startedAt = 0) {
     .filter((c) => c && c.mtime >= startedAt - 2000)
     .sort((a, b) => b.mtime - a.mtime)
     .slice(0, 3)
+}
 
-  for (const { p } of candidates) {
+/**
+ * Find a live QGIS instance and return its FILE channel
+ * (`<live_dir>/commands.jsonl` + `results.jsonl`).
+ *
+ * Local calls prefer this channel: no HTTP port, no Bearer header, and it works
+ * whenever the plugin wrote its registry. Stale registry files (dead PID) are
+ * skipped.
+ */
+function findLocalLiveDir(startedAt = 0) {
+  for (const { p } of registryCandidates(startedAt)) {
+    let reg
+    try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
+    if (reg.pid && !pidAlive(reg.pid)) continue
+    const liveDir = reg.live_dir
+    if (!liveDir) continue
+    let token = ''
+    try { token = fs.readFileSync(path.join(liveDir, 'token'), 'utf8').trim() } catch { token = '' }
+    if (!token && typeof reg.token === 'string') token = reg.token
+    if (!token) continue
+    try {
+      fs.accessSync(liveDir, fs.constants.R_OK | fs.constants.W_OK)
+    } catch {
+      continue
+    }
+    return {
+      channel: 'file',
+      liveDir,
+      token,
+      host: reg.host || '127.0.0.1',
+      port: reg.http_port || 0,
+      pid: reg.pid,
+    }
+  }
+  return null
+}
+
+/** Find a live QGIS instance reachable over HTTP (fallback path). */
+async function findActiveQgis(startedAt = 0) {
+  for (const { p } of registryCandidates(startedAt)) {
     let reg
     try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
     const host = reg.host || '127.0.0.1'
@@ -90,7 +140,16 @@ async function findActiveQgis(startedAt = 0) {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
       })
-      if (resp.status === 200) return { base: `http://${host}:${port}`, token }
+      if (resp.status === 200) {
+        return {
+          channel: 'http',
+          base: `http://${host}:${port}`,
+          token,
+          host,
+          port,
+          liveDir: reg.live_dir || '',
+        }
+      }
       if (resp.status === 401) {
         throw new Error('QGIS 凭证已过期或无效（注册 token 与运行实例不一致）')
       }
@@ -152,6 +211,8 @@ async function autostartQgis(auto) {
   let lastError = null
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 1500))
+    const local = findLocalLiveDir(startedAt)
+    if (local) return local
     try {
       return await findActiveQgis(startedAt)
     } catch (e) {
@@ -163,8 +224,124 @@ async function autostartQgis(auto) {
     `（命令：${auto.command}）。${lastError ? `最后错误：${lastError.message}` : ''}`)
 }
 
-/** Call one REST endpoint and unwrap { result } / { error }. */
+const FILE_CHANNEL_TIMEOUT_MS = 60000
+const FILE_POLL_INTERVAL_MS = 50
+
+/** Per-live-dir read cursor for the JSONL results file. */
+const fileStates = new Map()
+/** Serializes file-channel calls so ids/tokens never interleave on one line. */
+let fileChain = Promise.resolve()
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** Map a REST route + JSON body onto the plugin's command object. */
+function routeToCommand(route, body) {
+  if (route === '/api/pyeval') return { type: 'pyeval', code: body?.code }
+  if (route === '/api/pyeval_async') return { type: 'pyeval_async', code: body?.code }
+  if (route === '/api/cmd') return { ...(body || {}) }
+  const m = /^\/api\/tasks\/([^/]+)$/.exec(route || '')
+  if (m) return { type: 'task_status', task_id: decodeURIComponent(m[1]) }
+  throw new Error(`文件通道不支持该端点：${route}`)
+}
+
+/**
+ * Run one command through the plugin's file channel
+ * (`<live_dir>/commands.jsonl` → `<live_dir>/results.jsonl`).
+ *
+ * Appends one JSON line with a fresh id, then tails the results file from a
+ * stored byte offset and resolves the line whose `id` matches.
+ */
+function invokeFile(cmd, signal, target) {
+  const run = () => invokeFileOnce(cmd, signal, target)
+  const p = fileChain.then(run, run)
+  fileChain = p.catch(() => {})
+  return p
+}
+
+async function invokeFileOnce(cmd, signal, target) {
+  const liveDir = target.liveDir
+  if (!liveDir) throw new Error('文件通道缺少 live_dir（注册表条目没有 live_dir 字段）')
+  let token = target.token
+  if (!token) {
+    try { token = fs.readFileSync(path.join(liveDir, 'token'), 'utf8').trim() } catch { token = '' }
+  }
+  if (!token) throw new Error('无法读取 QGIS 文件通道 token（live_dir 内没有 token 文件）')
+
+  const cmdPath = path.join(liveDir, 'commands.jsonl')
+  const resPath = path.join(liveDir, 'results.jsonl')
+  let state = fileStates.get(liveDir)
+  if (!state) {
+    state = { offset: 0, buffer: '', ready: false }
+    fileStates.set(liveDir, state)
+  }
+  if (!state.ready) {
+    try { state.offset = fs.statSync(resPath).size } catch { state.offset = 0 }
+    state.buffer = ''
+    state.ready = true
+  }
+  const size = (() => { try { return fs.statSync(resPath).size } catch { return 0 } })()
+  if (size < state.offset) {
+    state.offset = 0
+    state.buffer = ''
+  }
+
+  const id = `dsh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+  fs.appendFileSync(cmdPath, JSON.stringify({ ...cmd, id, token }) + '\n', 'utf8')
+
+  const timeoutMs = Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new Error('文件通道等待已中止')
+    await delay(FILE_POLL_INTERVAL_MS)
+    let chunk = ''
+    try {
+      const now = fs.statSync(resPath).size
+      if (now > state.offset) {
+        const len = now - state.offset
+        const buf = Buffer.alloc(len)
+        const fd = fs.openSync(resPath, 'r')
+        try {
+          fs.readSync(fd, buf, 0, len, state.offset)
+        } finally {
+          fs.closeSync(fd)
+        }
+        chunk = buf.toString('utf8')
+        state.offset = now
+      }
+    } catch {
+      continue
+    }
+    if (!chunk) continue
+    const text = state.buffer + chunk
+    const end = text.lastIndexOf('\n')
+    if (end < 0) {
+      state.buffer = text
+      continue
+    }
+    state.buffer = text.slice(end + 1)
+    for (const raw of text.slice(0, end).split('\n')) {
+      const line = raw.trim()
+      if (!line) continue
+      let obj
+      try { obj = JSON.parse(line) } catch { continue }
+      if (!obj || obj.id !== id) continue
+      if (obj.error) {
+        throw new Error(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error))
+      }
+      return obj.result
+    }
+  }
+  throw new Error(
+    `QGIS 文件通道超时（${Math.round(timeoutMs / 1000)} 秒）：${cmdPath}`)
+}
+
+/** Call one endpoint and unwrap { result } / { error } over the target channel. */
 async function callQgis(route, method, body, signal, target) {
+  if (target && target.channel === 'file') {
+    return invokeFile(routeToCommand(route, body), signal, target)
+  }
   const resp = await fetch(`${target.base}${route}`, {
     method,
     headers: { Authorization: `Bearer ${target.token}`, 'Content-Type': 'application/json' },
@@ -240,6 +417,9 @@ export function apply(ctx, config = {}) {
       }
       return remote
     }
+    // Local: prefer the plugin's file channel (no port, no auth header).
+    const local = findLocalLiveDir()
+    if (local) return local
     try {
       return await findActiveQgis()
     } catch (localError) {
@@ -2007,9 +2187,18 @@ export function apply(ctx, config = {}) {
 
   /** Probe QGIS liveness WITHOUT autostarting (passive status check). */
   async function probeStatus() {
-    const status = { dock: !!config?.dock, connected: false, target: null, host: null, error: null }
+    const status = {
+      dock: !!config?.dock,
+      connected: false,
+      channel: null,
+      target: null,
+      host: null,
+      error: null,
+      detail: null,
+    }
     if (remote) {
       status.target = 'remote'
+      status.channel = 'http'
       status.host = remote.base.replace(/^http:\/\//, '')
       try {
         const resp = await fetch(`${remote.base}/api/health`, {
@@ -2017,19 +2206,34 @@ export function apply(ctx, config = {}) {
           signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
         })
         status.connected = resp.status === 200
-        if (!status.connected) status.error = `远程 QGIS ${remote.base} → HTTP ${resp.status}`
+        if (!status.connected) {
+          status.error = resp.status === 401 ? '凭证已失效' : '远程不可达'
+          status.detail = `远程 QGIS ${remote.base} → HTTP ${resp.status}`
+        }
       } catch (e) {
-        status.error = `远程 QGIS 不可用：${e && e.message ? e.message : e}`
+        status.error = '远程不可达'
+        status.detail = `远程 QGIS 不可用：${e && e.message ? e.message : e}`
       }
       return status
     }
     status.target = 'local'
+    const local = findLocalLiveDir()
+    if (local) {
+      status.connected = true
+      status.channel = 'file'
+      status.host = local.host
+      status.detail = `文件通道：${local.liveDir}`
+      return status
+    }
+    status.channel = 'http'
     try {
       const t = await findActiveQgis()
       status.connected = true
       status.host = t.base.replace(/^http:\/\//, '')
+      status.detail = `HTTP 通道：${t.base}`
     } catch (e) {
-      status.error = e && e.message ? e.message : String(e)
+      status.error = '未检测到 QGIS'
+      status.detail = e && e.message ? e.message : String(e)
     }
     return status
   }

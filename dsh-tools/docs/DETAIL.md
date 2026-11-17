@@ -13,11 +13,20 @@ discovery) or a **remote machine** (host + port + Key).
 
 ### Local (default)
 
-The bundle auto-discovers a running QGIS: it picks the newest
-`~/.qgis-live/<pid>-dsh_qgis_driver.json` registry entry (up to 3 candidates) and probes
-`GET /api/health` with the stored per-session token. A `401` is reported as an
-expired/invalid credential; a dead or refused instance falls through to the next
-candidate. No configuration is needed.
+The bundle talks to QGIS through the plugin's **JSONL file channel** — no HTTP port,
+no auth header:
+
+- it picks the newest `~/.qgis-live/<pid>-dsh_qgis_driver.json` registry entry (up to 3
+  candidates, dead PIDs skipped) and reads that entry's `live_dir` + `token`;
+- each call appends one JSON line to `<live_dir>/commands.jsonl` and tails
+  `<live_dir>/results.jsonl` from a stored byte offset, matching the reply by `id`;
+- the plugin's `_poll` timer (QGIS main thread) drains the command file, validates the
+  token (`hmac.compare_digest`) and appends the reply — the same `_dispatch` as REST,
+  so every tool behaves identically.
+
+Timeout: `QGIS_LIVE_FILE_TIMEOUT_MS` (default 60000 ms). If the file channel is
+unavailable (no readable `live_dir`), the bundle falls back to probing
+`GET /api/health` and using REST on `127.0.0.1:<port>`. No configuration is needed.
 
 ### Remote (cross-machine)
 

@@ -31,6 +31,7 @@ window.__ModuleLoader__.load({
 
     function StatusWidget() {
       const [status, setStatus] = React.useState(null)
+      const [open, setOpen] = React.useState(false)
 
       React.useEffect(() => {
         let alive = true
@@ -56,29 +57,43 @@ window.__ModuleLoader__.load({
       const connected = !!status.connected
       const dot = h('span', {
         style: {
-          display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-          background: connected ? GREEN : RED, marginRight: 6, flexShrink: 0,
+          display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
+          background: connected ? GREEN : RED, marginRight: 5, flexShrink: 0,
         },
       })
-      const label = connected ? 'QGIS 已连接' : 'QGIS 未连接'
-      const target = status.target === 'remote'
-        ? '远程 ' + (status.host || '')
-        : (connected ? '本地 ' + (status.host || '') : '本地自动发现')
-      const hint = connected
-        ? target
-        : (status.error && String(status.error).length ? String(status.error) : '未检测到 QGIS，请启动 QGIS 或在设置中配置 host/port/Key')
+      const channel = status.channel === 'file' ? '文件通道' : (status.channel === 'http' ? 'REST' : '')
+      const detail = connected
+        ? (status.target === 'remote'
+            ? '远程 ' + (status.host || '') + (channel ? ' · ' + channel : '')
+            : '本地 ' + (status.host || '') + (channel ? ' · ' + channel : ''))
+        : String(status.detail || status.error || '未检测到 QGIS，请启动 QGIS 或在设置中配置 host/port/Key')
 
       return h('div', {
-        style: {
-          display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '2px 8px',
-          fontSize: 12, color: MUTED, padding: '2px 2px', userSelect: 'none',
-          lineHeight: '18px',
-        },
-        title: 'QGIS 连接状态（可在设置中开关）',
+        style: { display: 'flex', justifyContent: 'flex-end', width: '100%' },
       },
-        dot,
-        h('span', { style: { color: connected ? GREEN : RED, fontWeight: 600 } }, label),
-        h('span', { style: { opacity: 0.85 } }, hint),
+        h('div', {
+          style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end' },
+        },
+          h('button', {
+            type: 'button',
+            onClick: () => setOpen((v) => !v),
+            title: 'QGIS 连接状态（可在设置中开关）',
+            style: {
+              display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap',
+              background: 'transparent', border: 'none', padding: '0 2px',
+              color: connected ? GREEN : RED, fontSize: 11, fontWeight: 600,
+              lineHeight: '16px', cursor: 'pointer', userSelect: 'none',
+            },
+          }, dot, connected ? 'QGIS 已连接' : 'QGIS 未连接'),
+          open
+            ? h('div', {
+                style: {
+                  fontSize: 11, color: MUTED, lineHeight: '15px', marginTop: 1,
+                  maxWidth: 420, textAlign: 'right', whiteSpace: 'normal',
+                },
+              }, detail)
+            : null,
+        ),
       )
     }
 
