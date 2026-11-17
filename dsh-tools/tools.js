@@ -23,6 +23,17 @@ from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter
 from qgis.PyQt.QtCore import QSize
 prj = QgsProject.instance()
 P = json.loads(__PARAMS__)
+def _prj_extent():
+    ext = None
+    for lyr in prj.mapLayers().values():
+        try:
+            e = lyr.extent()
+        except Exception:
+            continue
+        if e.isEmpty():
+            continue
+        ext = QgsRectangle(e) if ext is None else ext.combineExtentWith(e)
+    return None if ext is None or ext.isEmpty() else ext
 _OUT = os.path.join(tempfile.gettempdir(), 'dsh-qgis-driver')
 try:
     os.makedirs(_OUT, exist_ok=True)
@@ -68,8 +79,8 @@ result = {
     'file': prj.fileName(),
     'title': prj.title(),
     'crs': prj.crs().authid() or prj.crs().description(),
-    'extent': [round(v, 1) for v in (prj.extent().xMinimum(), prj.extent().yMinimum(),
-                                     prj.extent().xMaximum(), prj.extent().yMaximum())],
+    'extent': (lambda e: [round(e.xMinimum(), 1), round(e.yMinimum(), 1),
+                          round(e.xMaximum(), 1), round(e.yMaximum(), 1)] if e is not None else None)(_prj_extent()),
     'layers': [{'id': l.id(), 'name': l.name(), 'type': 'Vector' if l.type() == 0 else 'Raster'} for l in prj.mapLayers().values()],
     'layouts': [l.name() for l in prj.layoutManager().layouts()],
     'qgis': Qgis.QGIS_VERSION,
@@ -687,7 +698,10 @@ import base64, tempfile
 ms = QgsMapSettings()
 ms.setLayers([l for l in prj.layerTreeRoot().layerOrder()])
 ms.setDestinationCrs(prj.crs())
-ms.setExtent(prj.extent())
+_e = _prj_extent()
+if _e is None:
+    raise RuntimeError('project has no layer extent to render')
+ms.setExtent(_e)
 ms.setOutputSize(QSize(w, h))
 ms.setBackgroundColor(QColor('white'))
 img = QImage(QSize(w, h), QImage.Format.Format_ARGB32); img.fill(QColor('white'))
