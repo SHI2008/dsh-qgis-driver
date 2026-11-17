@@ -5,6 +5,17 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+- **Changed**: the tool surface was condensed from 54 tools to 10 — related
+  operations now share one tool and dispatch on an `action` argument
+  (`qgis_project`, `qgis_layer`, `qgis_feature`, `qgis_layout`, `qgis_analysis`,
+  `qgis_map`, `qgis_plugin`) alongside the three core pyeval tools
+  (`execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task`). The legacy
+  per-operation tools are no longer registered; `qgis_map` and `qgis_plugin`
+  additionally declare `deferLoading: true`.
+- **Changed**: image-returning actions (`qgis_map render|screenshot`,
+  `qgis_layout export`) write the PNG to a temp file and return its path instead
+  of inlining base64.
+
 - **Added**: nine cartography / data tools so routine map production no longer
   needs hand-written PyQGIS — `qgis_layout_add_item` (map, legend, scalebar,
   north arrow, text, rectangle), `qgis_layout_update_item` (move/resize/remove),

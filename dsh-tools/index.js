@@ -26,6 +26,7 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import z from 'schemastery'
+import { registerConsolidatedTools } from './tools.js'
 
 export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
@@ -632,14 +633,20 @@ export function apply(ctx, config = {}) {
   }
 
   /** Register one tool with the standard string output schema. */
+  // The legacy single-purpose tools are kept in this file for reference but are
+  // no longer registered: `tools.js` registers the consolidated surface.
+  const LEGACY_ENABLED = new Set()
+  /** Legacy registration site: intentionally inert now that tools.js owns the surface. */
+  const legacyRegister = () => null
   function registerTool(def) {
+    if (!LEGACY_ENABLED.has(def.name)) return
     const spec = { ...def, output: stringOutput }
     const run = spec.execute
     spec.execute = async (args, exec) => {
       toolUsed = true
       return run(args, exec)
     }
-    disposers.push(ctx.tools.register(spec))
+    disposers.push(legacyRegister(spec))
   }
 
   /** Run one PyQGIS snippet synchronously (main thread) and unwrap its `result`. */
@@ -650,7 +657,7 @@ export function apply(ctx, config = {}) {
 
   // ---- Generic PyQGIS tools ----
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'execute_qgis_sync',
     description:
       '在 QGIS 主线程同步执行一段轻量 Python 代码，可访问 iface、QgsProject 等完整 PyQGIS 对象。' +
@@ -675,7 +682,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'submit_qgis_async',
     description:
       '在 QGIS 后台线程异步执行一段 Python 代码，立即返回 task_id，不阻塞 QGIS 界面。' +
@@ -701,7 +708,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'check_qgis_task',
     description:
       '查询一个 QGIS 异步后台任务的执行状态。任务完成后返回结果并从缓存中移除（只能读取一次）；' +
@@ -728,7 +735,7 @@ export function apply(ctx, config = {}) {
 
   // ---- Dedicated GIS tools ----
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_list_layers',
     description:
       '列出当前 QGIS 项目中的所有图层（id、名称、类型、坐标系、要素数、几何类型）。' +
@@ -758,7 +765,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_list_layouts',
     description: '列出当前 QGIS 项目中的所有打印布局名称。配合 qgis_export_layout 导出布局。',
     parameters: { type: 'object', properties: {} },
@@ -772,7 +779,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_list_algorithms',
     deferLoading: true,
     description:
@@ -808,7 +815,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_run_processing',
     description:
       '运行一个 QGIS 处理框架算法（空间分析）。algorithm 为算法 id（如 "native:buffer"、"native:clip"），' +
@@ -857,7 +864,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_export_layout',
     description:
       '将指定打印布局导出为 PNG 图片或 PDF 文件。PNG 会以 base64 返回，本工具解码后写入本地临时文件并返回图片路径' +
@@ -922,7 +929,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_export_atlas',
     deferLoading: true,
     description:
@@ -996,7 +1003,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_create_layout',
     deferLoading: true,
     description:
@@ -1030,7 +1037,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_render_map',
     description:
       '将当前 QGIS 项目地图画布（全部图层、项目范围）离屏渲染为 PNG 图片，' +
@@ -1746,7 +1753,7 @@ export function apply(ctx, config = {}) {
 
   // ---- P0 daily-workflow tools ----
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_layer_fields',
     description:
       '列出指定图层的字段（名称、类型、别名）。写表达式、修改属性、字段计算前先用它确认字段名。' +
@@ -1774,7 +1781,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_query_features',
     description:
       '按属性表达式查询图层要素，返回结构化行（默认 20 行、最多 200 行）。' +
@@ -1837,7 +1844,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_algorithm_help',
     deferLoading: true,
     description:
@@ -1879,7 +1886,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_add_layer',
     description:
       '把一个数据源加载为图层并加入当前工程。path 为本地文件（GeoPackage/Shapefile/GeoJSON/GeoTIFF 等）' +
@@ -1939,7 +1946,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_export_layer',
     deferLoading: true,
     description:
@@ -1995,7 +2002,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_set_extent',
     deferLoading: true,
     description:
@@ -2041,7 +2048,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_zoom_to_layer',
     deferLoading: true,
     description:
@@ -2079,7 +2086,7 @@ export function apply(ctx, config = {}) {
     },
   }))
 
-  disposers.push(ctx.tools.register({
+  disposers.push(legacyRegister({
     name: 'qgis_screenshot',
     deferLoading: true,
     description:
@@ -3224,5 +3231,25 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  return () => { for (const d of disposers) d() }
+  const registerLive = (def) => {
+    const spec = { ...def, output: stringOutput }
+    const impl = spec.execute
+    spec.execute = async (args, exec) => {
+      toolUsed = true
+      return impl(args, exec)
+    }
+    disposers.push(ctx.tools.register(spec))
+  }
+
+  registerConsolidatedTools({
+    registerTool: registerLive,
+    run: runQgisSync,
+    runCmd: (type, args, signal) => runQgisCmd(type, args || {}, signal),
+    callRaw: callQgis,
+    resolve: resolveTarget,
+    stringOutput,
+    asText,
+  })
+
+  return () => { for (const d of disposers) if (typeof d === 'function') d() }
 }

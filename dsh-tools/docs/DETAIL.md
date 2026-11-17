@@ -63,108 +63,33 @@ the local machine.
 
 ## Tools
 
-### `execute_qgis_sync`
+The bundle registers **10 tools**: 3 core pyeval tools plus 7 consolidated
+tools that dispatch on an `action` argument. Merging related operations into
+one tool keeps the first-turn prompt small — 10 descriptions instead of the
+54 individual tools this bundle used to expose.
 
-Runs a snippet of Python on the QGIS **main thread**, with full access to `iface`,
-`QgsProject`, and all other PyQGIS objects.
-
-- **Constraint:** never run code that takes more than ~3 seconds — it freezes the QGIS GUI.
-- **Use for:** quick reads — current project, layers, selected features, expression evaluation.
-
-### `submit_qgis_async`
-
-Runs a snippet of Python on a QGIS **background thread** and returns a `task_id`
-immediately. The background namespace is pure Python (no `iface`/`QgsProject`).
-
-- **Use for:** longer work that must not block the GUI.
-- Poll the result with `check_qgis_task`.
-
-### `check_qgis_task`
-
-Returns one background task's state. A finished task is returned once and then
-removed from the cache (`status` = `done` or `error`); a running task reports
-`status` = `running`.
-
-### Dedicated GIS tools
-
-| Tool | What it does |
+| Tool | Actions |
 | --- | --- |
-| `qgis_list_layers` | List project layers (id, name, type, CRS, feature count, geometry). |
-| `qgis_layer_fields` | List a layer's fields (name, type, alias) — check this before writing expressions or edits. |
-| `qgis_list_layouts` | List print layout names. |
-| `qgis_list_algorithms` | List processing algorithms (optional keyword filter). |
-| `qgis_algorithm_help` | Show an algorithm's parameter names/types before running it. |
-| `qgis_run_processing` | Run a processing algorithm (spatial analysis). |
-| `qgis_query_features` | Query features by attribute expression; returns bounded JSON rows. |
-| `qgis_add_layer` | Load a file/service as a new project layer. |
-| `qgis_export_layer` | Export a vector layer to GPKG/GeoJSON/Shapefile/CSV. |
-| `qgis_render_map` | Offscreen-render the project map to PNG (returns a local image path). |
-| `qgis_export_layout` | Export a print layout to PNG/PDF (returns a local file path). |
-| `qgis_set_extent` | Set the map canvas extent (GUI sessions only). |
-| `qgis_zoom_to_layer` | Zoom the map canvas to a layer (GUI sessions only). |
-| `qgis_screenshot` | Capture the map canvas or the main window to PNG (GUI sessions only). |
-| `qgis_project_info` | Project overview: file, title, CRS, extent, layers, layouts, QGIS version. |
-| `qgis_select_features` | Select features in a layer by attribute expression. |
-| `qgis_selected_features` | Read the currently selected features' attributes. |
-| `qgis_add_feature` | Add one feature to an editable layer (optional WKT geometry). |
-| `qgis_update_features` | Bulk-update attributes by expression (requires `confirm`). |
-| `qgis_delete_features` | Delete features by expression (requires `confirm`). |
-| `qgis_set_layer_visibility` | Show/hide a layer in the layer tree. |
-| `qgis_remove_layer` | Remove a layer from the project (source file untouched). |
-| `qgis_save_project` | Save the current project (`.qgs`/`.qgz`). |
-| `qgis_layout_items` | List a print layout's items (id/type/uuid). |
-| `qgis_set_project_crs` | Change the project CRS (does not reproject existing layers). |
-| `qgis_set_layer_style` | Set a layer's base color and opacity. |
-| `qgis_plugin_status` | Diagnostic: QGIS version and whether the plugin is loaded/active. |
-| `qgis_create_layout` | Create a new empty print layout. |
-| `qgis_export_atlas` | Export a layout's atlas to a multi-page PDF or PNG. |
-| `qgis_undo` / `qgis_redo` | Undo/redo edits on a layer (edit-buffer undo stack). |
-| `qgis_classify_layer` | Apply a categorized or graduated renderer by a field. |
-| `qgis_reproject_layer` | Reproject a vector layer into a new memory layer (geometry transformed, attributes kept). |
-| `qgis_create_memory_layer` | Create an empty in-memory vector layer with fields. |
-| `qgis_export_table` | Export a layer's full attribute table to CSV/JSON (file or inline). |
-| `qgis_open_project` | Open a `.qgs`/`.qgz` project file. |
-| `qgis_status` | HTTP server / plugin status (pid, live dir, port, token). |
-| `qgis_describe_plugins` | List plugins available to the AI (bridge self-descriptions). |
-| `qgis_open_plugin` / `qgis_reload_plugin` | Open / reload a plugin (WebEngine plugin routing). |
-| `qgis_bridge_call` | Call a plugin's bridge method in-process (JSON result). |
-| `qgis_instruction` | Manage AI instruction files (agents / skills / prompts). |
+| `execute_qgis_sync` | run PyQGIS on the QGIS main thread (short tasks only, < 3 s) |
+| `submit_qgis_async` | run Python off-thread, returns a `task_id` |
+| `check_qgis_task` | poll an async task (result is popped on first read) |
+| `qgis_project` | `info` / `open` / `save` / `set_crs` |
+| `qgis_layer` | `list` / `info` / `fields` / `add` / `create` / `remove` / `visibility` / `crs` / `style` / `classify` / `labels` / `reproject` / `export` / `export_table` |
+| `qgis_feature` | `query` / `select` / `select_by_location` / `selected` / `add` / `update` / `delete` / `field_add` / `field_calc` / `field_delete` / `field_rename` |
+| `qgis_layout` | `list` / `create` / `info` / `add_item` / `update_item` / `export` / `export_atlas` |
+| `qgis_analysis` | `list` / `help` / `run` (processing algorithms) |
+| `qgis_map` | `render` / `screenshot` / `set_extent` / `zoom_to_layer` |
+| `qgis_plugin` | `status` / `describe` / `open` / `reload` / `bridge` / `instruction` |
 
-Rarely-used, destructive, GUI-only, and diagnostic tools are registered with
-`deferLoading: true`, so their descriptions load on demand (they still appear
-in the tool list): `qgis_add_feature`, `qgis_update_features`,
-`qgis_delete_features`, `qgis_save_project`, `qgis_layout_items`,
-`qgis_set_project_crs`, `qgis_set_layer_style`, `qgis_plugin_status`,
-`qgis_undo`, `qgis_redo`, `qgis_classify_layer`, `qgis_reproject_layer`,
-`qgis_create_memory_layer`, `qgis_export_table`, `qgis_open_project`,
-`qgis_list_algorithms`, `qgis_algorithm_help`, `qgis_export_atlas`,
-`qgis_create_layout`, `qgis_export_layer`, `qgis_set_extent`,
-`qgis_zoom_to_layer`, `qgis_screenshot`, plus the plugin-monitoring tools
-(`qgis_status`, `qgis_describe_plugins`, `qgis_open_plugin`,
-`qgis_reload_plugin`, `qgis_bridge_call`, `qgis_instruction`).
+Image-returning actions (`qgis_map render|screenshot`, `qgis_layout export`)
+write the PNG to a temp file and return its path; open it with `read_image`.
 
-Image-returning tools write the PNG to a local temp file and return its path;
-open it with the `read_image` tool.
+`qgis_map` and `qgis_plugin` carry `deferLoading: true`, so their descriptions
+load on demand — they stay callable but do not cost prompt space up front.
 
-## Cartography & editing tools
+Where a layer name is ambiguous, pass the layer id instead: `qgis_layer list`
+returns both.
 
-These tools let a model build a print layout end to end without writing PyQGIS:
-
-| Tool | Purpose |
-| --- | --- |
-| `qgis_layout_add_item` | add a map / legend / scalebar / north arrow / text / rectangle to a layout (positions in mm; `map` auto-fits a layer's aspect ratio) |
-| `qgis_layout_update_item` | move, resize or remove an existing layout item (index from `qgis_layout_info`) |
-| `qgis_layout_info` | page size and every item with its mm rectangle |
-| `qgis_layer_info` | vector (geometry, CRS, extent, fields) or raster (bands, cell size, band statistics) metadata |
-| `qgis_set_layer_crs` | assign a CRS (EPSG / PROJ / WKT) — a layer with an empty CRS renders as nothing |
-| `qgis_set_labels` | label a layer from a field (size, colour, buffer, placement) |
-| `qgis_set_layer_style` | fill/line/point colour and opacity |
-| `qgis_select_by_location` | spatial selection (intersects / within / contains / … , optional buffer distance) |
-| `qgis_edit_fields` | add / calculate / delete / rename a field |
-
-Typical minimal workflow (no Python): `qgis_add_layer` → `qgis_set_layer_crs` →
-`qgis_set_layer_style` → `qgis_create_layout` → `qgis_layout_add_item` × N →
-`qgis_export_layout`.
 
 ## Autostart (local)
 
