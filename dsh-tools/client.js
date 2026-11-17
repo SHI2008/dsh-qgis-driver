@@ -69,31 +69,41 @@ window.__ModuleLoader__.load({
         : String(status.detail || status.error || '未检测到 QGIS，请启动 QGIS 或在设置中配置 host/port/Key')
 
       return h('div', {
-        style: { display: 'flex', justifyContent: 'flex-end', width: '100%' },
-      },
-        h('div', {
-          style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end' },
+        style: {
+          position: 'relative',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          flex: '0 0 auto',
+          marginLeft: 'auto',
+          minWidth: 0,
+          alignSelf: 'center',
         },
-          h('button', {
-            type: 'button',
-            onClick: () => setOpen((v) => !v),
-            title: 'QGIS 连接状态（可在设置中开关）',
-            style: {
-              display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap',
-              background: 'transparent', border: 'none', padding: '0 2px',
-              color: connected ? GREEN : RED, fontSize: 11, fontWeight: 600,
-              lineHeight: '16px', cursor: 'pointer', userSelect: 'none',
-            },
-          }, dot, connected ? 'QGIS 已连接' : 'QGIS 未连接'),
-          open
-            ? h('div', {
-                style: {
-                  fontSize: 11, color: MUTED, lineHeight: '15px', marginTop: 1,
-                  maxWidth: 420, textAlign: 'right', whiteSpace: 'normal',
-                },
-              }, detail)
-            : null,
-        ),
+      },
+        h('button', {
+          type: 'button',
+          onClick: () => setOpen((v) => !v),
+          title: 'QGIS 连接状态（可在设置中开关）',
+          style: {
+            display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap',
+            background: 'transparent', border: 'none', padding: '0 2px',
+            color: connected ? GREEN : RED, fontSize: 11, fontWeight: 600,
+            lineHeight: '16px', cursor: 'pointer', userSelect: 'none',
+            flex: '0 0 auto',
+          },
+        }, dot, connected ? 'QGIS 已连接' : 'QGIS 未连接'),
+        open
+          ? h('div', {
+              style: {
+                position: 'absolute', top: '100%', right: 0, zIndex: 5,
+                marginTop: 2, padding: '4px 8px', borderRadius: 6,
+                background: SURFACE, border: '1px solid ' + BORDER,
+                fontSize: 11, color: MUTED, lineHeight: '15px',
+                maxWidth: 320, textAlign: 'right', whiteSpace: 'normal',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.45)',
+              },
+            }, detail)
+          : null,
       )
     }
 
