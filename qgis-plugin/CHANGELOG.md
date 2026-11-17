@@ -41,11 +41,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
   (per-layer edit-buffer undo), `qgis_classify_layer` (categorized/graduated),
   `qgis_reproject_layer` (new memory layer with transformed geometry),
   `qgis_create_memory_layer`, `qgis_export_table` (full attribute table as
-  CSV/JSON), `qgis_open_project`, and the 16 plugin REST tools exposed as DSH
-  tools (`qgis_status`, `qgis_describe_plugins`, `qgis_open_plugin`,
-  `qgis_reload_plugin`, `qgis_bridge_call`, `qgis_instruction`, `qgis_eval`,
-  `qgis_devreload`, `qgis_devin_run/status/result/abort`,
-  `qgis_copilot_run/status/result/abort`). The bundle now registers 55 tools.
+  CSV/JSON), `qgis_open_project`, and the 6 plugin REST/control tools exposed
+  as DSH tools (`qgis_status`, `qgis_describe_plugins`, `qgis_open_plugin`,
+  `qgis_reload_plugin`, `qgis_bridge_call`, `qgis_instruction`). The bundle
+  now registers 45 tools (the ten CLI/WebEngine tools listed under Removed
+  were dropped).
 
 ### Removed
 - The entire MCP surface: the `/mcp` Streamable HTTP endpoint and its
@@ -71,7 +71,9 @@ Versions are kept in sync with `version` in `metadata.txt`.
   connection-info / enablement dialogs no longer claim localhost-only.
 - DSH bundle now declares a `Config` schema (`host`/`port`/`key`), so remote
   connection settings are configurable from the DSH Settings page (previously
-  only via env vars).
+  only via env vars). The schemastery runtime is vendored under
+  `dsh-tools/node_modules` so the linked bundle resolves it (profile
+  node_modules is not visible from a symlink's real path).
 - DSH bundle: low-frequency tools now use `deferLoading: true` so their
   descriptions load on demand (26 tools deferred).
 

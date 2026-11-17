@@ -13,7 +13,9 @@
     "cordis.patch.yml",
     "locale/*.json",
     "docs",
-    "icon.svg"
+    "icon.svg",
+    "scripts",
+    "node_modules"
   ],
   "dsh": {
     "bundle": {

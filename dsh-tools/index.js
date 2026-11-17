@@ -25,7 +25,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import z from '@deepseek-ai/schemastery'
+import z from 'schemastery'
 
 export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
