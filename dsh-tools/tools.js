@@ -17,7 +17,7 @@ from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
     QgsLayoutItemShape, QgsLayoutPoint, QgsLayoutSize, QgsUnitTypes, QgsLayoutExporter,
     QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer, QgsPalLayerSettings,
     QgsTextFormat, QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLegendStyle,
-    QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer, QgsRendererRange,
+    QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer, QgsRendererRange, QgsRuleBasedRenderer,
     QgsRendererCategory, QgsRectangle, QgsMapSettings, QgsMapRendererCustomPainterJob, Qgis)
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter
 from qgis.PyQt.QtCore import QSize
@@ -102,6 +102,13 @@ if not crs.isValid():
     raise ValueError('invalid crs: ' + str(P.get('crs')))
 prj.setCrs(crs)
 result = {'crs': crs.authid() or crs.description()}`,
+  save_as: `
+path = P.get('path')
+if not path:
+    raise ValueError('path is required for save_as')
+ok = prj.write(path)
+result = {'saved': bool(ok), 'path': path, 'layers': len(prj.mapLayers())}`,
+
 };
 
 const LAYER_BODY = {
@@ -322,6 +329,124 @@ elif fmt == 'json':
     result = {'fields': fields, 'rows': rows[:10000], 'truncated': len(rows) > 10000}
 else:
     result = {'fields': fields, 'rows': len(rows), 'hint': '未指定 path，csv 需要写入文件'}`,
+  style_multi: `
+lyr = L(P['layer'])
+fld = P.get('field')
+if not fld or lyr.fields().indexOf(fld) < 0:
+    raise ValueError('field not found: ' + str(fld))
+vals = []
+for f in lyr.getFeatures():
+    v = f[fld]
+    if v not in vals:
+        vals.append(v)
+    if len(vals) >= 60:
+        break
+gt = lyr.geometryType()
+palette = P.get('colors') or ['#c0392b', '#e67e22', '#f1c40f', '#27ae60', '#2980b9', '#8e44ad', '#16a085', '#d35400']
+def _sym(i, v):
+    hexc = palette[i % len(palette)]
+    if gt == 0:
+        return QgsMarkerSymbol.createSimple({'name': 'circle', 'size': str(P.get('size') or 3),
+                                             'color': hexc, 'outline_color': '#ffffff', 'outline_width': '0.3'})
+    if gt == 1:
+        return QgsLineSymbol.createSimple({'color': hexc, 'width': str(P.get('width') or 0.6)})
+    return QgsFillSymbol.createSimple({'color': hexc, 'outline_color': P.get('outline_color') or '#555555',
+                                       'outline_width': '0.2'})
+cats = [QgsRendererCategory(v, _sym(i, v), str(v)) for i, v in enumerate(vals)]
+lyr.setRenderer(QgsCategorizedSymbolRenderer(fld, cats))
+lyr.triggerRepaint()
+result = {'layer': lyr.name(), 'field': fld, 'classes': len(cats), 'values': [str(v) for v in vals[:30]]}`,
+  style_rule: `
+lyr = L(P['layer'])
+rules = P.get('rules') or []
+if not rules:
+    raise ValueError('rules is required: [{expression, label, color, width, size}]')
+gt = lyr.geometryType()
+def _sym(r):
+    hexc = r.get('color') or '#c0392b'
+    if gt == 0:
+        return QgsMarkerSymbol.createSimple({'name': 'circle', 'size': str(r.get('size') or 3), 'color': hexc,
+                                             'outline_color': '#ffffff', 'outline_width': '0.3'})
+    if gt == 1:
+        return QgsLineSymbol.createSimple({'color': hexc, 'width': str(r.get('width') or 0.6)})
+    return QgsFillSymbol.createSimple({'color': hexc, 'outline_color': r.get('outline_color') or '#555555',
+                                       'outline_width': '0.2'})
+root_rule = QgsRuleBasedRenderer.Rule(None)
+for r in rules:
+    root_rule.appendChild(QgsRuleBasedRenderer.Rule(_sym(r), 0, 0, r.get('expression') or 'TRUE', r.get('label') or ''))
+lyr.setRenderer(QgsRuleBasedRenderer(root_rule))
+lyr.triggerRepaint()
+result = {'layer': lyr.name(), 'rules': len(rules), 'labels': [r.get('label') or r.get('expression') for r in rules]}`,
+  symbol: `
+lyr = L(P['layer'])
+rd = lyr.renderer()
+if rd is None or not hasattr(rd, 'symbol'):
+    raise ValueError('layer has no single symbol renderer')
+sym = rd.symbol().clone()
+def tune(sl):
+    try:
+        if P.get('size') is not None:
+            sl.setSize(float(P['size']))
+    except Exception:
+        pass
+    try:
+        if P.get('width') is not None:
+            sl.setWidth(float(P['width']))
+    except Exception:
+        pass
+    try:
+        if P.get('color'):
+            sl.setColor(QColor(P['color']))
+    except Exception:
+        pass
+    try:
+        if P.get('outline_color'):
+            sl.setStrokeColor(QColor(P['outline_color']))
+    except Exception:
+        pass
+    try:
+        if P.get('outline_width') is not None:
+            sl.setStrokeWidth(float(P['outline_width']))
+    except Exception:
+        pass
+    try:
+        sub = sl.subSymbol()
+    except Exception:
+        sub = None
+    if sub is not None:
+        tune(sub)
+for sl in sym.symbolLayers():
+    tune(sl)
+lyr.setRenderer(QgsSingleSymbolRenderer(sym))
+lyr.triggerRepaint()
+result = {'layer': lyr.name(), 'size': P.get('size'), 'width': P.get('width'), 'color': P.get('color'),
+          'outline_color': P.get('outline_color'), 'outline_width': P.get('outline_width')}`,
+  annotate: `
+src = L(P['layer'])
+fld = P.get('field')
+label_field = P.get('label_field') or fld or (src.fields()[0].name() if src.fields() else '')
+mem = QgsVectorLayer('Point?crs=' + (src.crs().toWkt() if src.crs().isValid() else 'EPSG:4326') + '&field=text:string(120)',
+                     (P.get('name') or (src.name() + '_annotation')), 'memory')
+prov = mem.dataProvider()
+feats = []
+for f in src.getFeatures():
+    g = f.geometry()
+    if g is None or g.isEmpty():
+        continue
+    c = g.centroid()
+    nf = QgsFeature(); nf.setGeometry(c)
+    nf.setAttributes([str(f[label_field]) if label_field else ''])
+    feats.append(nf)
+prov.addFeatures(feats)
+mem.updateExtents()
+prj.addMapLayer(mem)
+ps = QgsPalLayerSettings(); ps.fieldName = 'text'
+tf = QgsTextFormat(); tf.setFont(QFont(P.get('family') or 'Microsoft YaHei')); tf.setSize(int(P.get('size') or 8))
+buf = QgsTextBufferSettings(); buf.setEnabled(True); buf.setSize(0.8); buf.setColor(QColor('white')); tf.setBuffer(buf)
+ps.setFormat(tf)
+mem.setLabeling(QgsVectorLayerSimpleLabeling(ps)); mem.setLabelsEnabled(True); mem.triggerRepaint()
+result = {'layer': mem.name(), 'features': len(feats), 'label_field': label_field}`
+
 };
 
 const FEATURE_BODY = {
@@ -501,6 +626,27 @@ l.startEditing()
 l.renameAttribute(idx, P['new_name'])
 l.commitChanges()
 result = {'layer': l.name(), 'fields': [f.name() for f in l.fields()]}`,
+  table: `
+lyr = L(P['layer'])
+fields = P.get('fields') or [f.name() for f in lyr.fields()]
+sort_by = P.get('sort_by')
+order = (P.get('order') or 'asc').lower()
+limit = int(P.get('limit') or 200)
+offset = int(P.get('offset') or 0)
+req = QgsFeatureRequest()
+rows = []
+for f in lyr.getFeatures(req):
+    rows.append([f[n] for n in fields])
+if sort_by:
+    if sort_by not in fields:
+        raise ValueError('sort_by not in fields: ' + str(sort_by))
+    idx = fields.index(sort_by)
+    rows.sort(key=lambda r: (r[idx] is None, r[idx]), reverse=(order == 'desc'))
+total = len(rows)
+page = rows[offset:offset + limit]
+result = {'layer': lyr.name(), 'fields': fields, 'total': total, 'offset': offset,
+          'returned': len(page), 'rows': page, 'truncated': offset + limit < total}`,
+
 };
 
 const LAYOUT_BODY = {
@@ -692,6 +838,102 @@ else:
     result = {'format': 'png', 'pages': n, 'result': r, 'size_bytes': os.path.getsize(path),
               'image_path': _publish(path, 'png'),
               'hint': '使用 read_image 工具查看该图片路径'}`,
+  legend_edit: `
+lay = LAYOUT(P['layout'])
+lgs = [it for it in lay.items() if isinstance(it, QgsLayoutItemLegend)]
+if not lgs:
+    raise ValueError('layout has no legend item')
+lg = lgs[0]
+op = P.get('op') or 'style'
+if op == 'style':
+    f = QFont(P.get('family') or 'Microsoft YaHei')
+    if P.get('size'):
+        f.setPointSize(int(P['size']))
+    lg.setStyleFont(QgsLegendStyle.Style.Title, f)
+    lg.setStyleFont(QgsLegendStyle.Style.Subgroup, f)
+    lg.setStyleFont(QgsLegendStyle.Style.SymbolLabel, f)
+elif op == 'columns':
+    lg.setColumnCount(int(P.get('columns') or 1))
+elif op == 'text':
+    target = P.get('layer'); txt = P.get('text') or ''
+    node = None
+    for ch in lg.model().rootGroup().children():
+        if ch.name() == target:
+            node = ch
+            break
+    if node is None:
+        raise ValueError('legend has no layer named ' + str(target))
+    node.setName(txt)
+elif op == 'remove':
+    target = P.get('layer')
+    root = lg.model().rootGroup()
+    for ch in list(root.children()):
+        if ch.name() == target:
+            root.removeChildNode(ch)
+elif op == 'title':
+    lg.setTitle(P.get('title') or '')
+else:
+    raise ValueError('unknown op: ' + str(op))
+lg.setAutoUpdateModel(False)
+lg.updateLegend()
+lay.refresh()
+result = {'layout': lay.name(), 'op': op,
+          'items': [ch.name() for ch in lg.model().rootGroup().children()]}`,
+  align: `
+lay = LAYOUT(P['layout'])
+mode = (P.get('align') or 'left').lower()
+idxs = P.get('indexes') or []
+items = [it for it in lay.items() if isinstance(it, QgsLayoutItem)]
+if idxs:
+    sel = [items[i] for i in idxs if 0 <= i < len(items)]
+else:
+    sel = [it for it in items if it.type() not in (65648, 65606)]
+if not sel:
+    raise ValueError('no items to align')
+rects = [(it.positionWithUnits().x(), it.positionWithUnits().y(),
+          it.sizeWithUnits().width(), it.sizeWithUnits().height()) for it in sel]
+if mode == 'left':
+    tgt = min(r[0] for r in rects)
+    for it, r in zip(sel, rects):
+        it.attemptMove(QgsLayoutPoint(tgt, r[1], MM()))
+elif mode == 'right':
+    tgt = max(r[0] + r[2] for r in rects)
+    for it, r in zip(sel, rects):
+        it.attemptMove(QgsLayoutPoint(tgt - r[2], r[1], MM()))
+elif mode == 'top':
+    tgt = min(r[1] for r in rects)
+    for it, r in zip(sel, rects):
+        it.attemptMove(QgsLayoutPoint(r[0], tgt, MM()))
+elif mode == 'bottom':
+    tgt = max(r[1] + r[3] for r in rects)
+    for it, r in zip(sel, rects):
+        it.attemptMove(QgsLayoutPoint(r[0], tgt - r[3], MM()))
+elif mode == 'center_h':
+    c = sum(r[1] + r[3] / 2.0 for r in rects) / len(rects)
+    for it, r in zip(sel, rects):
+        it.attemptMove(QgsLayoutPoint(r[0], c - r[3] / 2.0, MM()))
+elif mode == 'center_v':
+    c = sum(r[0] + r[2] / 2.0 for r in rects) / len(rects)
+    for it, r in zip(sel, rects):
+        it.attemptMove(QgsLayoutPoint(c - r[2] / 2.0, r[1], MM()))
+elif mode == 'distribute_h':
+    sel.sort(key=lambda it: it.positionWithUnits().x())
+    if len(sel) > 2:
+        x0 = sel[0].positionWithUnits().x(); x1 = sel[-1].positionWithUnits().x()
+        step = (x1 - x0) / (len(sel) - 1)
+        for i, it in enumerate(sel):
+            it.attemptMove(QgsLayoutPoint(x0 + step * i, it.positionWithUnits().y(), MM()))
+elif mode == 'distribute_v':
+    sel.sort(key=lambda it: it.positionWithUnits().y())
+    if len(sel) > 2:
+        y0 = sel[0].positionWithUnits().y(); y1 = sel[-1].positionWithUnits().y()
+        step = (y1 - y0) / (len(sel) - 1)
+        for i, it in enumerate(sel):
+            it.attemptMove(QgsLayoutPoint(it.positionWithUnits().x(), y0 + step * i, MM()))
+else:
+    raise ValueError('unknown align mode: ' + str(mode))
+lay.refresh()
+result = {'layout': lay.name(), 'mode': mode, 'items': len(sel)}`,
 };
 
 const MAP_BODY = {
@@ -832,6 +1074,57 @@ for k, v in (out or {}).items():
     else:
         clean[k] = v
 result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}`,
+  zonal_stats: `
+rname = P.get('raster')
+rl = None
+for l in prj.mapLayers().values():
+    if isinstance(l, QgsRasterLayer) and l.name() == rname:
+        rl = l
+        break
+if rl is None:
+    raise ValueError('raster not found: ' + str(rname))
+vl = L(P['layer'])
+from qgis.analysis import QgsZonalStatistics
+prefix = P.get('prefix') or 'z_'
+stats = Qgis.ZonalStatistic.All
+band = int(P.get('band') or 1)
+try:
+    zs = QgsZonalStatistics(vl, rl, prefix, band, stats)
+    res = None
+except TypeError:
+    zs = QgsZonalStatistics(vl, rl.dataProvider(), rl.crs(), rl.rasterUnitsPerPixelX(),
+                            rl.rasterUnitsPerPixelY(), prefix, band, stats)
+    res = None
+res = zs.calculateStatistics(None)
+flds = [f.name() for f in vl.fields() if f.name().startswith(prefix)]
+idx = [vl.fields().indexOf(n) for n in flds]
+agg = {}
+for f in vl.getFeatures():
+    for n, i in zip(flds, idx):
+        v = f[i]
+        if v is None:
+            continue
+        agg.setdefault(n, []).append(float(v))
+summary = {}
+for n, vs in agg.items():
+    summary[n] = {'count': len(vs), 'min': round(min(vs), 3), 'max': round(max(vs), 3),
+                  'mean': round(sum(vs) / len(vs), 3)}
+result = {'layer': vl.name(), 'raster': rl.name(), 'status': res, 'fields': flds, 'summary': summary}`,
+  reclassify: `
+from qgis import processing
+rname = P.get('raster')
+base = P.get('output') or (rname + '_reclass')
+out_path = os.path.join(_OUT, base + '.tif')
+params = {'TABLE': P.get('table') or [], 'RANGE_BOUNDARIES': int(P.get('range_boundaries') or 0),
+          'NODATA': P.get('nodata') if P.get('nodata') is not None else -9999, 'OUTPUT': out_path}
+params = {k: v for k, v in params.items() if v not in (None, [])}
+params['INPUT_RASTER'] = rname
+processing.run('native:reclassifybytable', params)
+layer = QgsRasterLayer(out_path, base)
+if not layer.isValid():
+    raise ValueError('reclassify produced no raster: ' + out_path)
+prj.addMapLayer(layer)
+result = {'raster': rname, 'table': params.get('TABLE'), 'added': layer.name(), 'path': out_path}`,
 };
 
 export function registerConsolidatedTools(deps) {
@@ -893,11 +1186,11 @@ export function registerConsolidatedTools(deps) {
     name: 'qgis_project',
     description:
       '工程级操作。action=info 返回文件/标题/CRS/范围/图层/版面；open 打开 .qgs/.qgz；' +
-      'save 保存（未保存过需 path）；set_crs 设置工程坐标系（不重投影数据）。',
+      'save 保存（未保存过需 path）；save_as 另存到新路径；set_crs 设置工程坐标系（不重投影数据）。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['info', 'open', 'save', 'set_crs'] },
+        action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs'] },
         path: { type: 'string', description: 'open/save 的文件路径。' },
         crs: { type: 'string', description: 'set_crs 的目标坐标系（EPSG:xxxx）。' },
       },
@@ -914,12 +1207,13 @@ export function registerConsolidatedTools(deps) {
       '图层操作（一个入口）。action=list 列出图层；info 元数据（矢量/栅格+波段统计）；fields 字段；' +
       'add 加载数据源（path/provider/name）；create 新建内存图层（geometry_type/crs/fields）；remove 移除；' +
       'visibility 显隐；crs 指定坐标系（CRS 为空会导致图层不渲染，必用）；style 颜色/透明度；' +
-      'classify 分类或分级符号化；labels 按字段标注；reproject 重投影为新内存图层；' +
+      'classify 分类或分级符号化；style_multi 按字段多符号；style_rule 规则符号化；' +
+      'symbol 调线宽/点径/边线；labels 按字段标注；annotate 生成带标注的注记图层；reproject 重投影为新内存图层；' +
       'export 导出矢量文件（gpkg/geojson/shp/csv）；export_table 导出属性表（csv/json）。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'classify', 'labels', 'reproject', 'export', 'export_table'] },
+        action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
         layer: { type: 'string', description: '图层名（除 list/add/create 外必填）。' },
         path: { type: 'string', description: 'add/export/export_table 的文件路径。' },
         name: { type: 'string', description: 'add 的图层名；create 的图层名。' },
@@ -933,6 +1227,11 @@ export function registerConsolidatedTools(deps) {
         opacity: { type: 'number', description: 'style 的不透明度 0-1。' },
         field: { type: 'string', description: 'classify/labels 使用的字段。' },
         mode: { type: 'string', enum: ['categorized', 'graduated'], description: 'classify 模式。' },
+        width: { type: 'number', description: 'style_multi/style_rule/symbol 的线宽（mm）。' },
+        outline_color: { type: 'string', description: 'style_multi/style_rule/symbol 的边线颜色。' },
+        outline_width: { type: 'number', description: 'symbol 的边线宽度。' },
+        rules: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'style_rule 规则 [{expression,label,color,width,size}]。' },
+        label_field: { type: 'string', description: 'annotate 的标注字段（默认取 layer 字段或第一个字段）。' },
         classes: { type: 'integer', description: 'classify graduated 级数（默认 5）。' },
         colors: { type: 'array', items: { type: 'string' }, description: 'classify 配色列表。' },
         size: { type: 'number', description: 'labels 字号（pt）。' },
@@ -956,17 +1255,20 @@ export function registerConsolidatedTools(deps) {
     description:
       '要素与字段操作。action=query 按表达式查询；select 属性选择；select_by_location 空间选择' +
       '（intersects/within/contains/touches/overlaps/crosses/disjoint，可加缓冲距离）；selected 读已选；' +
-      'add 新增要素（values/geometry_wkt）；update 批量改属性（需 confirm）；delete 批量删除（需 confirm）；' +
+      'table 读属性表（可排序/分页）；add 新增要素（values/geometry_wkt）；update 批量改属性（需 confirm）；delete 批量删除（需 confirm）；' +
       'field_add / field_calc（expression）/ field_delete / field_rename（new_name）。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['query', 'select', 'select_by_location', 'selected', 'add', 'update', 'delete', 'field_add', 'field_calc', 'field_delete', 'field_rename'] },
+        action: { type: 'string', enum: ['query', 'table', 'select', 'select_by_location', 'selected', 'add', 'update', 'delete', 'field_add', 'field_calc', 'field_delete', 'field_rename'] },
         layer: { type: 'string', description: '目标图层名（必填）。' },
         expression: { type: 'string', description: 'query/select/update/delete 的过滤表达式；field_calc 的计算表达式。' },
         fields: { type: 'array', items: { type: 'string' }, description: 'query 返回的字段。' },
         limit: { type: 'integer', description: 'query/selected 行数上限，或 update/delete 影响数量上限。' },
         include_geometry: { type: 'boolean', description: 'query 是否返回 WKT。' },
+        sort_by: { type: 'string', description: 'table 的排序字段。' },
+        order: { type: 'string', enum: ['asc', 'desc'], description: 'table 排序方向。' },
+        offset: { type: 'integer', description: 'table 分页起点。' },
         mode: { type: 'string', enum: ['replace', 'add', 'remove', 'new'], description: 'select/select_by_location 的选择模式。' },
         source_layer: { type: 'string', description: 'select_by_location 的筛选依据图层。' },
         predicate: { type: 'string', enum: ['intersects', 'within', 'contains', 'touches', 'overlaps', 'crosses', 'disjoint'], description: 'select_by_location 谓词。' },
@@ -991,11 +1293,12 @@ export function registerConsolidatedTools(deps) {
       '打印版面操作。action=list 列出；create 新建（layout_name，可选 page_width/page_height）；' +
       'info 看页面与要素（含 index）；add_item 加要素（kind=map/legend/scalebar/north_arrow/text/rect，' +
       '毫米坐标，map 可用 fit_layer 自动算长宽比）；update_item 移动/缩放/删除（按 index）；' +
+      'legend_edit 图例项定制（op=style/columns/text/remove/title）；align 对齐/分布（left/right/top/bottom/center_h/center_v/distribute_h/distribute_v）；' +
       'export 导出 PNG/PDF；export_atlas 导出图集（需布局已启用 atlas）。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'create', 'info', 'add_item', 'update_item', 'export', 'export_atlas'] },
+        action: { type: 'string', enum: ['list', 'create', 'info', 'add_item', 'update_item', 'legend_edit', 'align', 'export', 'export_atlas'] },
         layout: { type: 'string', description: '版面名（info/add_item/update_item 必填）。' },
         layout_name: { type: 'string', description: 'create/export/export_atlas 的版面名。' },
         page_width: { type: 'number', description: 'create 的页宽（mm）。' },
@@ -1016,6 +1319,11 @@ export function registerConsolidatedTools(deps) {
         outline_color: { type: 'string', description: 'rect 边框色。' },
         outline_width: { type: 'number', description: 'rect 边框宽度。' },
         title: { type: 'string', description: 'legend 标题。' },
+        op: { type: 'string', enum: ['style', 'columns', 'text', 'remove', 'title'], description: 'legend_edit 的操作。' },
+        columns: { type: 'integer', description: 'legend_edit columns 的列数。' },
+        item_text: { type: 'string', description: 'legend_edit text 的新文字（配 layer）。' },
+        align: { type: 'string', enum: ['left', 'right', 'top', 'bottom', 'center_h', 'center_v', 'distribute_h', 'distribute_v'], description: 'align 的对齐方式。' },
+        indexes: { type: 'array', items: { type: 'integer' }, description: 'align 的要素序号列表（省略=全部）。' },
         segments: { type: 'number', description: 'scalebar 段数。' },
         units_per_segment: { type: 'number', description: 'scalebar 每段长度。' },
         unit: { type: 'string', description: 'scalebar 单位（km/m）。' },
@@ -1035,14 +1343,19 @@ export function registerConsolidatedTools(deps) {
     name: 'qgis_analysis',
     description:
       '处理框架（空间分析）。action=list 列出算法（可按 keyword 过滤）；help 查算法参数；' +
-      'run 执行算法（algorithm + params 对象，图层参数可传图层名）。',
+      'run 执行算法（algorithm + params，图层参数可传图层名）；zonal_stats 分区统计到图层字段；reclassify 栅格重分类。',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'help', 'run'] },
+        action: { type: 'string', enum: ['list', 'help', 'run', 'zonal_stats', 'reclassify'] },
         keyword: { type: 'string', description: 'list 的关键字过滤。' },
         algorithm: { type: 'string', description: 'help/run 的算法 id，如 native:buffer。' },
         params: { type: 'object', description: 'run 的算法参数。', additionalProperties: true },
+        raster: { type: 'string', description: 'zonal_stats/reclassify 的栅格图层名。' },
+        band: { type: 'integer', description: 'zonal_stats 的波段（默认 1）。' },
+        prefix: { type: 'string', description: 'zonal_stats 输出字段前缀（默认 z_）。' },
+        table: { type: 'array', items: { type: 'number' }, description: 'reclassify 的重分类表 [min,max,value,...]。' },
+        output: { type: 'string', description: 'reclassify 的输出图层名（默认 <raster>_reclass）。' },
       },
       required: ['action'],
     },

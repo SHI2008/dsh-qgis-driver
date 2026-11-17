@@ -16,14 +16,16 @@ Versions are kept in sync with `version` in `metadata.txt`.
   `qgis_layout export`) write the PNG to a temp file and return its path instead
   of inlining base64.
 
-- **Added**: nine cartography / data tools so routine map production no longer
-  needs hand-written PyQGIS — `qgis_layout_add_item` (map, legend, scalebar,
-  north arrow, text, rectangle), `qgis_layout_update_item` (move/resize/remove),
-  `qgis_layout_info`, `qgis_layer_info` (vector + raster metadata and band
-  statistics), `qgis_set_layer_crs`, `qgis_set_labels`, `qgis_select_by_location`
-  and `qgis_edit_fields` (add/calculate/delete/rename fields). A full A4 map
-  (title, legend, scale bar, north arrow) can now be produced with tool calls
-  only.
+- **Added**: coverage actions inside the existing aggregates, so routine map
+  production no longer needs hand-written PyQGIS — `qgis_layer` gained
+  `style_multi` (one symbol per attribute value), `style_rule` (rule-based
+  symbology), `symbol` (line width / point size / outline) and `annotate`
+  (label layer from feature centroids); `qgis_layout` gained `legend_edit`
+  (font size, columns, item text, remove item, title) and `align`
+  (left/right/top/bottom/center/distribute); `qgis_feature` gained `table`
+  (sorted, paged attribute table); `qgis_analysis` gained `zonal_stats` and
+  `reclassify`; `qgis_project` gained `save_as`. The aggregate count stays at
+  ten — no new tool names.
 
 - **Changed**: the composer status badge is hidden by default — it appears
   after the first QGIS tool call in a session, or immediately when the `dock`

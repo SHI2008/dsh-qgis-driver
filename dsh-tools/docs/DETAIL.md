@@ -73,11 +73,11 @@ one tool keeps the first-turn prompt small — 10 descriptions instead of the
 | `execute_qgis_sync` | run PyQGIS on the QGIS main thread (short tasks only, < 3 s) |
 | `submit_qgis_async` | run Python off-thread, returns a `task_id` |
 | `check_qgis_task` | poll an async task (result is popped on first read) |
-| `qgis_project` | `info` / `open` / `save` / `set_crs` |
-| `qgis_layer` | `list` / `info` / `fields` / `add` / `create` / `remove` / `visibility` / `crs` / `style` / `classify` / `labels` / `reproject` / `export` / `export_table` |
-| `qgis_feature` | `query` / `select` / `select_by_location` / `selected` / `add` / `update` / `delete` / `field_add` / `field_calc` / `field_delete` / `field_rename` |
-| `qgis_layout` | `list` / `create` / `info` / `add_item` / `update_item` / `export` / `export_atlas` |
-| `qgis_analysis` | `list` / `help` / `run` (processing algorithms) |
+| `qgis_project` | `info` / `open` / `save` / `save_as` / `set_crs` |
+| `qgis_layer` | `list` / `info` / `fields` / `add` / `create` / `remove` / `visibility` / `crs` / `style` / `symbol` / `classify` / `style_multi` / `style_rule` / `labels` / `annotate` / `reproject` / `export` / `export_table` |
+| `qgis_feature` | `query` / `table` / `select` / `select_by_location` / `selected` / `add` / `update` / `delete` / `field_add` / `field_calc` / `field_delete` / `field_rename` |
+| `qgis_layout` | `list` / `create` / `info` / `add_item` / `update_item` / `legend_edit` / `align` / `export` / `export_atlas` |
+| `qgis_analysis` | `list` / `help` / `run` (processing algorithms) / `zonal_stats` / `reclassify` |
 | `qgis_map` | `render` / `screenshot` / `set_extent` / `zoom_to_layer` |
 | `qgis_plugin` | `status` / `describe` / `open` / `reload` / `bridge` / `instruction` |
 
