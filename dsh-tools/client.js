@@ -54,6 +54,24 @@ window.__ModuleLoader__.load({
         return () => { alive = false; if (timer) clearTimeout(timer) }
       }, [])
 
+      const wrapRef = React.useRef(null)
+
+      React.useEffect(() => {
+        if (!open) return
+        function onDown(ev) {
+          const el = wrapRef.current
+          if (el && ev.target instanceof Node && el.contains(ev.target)) return
+          setOpen(false)
+        }
+        function onKey(ev) { if (ev.key === 'Escape') setOpen(false) }
+        document.addEventListener('pointerdown', onDown, true)
+        document.addEventListener('keydown', onKey, true)
+        return () => {
+          document.removeEventListener('pointerdown', onDown, true)
+          document.removeEventListener('keydown', onKey, true)
+        }
+      }, [open])
+
       const connected = !!(status && status.connected)
 
       async function onBadge() {
@@ -98,6 +116,7 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', {
+        ref: wrapRef,
         style: {
           position: 'relative', display: 'inline-flex', alignItems: 'center',
           flex: '0 0 auto', minWidth: 0, alignSelf: 'center',
@@ -142,6 +161,28 @@ window.__ModuleLoader__.load({
         h('div', { style: { fontSize: 12, color: MUTED, marginBottom: 4 } }, label),
         input,
       )
+    }
+
+    function Switch(props) {
+      const on = !!props.checked
+      return h('button', {
+        type: 'button',
+        role: 'switch',
+        'aria-checked': on ? 'true' : 'false',
+        onClick: () => props.onChange(!on),
+        style: {
+          position: 'relative', flex: '0 0 auto', width: 36, height: 20,
+          borderRadius: 999, border: '1px solid ' + (on ? ACCENT : BORDER),
+          background: on ? ACCENT : '#222228', cursor: 'pointer', padding: 0,
+          transition: 'background .15s ease, border-color .15s ease',
+        },
+      }, h('span', {
+        style: {
+          position: 'absolute', top: 1, left: on ? 17 : 1, width: 16, height: 16,
+          borderRadius: '50%', background: on ? '#ffffff' : '#8b8b95',
+          transition: 'left .15s ease, background .15s ease',
+        },
+      }))
     }
 
     function SettingsPanel(props) {
@@ -208,9 +249,12 @@ window.__ModuleLoader__.load({
           h('input', { type: 'number', min: 0, max: 65535, value: form.port, onChange: set('port'), style: inputStyle })),
         Field('Key（API 密钥，对应 QGIS 端 QGIS_LIVE_API_KEY）',
           h('input', { type: 'password', value: form.key, onChange: set('key'), placeholder: '（可选）', style: inputStyle })),
-        h('label', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, cursor: 'pointer', userSelect: 'none' } },
-          h('input', { type: 'checkbox', checked: !!form.dock, onChange: (e) => setForm((f) => ({ ...f, dock: e.target.checked })) }),
-          h('span', { style: { fontSize: 13 } }, '显示连接状态挂件（消息输入框下方）')),
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 } },
+          h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } },
+            h('span', { style: { fontSize: 13 } }, '显示连接状态挂件'),
+            h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
+              '在消息输入框右侧显示 QGIS 连接状态徽标，点击可启动 QGIS 或查看通道（默认关闭）。')),
+          Switch({ checked: !!form.dock, onChange: (v) => setForm((f) => ({ ...f, dock: v })) })),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
           h('button', { onClick: save, disabled: saving, style: { ...btnStyle, opacity: saving ? 0.6 : 1 } },
             saving ? '保存中…' : '保存'),
