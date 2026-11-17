@@ -180,3 +180,11 @@ config toggle off; point at a non-standard install with `QGIS_ROOT`.
 - **Remote mode** authenticates with the stable `QGIS_LIVE_API_KEY` you configure.
   Use a strong key, keep it private, and prefer a trusted network (or a tunnel),
   because `pyeval` executes arbitrary Python inside QGIS.
+
+## Status badge visibility
+
+The composer-row badge is hidden by default. It appears on its own after the
+first QGIS tool call in the session, or right away when *Settings →
+dsh-qgis-driver → show connection status widget* is enabled. Local calls use the
+plugin's file channel (`commands.jsonl` → `results.jsonl`); remote calls use
+REST with `host:port` + Key.

@@ -40,6 +40,13 @@ export const Config = z.object({
 })
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
+
+/**
+ * Set to true as soon as any QGIS tool runs. The client status badge is hidden
+ * by default and appears on its own after the first tool call (or when the
+ * `dock` setting is turned on).
+ */
+let toolUsed = false
 const HEALTH_TIMEOUT_MS = 2000
 
 /** Resolve the remote target from `config` (cordis.patch.yml) or env vars. */
@@ -99,6 +106,9 @@ function registryCandidates(startedAt = 0) {
  * whenever the plugin wrote its registry. Stale registry files (dead PID) are
  * skipped.
  */
+/** live dirs that already timed out — skipped until the process restarts. */
+const badLiveDirs = new Set()
+
 function findLocalLiveDir(startedAt = 0, requireGui = false) {
   for (const { p } of registryCandidates(startedAt)) {
     let reg
@@ -107,6 +117,7 @@ function findLocalLiveDir(startedAt = 0, requireGui = false) {
     if (requireGui && reg.gui !== true) continue
     const liveDir = reg.live_dir
     if (!liveDir) continue
+    if (badLiveDirs.has(liveDir)) continue
     let token = ''
     try { token = fs.readFileSync(path.join(liveDir, 'token'), 'utf8').trim() } catch { token = '' }
     if (!token && typeof reg.token === 'string') token = reg.token
@@ -382,7 +393,7 @@ async function autostartQgis(auto, requireGui = false) {
     `${lastError ? `。最后错误：${lastError.message}` : ''}`)
 }
 
-const FILE_CHANNEL_TIMEOUT_MS = 60000
+const FILE_CHANNEL_TIMEOUT_MS = 15000
 const FILE_POLL_INTERVAL_MS = 50
 
 /** Per-live-dir read cursor for the JSONL results file. */
@@ -449,6 +460,7 @@ async function invokeFileOnce(cmd, signal, target) {
   fs.appendFileSync(cmdPath, JSON.stringify({ ...cmd, id, token }) + '\n', 'utf8')
 
   const timeoutMs = Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
+  const resultsSizeAtStart = (() => { try { return fs.statSync(resPath).size } catch { return 0 } })()
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error('文件通道等待已中止')
@@ -491,14 +503,31 @@ async function invokeFileOnce(cmd, signal, target) {
       return obj.result
     }
   }
+  badLiveDirs.add(liveDir)
+  const grew = (() => { try { return fs.statSync(resPath).size - resultsSizeAtStart } catch { return -1 } })()
   throw new Error(
-    `QGIS 文件通道超时（${Math.round(timeoutMs / 1000)} 秒）：${cmdPath}`)
+    `QGIS 文件通道超时（${Math.round(timeoutMs / 1000)} 秒）：命令已写入 ${cmdPath}（id=${id}），` +
+    (grew > 0
+      ? `results.jsonl 期间新增 ${grew} 字节，但没有匹配的回包（可能有其它客户端在共享同一 live_dir）。`
+      : 'results.jsonl 完全没有新增 —— QGIS 没有读取命令：进程已退出/无响应、插件未启用，' +
+        '或该 live_dir 属于一个已失效的实例。') +
+    '可用 QGIS_LIVE_FILE_TIMEOUT_MS 调整超时。')
 }
 
 /** Call one endpoint and unwrap { result } / { error } over the target channel. */
 async function callQgis(route, method, body, signal, target) {
   if (target && target.channel === 'file') {
-    return invokeFile(routeToCommand(route, body), signal, target)
+    const cmd = routeToCommand(route, body)
+    try {
+      return await invokeFile(cmd, signal, target)
+    } catch (e) {
+      if (!/文件通道超时/.test(String(e && e.message))) throw e
+      // The instance we picked did not answer; try the next live one once.
+      let next = null
+      try { next = findLocalLiveDir() } catch { next = null }
+      if (next && next.liveDir !== target.liveDir) return invokeFile(cmd, signal, next)
+      throw e
+    }
   }
   const resp = await fetch(`${target.base}${route}`, {
     method,
@@ -604,7 +633,13 @@ export function apply(ctx, config = {}) {
 
   /** Register one tool with the standard string output schema. */
   function registerTool(def) {
-    disposers.push(ctx.tools.register({ ...def, output: stringOutput }))
+    const spec = { ...def, output: stringOutput }
+    const run = spec.execute
+    spec.execute = async (args, exec) => {
+      toolUsed = true
+      return run(args, exec)
+    }
+    disposers.push(ctx.tools.register(spec))
   }
 
   /** Run one PyQGIS snippet synchronously (main thread) and unwrap its `result`. */
@@ -2348,6 +2383,7 @@ export function apply(ctx, config = {}) {
   async function probeStatus() {
     const status = {
       dock: !!config?.dock,
+      reveal: toolUsed,
       connected: false,
       channel: null,
       target: null,

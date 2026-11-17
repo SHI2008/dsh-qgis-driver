@@ -88,7 +88,9 @@ window.__ModuleLoader__.load({
       }
 
       // Not enabled in Settings → render nothing.
-      if (!status || !status.dock) return null
+      // Hidden by default: shown when the user enables `dock` in Settings or
+      // after the first QGIS tool call in this session.
+      if (!status || (!status.dock && !status.reveal)) return null
 
       const dot = h('span', {
         style: {

@@ -5,6 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+- **Changed**: the composer status badge is hidden by default — it appears
+  after the first QGIS tool call in a session, or immediately when the `dock`
+  setting is enabled in Settings.
+- **Fixed**: local file-channel calls fail faster and explain themselves — 15 s
+  default timeout (`QGIS_LIVE_FILE_TIMEOUT_MS` overrides), the unanswered
+  `live_dir` is skipped for the rest of the process, one automatic retry
+  against another live instance, and the error states whether `results.jsonl`
+  grew at all.
+
 - **Changed**: autostart is headless by default and no longer goes through a
   `.cmd`/`.bat` wrapper — the bundle spawns `apps/Python312/python.exe` directly
   with the OSGeo4W environment it builds itself (PATH/PYTHONHOME/PYTHONPATH/
