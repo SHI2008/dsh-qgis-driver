@@ -5,6 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+- **Added**: nine cartography / data tools so routine map production no longer
+  needs hand-written PyQGIS — `qgis_layout_add_item` (map, legend, scalebar,
+  north arrow, text, rectangle), `qgis_layout_update_item` (move/resize/remove),
+  `qgis_layout_info`, `qgis_layer_info` (vector + raster metadata and band
+  statistics), `qgis_set_layer_crs`, `qgis_set_labels`, `qgis_select_by_location`
+  and `qgis_edit_fields` (add/calculate/delete/rename fields). A full A4 map
+  (title, legend, scale bar, north arrow) can now be produced with tool calls
+  only.
+
 - **Changed**: the composer status badge is hidden by default — it appears
   after the first QGIS tool call in a session, or immediately when the `dock`
   setting is enabled in Settings.

@@ -146,6 +146,26 @@ in the tool list): `qgis_add_feature`, `qgis_update_features`,
 Image-returning tools write the PNG to a local temp file and return its path;
 open it with the `read_image` tool.
 
+## Cartography & editing tools
+
+These tools let a model build a print layout end to end without writing PyQGIS:
+
+| Tool | Purpose |
+| --- | --- |
+| `qgis_layout_add_item` | add a map / legend / scalebar / north arrow / text / rectangle to a layout (positions in mm; `map` auto-fits a layer's aspect ratio) |
+| `qgis_layout_update_item` | move, resize or remove an existing layout item (index from `qgis_layout_info`) |
+| `qgis_layout_info` | page size and every item with its mm rectangle |
+| `qgis_layer_info` | vector (geometry, CRS, extent, fields) or raster (bands, cell size, band statistics) metadata |
+| `qgis_set_layer_crs` | assign a CRS (EPSG / PROJ / WKT) — a layer with an empty CRS renders as nothing |
+| `qgis_set_labels` | label a layer from a field (size, colour, buffer, placement) |
+| `qgis_set_layer_style` | fill/line/point colour and opacity |
+| `qgis_select_by_location` | spatial selection (intersects / within / contains / … , optional buffer distance) |
+| `qgis_edit_fields` | add / calculate / delete / rename a field |
+
+Typical minimal workflow (no Python): `qgis_add_layer` → `qgis_set_layer_crs` →
+`qgis_set_layer_style` → `qgis_create_layout` → `qgis_layout_add_item` × N →
+`qgis_export_layout`.
+
 ## Autostart (local)
 
 When no live QGIS instance is found and the target is local (not a configured
