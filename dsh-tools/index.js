@@ -35,6 +35,7 @@ export const Config = z.object({
   host: z.string().default(''),
   port: z.number().default(0),
   key: z.string().default(''),
+  dock: z.boolean().default(false),
 })
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
@@ -2001,6 +2002,60 @@ export function apply(ctx, config = {}) {
       return asText(await runQgisSync(code, exec?.signal))
     },
   })
+
+  // ---- Client GUI: connection-status endpoint (read by the composer dock widget) ----
+
+  /** Probe QGIS liveness WITHOUT autostarting (passive status check). */
+  async function probeStatus() {
+    const status = { dock: !!config?.dock, connected: false, target: null, host: null, error: null }
+    if (remote) {
+      status.target = 'remote'
+      status.host = remote.base.replace(/^http:\/\//, '')
+      try {
+        const resp = await fetch(`${remote.base}/api/health`, {
+          headers: { Authorization: `Bearer ${remote.token}` },
+          signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+        })
+        status.connected = resp.status === 200
+        if (!status.connected) status.error = `远程 QGIS ${remote.base} → HTTP ${resp.status}`
+      } catch (e) {
+        status.error = `远程 QGIS 不可用：${e && e.message ? e.message : e}`
+      }
+      return status
+    }
+    status.target = 'local'
+    try {
+      const t = await findActiveQgis()
+      status.connected = true
+      status.host = t.base.replace(/^http:\/\//, '')
+    } catch (e) {
+      status.error = e && e.message ? e.message : String(e)
+    }
+    return status
+  }
+
+  // Register a browser-readable status route (same-origin fetch from the client).
+  // Optional + non-fatal: if `connection` is unavailable, the tools still work.
+  const connection = typeof ctx.get === 'function' ? ctx.get('connection') : undefined
+  if (connection && connection.fetch && typeof connection.fetch.register === 'function') {
+    try {
+      const unregister = connection.fetch.register({
+        path: '/api/dsh-qgis-driver/status',
+        methods: ['GET'],
+        requestBody: 'buffered',
+        fetch: async () => {
+          const status = await probeStatus()
+          return new Response(JSON.stringify(status), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        },
+      })
+      if (typeof unregister === 'function') disposers.push(() => { unregister() })
+    } catch (e) {
+      // Non-fatal: the composer widget simply reports "not connected".
+    }
+  }
 
   return () => { for (const d of disposers) d() }
 }
