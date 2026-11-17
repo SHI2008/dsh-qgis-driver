@@ -26,21 +26,22 @@ except Exception:  # outside QGIS (pytest, etc.)
     except Exception:
         QCoreApplication = QLocale = QSettings = QTranslator = None
 
-# Supported languages (fixed, identical across all plugins). The source
-# language is English (en), so it needs no catalog.
-LANGS = ("de", "es", "fr", "hi", "it", "ja", "pt", "ru", "zh")
+# Supported languages. The source language is English (en), so it needs no
+# catalog; Simplified Chinese is the only translated language (zh.json).
+# Every zh* locale (zh_CN, zh_SG, zh_Hans, ...) uses the same catalog.
+LANGS = ("zh",)
 
 _cache = {}
 
 
 def lang_code():
-    """UI language code from QGIS settings. 'en' for English or unsupported languages."""
+    """UI language code: 'zh' for any Chinese locale, 'en' for everything else."""
     if QSettings is None:
         return "en"
     try:
         raw = QSettings().value("locale/userLocale", "") or ""
         code = str(raw).replace("-", "_").split("_")[0].lower()
-        if not code:
+        if not code and QLocale is not None:
             code = QLocale.system().name().split("_")[0].lower()
         return code if code in LANGS else "en"
     except Exception:

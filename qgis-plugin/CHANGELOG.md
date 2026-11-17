@@ -5,6 +5,8 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+- **Changed**: translation support reduced to English + Simplified Chinese; the de/es/fr/hi/it/ja/pt/ru catalogs were removed (every `zh*` locale uses `i18n/zh.json`, everything else falls back to English).
+
 ### Added
 - DSH client UI: a QGIS connection-status widget in the composer dock
   (`conversation.composer.dock`, off by default, toggled by the `dock`
