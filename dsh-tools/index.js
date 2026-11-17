@@ -1552,5 +1552,593 @@ export function apply(ctx, config = {}) {
     },
   })
 
+
+  /** Run a plugin REST command via POST /api/cmd (dispatch type + args as-is). */
+  async function runQgisCmd(type, args, signal) {
+    const target = await resolveTarget()
+    const payload = { type }
+    if (args && typeof args === 'object') {
+      for (const [k, v] of Object.entries(args)) {
+        if (v !== undefined) payload[k] = v
+      }
+    }
+    return callQgis('/api/cmd', 'POST', payload, signal, target)
+  }
+
+  /** Register a thin DSH tool that maps 1:1 to a plugin REST command. */
+  function cmdTool(name, type, description, parameters, opts = {}) {
+    registerTool({
+      name,
+      description,
+      parameters,
+      ...opts,
+      async execute(args, exec) {
+        return asText(await runQgisCmd(type, args, exec?.signal))
+      },
+    })
+  }
+
+  // ------------------------------------------------------------------
+  // Plugin REST tools (1:1 mapping to dsh_qgis_driver's /api/cmd types)
+  // ------------------------------------------------------------------
+
+  cmdTool(
+    'qgis_status',
+    'status',
+    '诊断用：返回 QGIS 进程、HTTP 端口、已加载插件及其 live driver/view 状态。',
+    { type: 'object', properties: {} },
+  )
+
+  cmdTool(
+    'qgis_describe_plugins',
+    'describe_plugins',
+    '列出所有已加载的 QGIS 插件及其 AI 可调用能力（bridge 的 pluginInfo 汇总）。' +
+      '先调用它发现该用哪个插件，再用 qgis_bridge_call 调用。',
+    { type: 'object', properties: {} },
+  )
+
+  cmdTool(
+    'qgis_open_plugin',
+    'open_plugin',
+    '按需加载并启动一个 QGIS 插件，并调用其 open_dialog()（若有）。',
+    {
+      type: 'object',
+      properties: {
+        plugin_id: { type: 'string', description: '插件 id（如 "dsh_qgis_driver"）。' },
+      },
+      required: ['plugin_id'],
+    },
+  )
+
+  cmdTool(
+    'qgis_reload_plugin',
+    'reload_plugin',
+    '热重载一个 QGIS 插件（清理 sys.modules + reloadPlugin + open_dialog），无需重启 QGIS。',
+    {
+      type: 'object',
+      properties: {
+        plugin_id: { type: 'string', description: '要重载的插件 id。' },
+      },
+      required: ['plugin_id'],
+    },
+  )
+
+  cmdTool(
+    'qgis_bridge_call',
+    'bridge_call',
+    '进程内直接调用某个插件的 bridge 方法（绕过 WebChannel，渲染器卡死时也有效）。' +
+      'JSON 字符串结果会被解析。',
+    {
+      type: 'object',
+      properties: {
+        method: { type: 'string', description: 'bridge 方法名。' },
+        plugin_id: { type: 'string', description: '可选，目标插件 id。' },
+        args: { type: 'array', items: {}, description: '位置参数（或含 kwargs 的列表）。' },
+      },
+      required: ['method'],
+    },
+  )
+
+  cmdTool(
+    'qgis_instruction',
+    'instruction',
+    '管理本机的 AI 指令文件。kind=agents（持久注入 system prompt）/ skills（按需过程文档）/ prompts（面板建议词）。' +
+      'op=list|read|save|delete；save 写用户文件（~/.qgis-live/<kind>/<name>.md）。',
+    {
+      type: 'object',
+      properties: {
+        op: { type: 'string', enum: ['list', 'read', 'save', 'delete'], description: '操作类型。' },
+        kind: { type: 'string', enum: ['agents', 'skills', 'prompts'], description: '指令类别。' },
+        id: { type: 'string', description: '目标文件名（stem）；read/delete 用。' },
+        name: { type: 'string', description: '保存的文件名（stem）；save 用。' },
+        text: { type: 'string', description: '文件正文（Markdown）；save 用。' },
+      },
+      required: ['op', 'kind'],
+    },
+  )
+
+  cmdTool(
+    'qgis_eval',
+    'eval',
+    '在某个插件的 QWebEngineView 里执行 JS 表达式（经 plugin_id 路由到该插件的 live driver）。' +
+      '本驱动无 WebEngine view，需指向带 view 的插件。',
+    {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', description: 'JS 表达式。' },
+        plugin_id: { type: 'string', description: '目标 WebEngine 插件 id。' },
+      },
+      required: ['expression', 'plugin_id'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_devreload',
+    'devreload',
+    '重载插件的 repo 侧 bridge/ui（WEBENGINE_DEV_SRC）并刷新其页面，经 plugin_id 路由。',
+    {
+      type: 'object',
+      properties: {
+        plugin_id: { type: 'string', description: '目标 WebEngine 插件 id。' },
+      },
+      required: ['plugin_id'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_devin_run',
+    'devin_run',
+    '在本机启动一个 Devin CLI 代理会话作为后台任务，立即返回 task_id。' +
+      '用 qgis_devin_status 轮询、qgis_devin_result 取输出、qgis_devin_abort 停止。' +
+      'engine: acp（共享 IDE 登录）/ print（需 devin auth login）/ auto；permission_mode 默认 dangerous。每次运行消耗 Devin 额度。',
+    {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '给 Devin 的任务指令。' },
+        cwd: { type: 'string', description: '工作目录（默认用户主目录）。' },
+        session_id: { type: 'string', description: '恢复某个会话 id。' },
+        model: { type: 'string', description: '模型覆盖。' },
+        permission_mode: { type: 'string', enum: ['normal', 'accept-edits', 'smart', 'dangerous'], description: '权限应答策略。' },
+        engine: { type: 'string', enum: ['auto', 'acp', 'print'], description: 'acp/print/auto。' },
+      },
+      required: ['prompt'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_devin_status',
+    'devin_status',
+    '查询 Devin 任务状态（running/exited/failed）、耗时与最近日志。省略 task_id 列出全部。',
+    {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 id，省略则列出全部 Devin 任务。' },
+      },
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_devin_result',
+    'devin_result',
+    '取 Devin 任务的捕获输出（日志尾部）。tail 为最大返回字符数，默认 20000。',
+    {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 id。' },
+        tail: { type: 'integer', description: '最大返回字符数，默认 20000。' },
+      },
+      required: ['task_id'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_devin_abort',
+    'devin_abort',
+    '终止一个由 qgis_devin_run 启动的 Devin 任务。',
+    {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 id。' },
+      },
+      required: ['task_id'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_copilot_run',
+    'copilot_run',
+    '在本机启动一个 GitHub Copilot CLI 代理会话作为后台任务，立即返回 task_id。' +
+      '用 qgis_copilot_status 轮询、qgis_copilot_result 取输出、qgis_copilot_abort 停止。' +
+      'engine: acp（JSON-RPC）/ print（copilot -p）/ auto；permission_mode 默认 dangerous。每次运行消耗 Copilot 高级请求。',
+    {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: '给 Copilot 的任务指令。' },
+        cwd: { type: 'string', description: '工作目录（默认用户主目录）。' },
+        session_id: { type: 'string', description: '恢复某个会话 id。' },
+        model: { type: 'string', description: '模型覆盖。' },
+        permission_mode: { type: 'string', enum: ['normal', 'accept-edits', 'smart', 'dangerous'], description: '权限应答策略。' },
+        engine: { type: 'string', enum: ['auto', 'acp', 'print'], description: 'acp/print/auto。' },
+      },
+      required: ['prompt'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_copilot_status',
+    'copilot_status',
+    '查询 Copilot 任务状态、耗时与最近日志。省略 task_id 列出全部。',
+    {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 id，省略则列出全部 Copilot 任务。' },
+      },
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_copilot_result',
+    'copilot_result',
+    '取 Copilot 任务的捕获输出（日志尾部）。tail 为最大返回字符数，默认 20000。',
+    {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 id。' },
+        tail: { type: 'integer', description: '最大返回字符数，默认 20000。' },
+      },
+      required: ['task_id'],
+    },
+    { deferLoading: true },
+  )
+
+  cmdTool(
+    'qgis_copilot_abort',
+    'copilot_abort',
+    '终止一个由 qgis_copilot_run 启动的 Copilot 任务。',
+    {
+      type: 'object',
+      properties: {
+        task_id: { type: 'string', description: '任务 id。' },
+      },
+      required: ['task_id'],
+    },
+    { deferLoading: true },
+  )
+
+  // ------------------------------------------------------------------
+  // P2: undo/redo, layer classification/symbolization, layer reprojection
+  // ------------------------------------------------------------------
+
+  registerTool({
+    name: 'qgis_undo',
+    deferLoading: true,
+    description:
+      '撤销指定图层编辑会话中最近一次未提交的编辑（需图层处于编辑状态）。' +
+      '对已提交（commitChanges）的改动无效——QGIS 的撤销栈只保留当前编辑会话内的操作。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const code = [
+        ...PY_FIND_LAYER,
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        'us = lyr.undoStack()',
+        'if not us.canUndo():',
+        "    result = {'layer': lyr.name(), 'undone': False, 'note': 'nothing to undo (not editing or no uncommitted edits)', 'undo_index': us.index(), 'undo_count': us.count()}",
+        'else:',
+        '    us.undo()',
+        "    result = {'layer': lyr.name(), 'undone': True, 'undo_index': us.index(), 'undo_count': us.count()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_redo',
+    deferLoading: true,
+    description:
+      '重做指定图层编辑会话中最近一次被撤销的编辑。要求图层处于编辑状态且撤销栈中有可重做项。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const code = [
+        ...PY_FIND_LAYER,
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        'us = lyr.undoStack()',
+        'if not us.canRedo():',
+        "    result = {'layer': lyr.name(), 'redone': False, 'note': 'nothing to redo', 'undo_index': us.index(), 'undo_count': us.count()}",
+        'else:',
+        '    us.redo()',
+        "    result = {'layer': lyr.name(), 'redone': True, 'undo_index': us.index(), 'undo_count': us.count()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_classify_layer',
+    deferLoading: true,
+    description:
+      '给矢量图层套用分类或分级符号化渲染器：mode=categorized 按字段唯一值分类，' +
+      'mode=graduated 按数值字段等间距分级（classes 级）。可选 colors 数组按顺序着色（hex，如 ["#e6194b","#3cb44b"]）；' +
+      'graduated 用 colors[0]→colors[-1] 做渐变，缺省红→蓝渐变。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称（仅矢量图层）。' },
+        field: { type: 'string', description: '分类/分级依据字段。' },
+        mode: { type: 'string', enum: ['categorized', 'graduated'], description: '默认 categorized。' },
+        classes: { type: 'integer', description: 'graduated 分级数，默认 5。' },
+        colors: { type: 'array', items: { type: 'string' }, description: '可选颜色列表（hex）。' },
+      },
+      required: ['layer', 'field'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const field = needStr(args, 'field')
+      const mode = args?.mode === 'graduated' ? 'graduated' : 'categorized'
+      const classes = clampInt(args?.classes, 5, 2, 20)
+      const colors = Array.isArray(args?.colors) ? args.colors.filter((c) => typeof c === 'string') : []
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import (QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer,',
+        '                        QgsSymbol, QgsGradientColorRamp)',
+        'from qgis.PyQt.QtGui import QColor',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `field = ${JSON.stringify(field)}`,
+        `mode = ${JSON.stringify(mode)}`,
+        `classes = ${classes}`,
+        `colors = ${JSON.stringify(colors)}`,
+        'if field not in [f.name() for f in lyr.fields()]:',
+        "    raise ValueError('unknown field: ' + field)",
+        "if mode == 'graduated':",
+        '    r = QgsGraduatedSymbolRenderer(field)',
+        '    if len(colors) >= 2:',
+        '        r.setSourceColorRamp(QgsGradientColorRamp(QColor(colors[0]), QColor(colors[-1])))',
+        '    else:',
+        "        r.setSourceColorRamp(QgsGradientColorRamp(QColor('red'), QColor('blue')))",
+        '    r.updateClasses(lyr, QgsGraduatedSymbolRenderer.Mode.EqualInterval, classes)',
+        '    lyr.setRenderer(r)',
+        "    result = {'layer': lyr.name(), 'mode': 'graduated', 'field': field, 'classes': len(r.ranges())}",
+        'else:',
+        '    sym = QgsSymbol.defaultSymbol(lyr.geometryType())',
+        '    vals = sorted({f[field] for f in lyr.getFeatures()})',
+        '    cats = QgsCategorizedSymbolRenderer.createCategories(vals, sym, lyr, field)',
+        '    if colors:',
+        '        for i, c in enumerate(cats):',
+        '            if i < len(colors):',
+        '                try:',
+        '                    s_ = c.symbol().clone()',
+        '                    s_.setColor(QColor(colors[i]))',
+        '                    c.setSymbol(s_)',
+        '                except Exception:',
+        '                    pass',
+        '    renderer = QgsCategorizedSymbolRenderer(field, cats)',
+        '    lyr.setRenderer(renderer)',
+        "    result = {'layer': lyr.name(), 'mode': 'categorized', 'field': field, 'categories': len(renderer.categories())}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_reproject_layer',
+    deferLoading: true,
+    description:
+      '把矢量图层的数据重投影到目标坐标系，生成一个新的内存图层（字段与属性保留，几何坐标转换）并加入当前工程。' +
+      '源图层不会被修改。target_crs 如 EPSG:3857。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '源图层 id 或名称（仅矢量图层）。' },
+        target_crs: { type: 'string', description: '目标坐标系，如 EPSG:3857。' },
+        output_name: { type: 'string', description: '新图层名称，默认 "<源名>_reprojected"。' },
+      },
+      required: ['layer', 'target_crs'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const targetCrs = needStr(args, 'target_crs')
+      const outName = typeof args?.output_name === 'string' && args.output_name.trim()
+        ? args.output_name.trim()
+        : ''
+      const code = [
+        ...PY_FIND_LAYER,
+        'from qgis.core import (QgsVectorLayer, QgsFeature, QgsGeometry, QgsWkbTypes,',
+        '                        QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsProject)',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `dst = QgsCoordinateReferenceSystem(${JSON.stringify(targetCrs)})`,
+        'if not dst.isValid():',
+        "    raise ValueError('invalid target_crs: ' + " + JSON.stringify(targetCrs) + ")",
+        'if lyr.crs().isValid() and lyr.crs() == dst:',
+        "    result = {'layer': lyr.name(), 'crs': dst.authid(), 'feature_count': lyr.featureCount(), 'note': 'already in target CRS', 'copied': False}",
+        'else:',
+        '    wkt = QgsWkbTypes.displayString(lyr.wkbType())',
+        `    oname = ${JSON.stringify(outName)} or (lyr.name() + '_reprojected')`,
+        "    out = QgsVectorLayer(f'{wkt}?crs={dst.authid()}', oname, 'memory')",
+        '    outp = out.dataProvider()',
+        '    outp.addAttributes(lyr.fields())',
+        '    out.updateFields()',
+        '    xf = QgsCoordinateTransform(lyr.crs(), dst, QgsProject.instance())',
+        '    feats = []',
+        '    for f in lyr.getFeatures():',
+        '        nf = QgsFeature(out.fields())',
+        '        g = QgsGeometry(f.geometry()) if f.geometry() is not None else None',
+        '        if g is not None and not g.isEmpty():',
+        '            g.transform(xf)',
+        '        nf.setGeometry(g)',
+        '        for k in range(len(lyr.fields())):',
+        '            nf.setAttribute(k, f.attribute(k))',
+        '        feats.append(nf)',
+        '    outp.addFeatures(feats)',
+        '    out.updateExtents()',
+        '    QgsProject.instance().addMapLayer(out)',
+        "    result = {'layer': out.name(), 'source_layer': lyr.name(), 'source_crs': lyr.crs().authid() if lyr.crs().isValid() else None,",
+        "              'crs': out.crs().authid(), 'feature_count': out.featureCount(), 'copied': True}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  // ------------------------------------------------------------------
+  // Data-surface gaps: memory layer, full attribute table, open project
+  // ------------------------------------------------------------------
+
+  registerTool({
+    name: 'qgis_create_memory_layer',
+    deferLoading: true,
+    description:
+      '新建一个空的内存矢量图层并加入当前工程。geometry_type: point|line|polygon（默认 point）；' +
+      'crs 默认 EPSG:4326；fields 为 [{name, type}]，type 支持 string|integer|double|date 等内存 provider 类型。',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '图层名称。' },
+        geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'], description: '几何类型，默认 point。' },
+        crs: { type: 'string', description: '坐标系，默认 EPSG:4326。' },
+        fields: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          description: '字段列表 [{name, type}]。',
+        },
+      },
+      required: ['name'],
+    },
+    async execute(args, exec) {
+      const name = needStr(args, 'name')
+      const gmap = { point: 'Point', line: 'LineString', polygon: 'Polygon' }
+      const g = gmap[args?.geometry_type] || 'Point'
+      const crs = typeof args?.crs === 'string' && args.crs.trim() ? args.crs.trim() : 'EPSG:4326'
+      const fields = Array.isArray(args?.fields) ? args.fields : []
+      const code = [
+        'from qgis.core import QgsVectorLayer, QgsProject',
+        `name = ${JSON.stringify(name)}`,
+        `g = ${JSON.stringify(g)}`,
+        `crs = ${JSON.stringify(crs)}`,
+        'import json',
+        `fields = ${pyJson(fields)}`,
+        `uri = f'{g}?crs={crs}'`,
+        'for f in fields:',
+        '    n = f.get("name", "")',
+        '    t = f.get("type", "string")',
+        '    if n:',
+        "        uri += f'&field={n}:{t}'",
+        'lyr = QgsVectorLayer(uri, name, "memory")',
+        'if not lyr.isValid():',
+        "    raise RuntimeError('failed to create memory layer: ' + uri)",
+        'QgsProject.instance().addMapLayer(lyr)',
+        "result = {'id': lyr.id(), 'name': lyr.name(), 'geometry': g, 'crs': lyr.crs().authid() if lyr.crs().isValid() else None,",
+        "          'fields': [f.name() for f in lyr.fields()]}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_export_table',
+    description:
+      '导出图层的完整属性表（不含几何）。format=csv|json（默认 csv）。给定 path 则写文件并返回路径+行数；' +
+      '未给 path 时返回内联数据（json 上限 10000 行，带 truncated 标记）。适合一次性取全部属性。',
+    parameters: {
+      type: 'object',
+      properties: {
+        layer: { type: 'string', description: '图层 id 或名称。' },
+        format: { type: 'string', enum: ['csv', 'json'], description: '默认 csv。' },
+        path: { type: 'string', description: '可选输出文件绝对路径。' },
+      },
+      required: ['layer'],
+    },
+    async execute(args, exec) {
+      const layer = needStr(args, 'layer')
+      const fmt = args?.format === 'json' ? 'json' : 'csv'
+      const outPath = typeof args?.path === 'string' && args.path.trim() ? args.path.trim() : ''
+      const code = [
+        ...PY_FIND_LAYER,
+        'import csv, json',
+        `lyr = _dsh_layer(${JSON.stringify(layer)})`,
+        `fmt = ${JSON.stringify(fmt)}`,
+        `out_path = ${JSON.stringify(outPath)}`,
+        'names = [f.name() for f in lyr.fields()]',
+        'if fmt == "json":',
+        '    rows = []',
+        '    for f in lyr.getFeatures():',
+        '        r = {}',
+        '        for n in names:',
+        '            v = f[n]',
+        '            r[n] = v if isinstance(v, (str, int, float, bool)) or v is None else str(v)',
+        '        rows.append(r)',
+        '    if out_path:',
+        "        with open(out_path, 'w', encoding='utf-8') as fh:",
+        '            json.dump(rows, fh, ensure_ascii=False, indent=2)',
+        "        result = {'path': out_path, 'rows': len(rows), 'columns': names}",
+        '    else:',
+        '        truncated = len(rows) > 10000',
+        "        result = {'rows': len(rows), 'columns': names, 'truncated': truncated, 'data': rows[:10000]}",
+        'else:',
+        '    if out_path:',
+        "        with open(out_path, 'w', newline='', encoding='utf-8-sig') as fh:",
+        '            w = csv.DictWriter(fh, fieldnames=names)',
+        '            w.writeheader()',
+        '            for f in lyr.getFeatures():',
+        '                w.writerow({n: f[n] for n in names})',
+        "        result = {'path': out_path, 'columns': names}",
+        '    else:',
+        '        import io',
+        '        buf = io.StringIO()',
+        '        w = csv.DictWriter(buf, fieldnames=names)',
+        '        w.writeheader()',
+        '        nrows = 0',
+        '        for f in lyr.getFeatures():',
+        '            w.writerow({n: f[n] for n in names})',
+        '            nrows += 1',
+        "        result = {'rows': nrows, 'columns': names, 'csv': buf.getvalue()}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
+  registerTool({
+    name: 'qgis_open_project',
+    deferLoading: true,
+    description: '打开一个 QGIS 工程文件（.qgs/.qgz），替换当前工程。返回打开后的图层数。',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '工程文件绝对路径。' },
+      },
+      required: ['path'],
+    },
+    async execute(args, exec) {
+      const p = needStr(args, 'path')
+      const code = [
+        'from qgis.core import QgsProject',
+        `p = ${JSON.stringify(p)}`,
+        'ok = QgsProject.instance().read(p)',
+        "result = {'opened': bool(ok), 'file': p, 'layer_count': len(QgsProject.instance().mapLayers()),",
+        "          'crs': QgsProject.instance().crs().authid() if QgsProject.instance().crs().isValid() else None}",
+      ].join('\n')
+      return asText(await runQgisSync(code, exec?.signal))
+    },
+  })
+
   return () => { for (const d of disposers) d() }
 }

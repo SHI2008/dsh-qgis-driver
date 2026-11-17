@@ -105,11 +105,31 @@ removed from the cache (`status` = `done` or `error`); a running task reports
 | `qgis_set_project_crs` | Change the project CRS (does not reproject existing layers). |
 | `qgis_set_layer_style` | Set a layer's base color and opacity. |
 | `qgis_plugin_status` | Diagnostic: QGIS version and whether the plugin is loaded/active. |
+| `qgis_create_layout` | Create a new empty print layout. |
+| `qgis_export_atlas` | Export a layout's atlas to a multi-page PDF or PNG. |
+| `qgis_undo` / `qgis_redo` | Undo/redo edits on a layer (edit-buffer undo stack). |
+| `qgis_classify_layer` | Apply a categorized or graduated renderer by a field. |
+| `qgis_reproject_layer` | Reproject a vector layer into a new memory layer (geometry transformed, attributes kept). |
+| `qgis_create_memory_layer` | Create an empty in-memory vector layer with fields. |
+| `qgis_export_table` | Export a layer's full attribute table to CSV/JSON (file or inline). |
+| `qgis_open_project` | Open a `.qgs`/`.qgz` project file. |
+| `qgis_status` | HTTP server / plugin status (pid, live dir, port, token). |
+| `qgis_describe_plugins` | List plugins available to the AI (bridge self-descriptions). |
+| `qgis_open_plugin` / `qgis_reload_plugin` | Open / reload a plugin (WebEngine plugin routing). |
+| `qgis_bridge_call` | Call a plugin's bridge method in-process (JSON result). |
+| `qgis_instruction` | Manage AI instruction files (agents / skills / prompts). |
+| `qgis_eval` | Evaluate JS in a WebEngine plugin's view (needs a `plugin_id`). |
+| `qgis_devreload` | Hot-reload a WebEngine plugin's repo-side UI. |
+| `qgis_devin_run/status/result/abort` | Run / poll / read / abort a Devin CLI agent task. |
+| `qgis_copilot_run/status/result/abort` | Run / poll / read / abort a Copilot CLI agent task. |
 
 Rarely-used and destructive tools (`qgis_add_feature`, `qgis_update_features`,
 `qgis_delete_features`, `qgis_save_project`, `qgis_layout_items`,
-`qgis_set_project_crs`, `qgis_set_layer_style`, `qgis_plugin_status`) are registered
-with `deferLoading: true`, so their descriptions load on demand.
+`qgis_set_project_crs`, `qgis_set_layer_style`, `qgis_plugin_status`,
+`qgis_undo`, `qgis_redo`, `qgis_classify_layer`, `qgis_reproject_layer`,
+`qgis_create_memory_layer`, `qgis_open_project`, `qgis_eval`, `qgis_devreload`,
+and the eight Devin/Copilot tools) are registered with `deferLoading: true`, so
+their descriptions load on demand.
 
 Image-returning tools write the PNG to a local temp file and return its path;
 open it with the `read_image` tool.

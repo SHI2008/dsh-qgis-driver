@@ -33,6 +33,19 @@ Versions are kept in sync with `version` in `metadata.txt`.
   QGIS4.ini `[PythonPlugins]`, then starts QGIS) and waits for the registry
   file. Override with config `autostart.command`/`autostart.timeoutMs` or
   `QGIS_LIVE_AUTOSTART_CMD`/`QGIS_LIVE_AUTOSTART_TIMEOUT_MS`.
+- DSH bundle: two P1 layout tools — `qgis_create_layout` (new empty print
+  layout) and `qgis_export_atlas` (export a layout's atlas to multi-page
+  PDF or PNG). Note: a layout must call `initializeDefaults()` before
+  `QgsLayoutExporter` can export it.
+- DSH bundle: P2 + tool-surface + data-surface tools — `qgis_undo`/`qgis_redo`
+  (per-layer edit-buffer undo), `qgis_classify_layer` (categorized/graduated),
+  `qgis_reproject_layer` (new memory layer with transformed geometry),
+  `qgis_create_memory_layer`, `qgis_export_table` (full attribute table as
+  CSV/JSON), `qgis_open_project`, and the 16 plugin REST tools exposed as DSH
+  tools (`qgis_status`, `qgis_describe_plugins`, `qgis_open_plugin`,
+  `qgis_reload_plugin`, `qgis_bridge_call`, `qgis_instruction`, `qgis_eval`,
+  `qgis_devreload`, `qgis_devin_run/status/result/abort`,
+  `qgis_copilot_run/status/result/abort`). The bundle now registers 55 tools.
 
 ### Removed
 - The entire MCP surface: the `/mcp` Streamable HTTP endpoint and its
