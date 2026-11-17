@@ -1,5 +1,5 @@
 // dsh-qgis-driver — DSH client UI.
-// (1) Registers a QGIS connection-status widget below the message composer
+// (1) Registers a QGIS connection-status widget in the composer tool row (right of the model selector)
 //     (OFF by default, Config `dock`; enabled in Settings).
 // (2) Registers a dedicated Settings section (`settings.section`) with an
 //     editable host/port/key/dock form, persisted via the Host's same-origin
@@ -75,7 +75,6 @@ window.__ModuleLoader__.load({
           alignItems: 'center',
           justifyContent: 'flex-end',
           flex: '0 0 auto',
-          marginLeft: 'auto',
           minWidth: 0,
           alignSelf: 'center',
         },
@@ -95,8 +94,8 @@ window.__ModuleLoader__.load({
         open
           ? h('div', {
               style: {
-                position: 'absolute', top: '100%', right: 0, zIndex: 5,
-                marginTop: 2, padding: '4px 8px', borderRadius: 6,
+                position: 'absolute', bottom: '100%', right: 0, zIndex: 5,
+                marginBottom: 4, padding: '4px 8px', borderRadius: 6,
                 background: SURFACE, border: '1px solid ' + BORDER,
                 fontSize: 11, color: MUTED, lineHeight: '15px',
                 maxWidth: 320, textAlign: 'right', whiteSpace: 'normal',
@@ -193,9 +192,9 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       apply(ctx) {
         const disposers = []
-        const offDock = ctx.slots.inject('conversation.composer.dock', () =>
+        const offDock = ctx.slots.inject('conversation.input.right', () =>
           ctx.slots.register(
-            { name: 'conversation.composer.dock', id: 'dsh-qgis-driver-dock', order: 5 },
+            { name: 'conversation.input.right', id: 'dsh-qgis-driver-dock', order: 90 },
             StatusWidget,
           ),
         )
