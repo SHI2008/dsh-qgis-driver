@@ -35,7 +35,9 @@ To drive a QGIS on **another machine**, configure the target in the bundle's
 ```
 
 or set the environment variables `QGIS_LIVE_REMOTE_HOST`, `QGIS_LIVE_REMOTE_PORT`,
-`QGIS_LIVE_REMOTE_KEY` (config in the patch file takes precedence).
+`QGIS_LIVE_REMOTE_KEY` (config in the patch file takes precedence). You can
+also set the same three fields (`host`, `port`, `key`) from the DSH **Settings**
+page — the bundle declares a `Config` schema, so DSH renders a form for them.
 
 On the **remote QGIS side**, set these environment variables before QGIS starts,
 then enable Remote Control:
@@ -118,18 +120,19 @@ removed from the cache (`status` = `done` or `error`); a running task reports
 | `qgis_open_plugin` / `qgis_reload_plugin` | Open / reload a plugin (WebEngine plugin routing). |
 | `qgis_bridge_call` | Call a plugin's bridge method in-process (JSON result). |
 | `qgis_instruction` | Manage AI instruction files (agents / skills / prompts). |
-| `qgis_eval` | Evaluate JS in a WebEngine plugin's view (needs a `plugin_id`). |
-| `qgis_devreload` | Hot-reload a WebEngine plugin's repo-side UI. |
-| `qgis_devin_run/status/result/abort` | Run / poll / read / abort a Devin CLI agent task. |
-| `qgis_copilot_run/status/result/abort` | Run / poll / read / abort a Copilot CLI agent task. |
 
-Rarely-used and destructive tools (`qgis_add_feature`, `qgis_update_features`,
+Rarely-used, destructive, GUI-only, and diagnostic tools are registered with
+`deferLoading: true`, so their descriptions load on demand (they still appear
+in the tool list): `qgis_add_feature`, `qgis_update_features`,
 `qgis_delete_features`, `qgis_save_project`, `qgis_layout_items`,
 `qgis_set_project_crs`, `qgis_set_layer_style`, `qgis_plugin_status`,
 `qgis_undo`, `qgis_redo`, `qgis_classify_layer`, `qgis_reproject_layer`,
-`qgis_create_memory_layer`, `qgis_open_project`, `qgis_eval`, `qgis_devreload`,
-and the eight Devin/Copilot tools) are registered with `deferLoading: true`, so
-their descriptions load on demand.
+`qgis_create_memory_layer`, `qgis_export_table`, `qgis_open_project`,
+`qgis_list_algorithms`, `qgis_algorithm_help`, `qgis_export_atlas`,
+`qgis_create_layout`, `qgis_export_layer`, `qgis_set_extent`,
+`qgis_zoom_to_layer`, `qgis_screenshot`, plus the plugin-monitoring tools
+(`qgis_status`, `qgis_describe_plugins`, `qgis_open_plugin`,
+`qgis_reload_plugin`, `qgis_bridge_call`, `qgis_instruction`).
 
 Image-returning tools write the PNG to a local temp file and return its path;
 open it with the `read_image` tool.

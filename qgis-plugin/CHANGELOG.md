@@ -55,6 +55,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
   `mcp_<server>__<tool>` extra tools), the AI panel "MCP" settings row
   and `_McpDialog`, and the connection-info dialog's MCP tab and client
   configs. `mcp_http.py` was renamed to `http_api.py`.
+- DSH bundle: ten tools that only serve external CLIs or WebEngine plugins —
+  `qgis_eval`, `qgis_devreload`, `qgis_devin_run/status/result/abort` and
+  `qgis_copilot_run/status/result/abort` (outbound Devin/Copilot CLI +
+  WebEngine-only routing). The plugin now serves DeepSeek Harness
+  exclusively, so these are no longer relevant.
 
 ### Changed
 - Connection Info dialog now shows only the REST example, token and
@@ -64,6 +69,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
 - i18n catalogs: removed the `_McpDialog` context and all MCP keys.
 - Menu label "Remote Control (localhost only)" → "Remote Control", and the
   connection-info / enablement dialogs no longer claim localhost-only.
+- DSH bundle now declares a `Config` schema (`host`/`port`/`key`), so remote
+  connection settings are configurable from the DSH Settings page (previously
+  only via env vars).
+- DSH bundle: low-frequency tools now use `deferLoading: true` so their
+  descriptions load on demand (26 tools deferred).
 
 ### Notes
 - This fork is not intended to be merged upstream.

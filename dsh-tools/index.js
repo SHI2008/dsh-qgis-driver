@@ -25,9 +25,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
+
+/** Remote connection settings rendered as a form in DSH Settings. */
+export const Config = z.object({
+  host: z.string().default(''),
+  port: z.number().default(0),
+  key: z.string().default(''),
+})
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
 const HEALTH_TIMEOUT_MS = 2000
@@ -391,6 +399,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_list_algorithms',
+    deferLoading: true,
     description:
       '列出 QGIS 处理框架中可用的空间分析算法（可按关键字过滤 id 或显示名）。' +
       '用于发现可用的算法 id，然后交给 qgis_run_processing 执行。最多返回 200 条。',
@@ -540,6 +549,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_export_atlas',
+    deferLoading: true,
     description:
       '将指定打印布局的图集(atlas)导出为多页 PDF 或单页 PNG 图片。' +
       '要求该布局已在 QGIS 中启用了 atlas 并设置了覆盖图层。PDF 为多页合订文件；' +
@@ -613,6 +623,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_create_layout',
+    deferLoading: true,
     description:
       '在当前 QGIS 项目中新建一个空白打印布局。创建后可回到 QGIS GUI 向其中添加地图、图例、比例尺等元素，' +
       '再用 qgis_export_layout / qgis_export_atlas 导出。布局名必须唯一。',
@@ -792,6 +803,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_algorithm_help',
+    deferLoading: true,
     description:
       '查看一个处理算法的参数定义（参数名、说明、类型、是否可选）。' +
       '调用 qgis_run_processing 前先用它确认参数名，避免盲猜导致失败。',
@@ -893,6 +905,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_export_layer',
+    deferLoading: true,
     description:
       '把矢量图层导出为文件（GPKG/GeoJSON/Shapefile/CSV）。path 为输出绝对路径，' +
       'format 留空时按扩展名推断。只支持矢量图层（栅格请用 qgis_run_processing/gdal）。',
@@ -948,6 +961,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_set_extent',
+    deferLoading: true,
     description:
       '把 QGIS 地图画布范围设置为给定矩形（可指定坐标系，自动重投影到画布 CRS）。' +
       '仅限 QGIS GUI 会话（需要地图画布）。',
@@ -993,6 +1007,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_zoom_to_layer',
+    deferLoading: true,
     description:
       '把地图画布缩放到指定图层的范围（自动重投影到画布 CRS）。仅限 QGIS GUI 会话。',
     parameters: {
@@ -1030,6 +1045,7 @@ export function apply(ctx, config = {}) {
 
   disposers.push(ctx.tools.register({
     name: 'qgis_screenshot',
+    deferLoading: true,
     description:
       '截取 QGIS 当前地图画布或主窗口，返回本地 PNG 文件路径（用 read_image 查看）。' +
       'target=canvas 为地图画布，target=mainwindow 为整个 QGIS 主窗口。仅限 QGIS GUI 会话。',
@@ -1571,6 +1587,7 @@ export function apply(ctx, config = {}) {
       name,
       description,
       parameters,
+      deferLoading: true,
       ...opts,
       async execute(args, exec) {
         return asText(await runQgisCmd(type, args, exec?.signal))
@@ -1655,162 +1672,6 @@ export function apply(ctx, config = {}) {
       },
       required: ['op', 'kind'],
     },
-  )
-
-  cmdTool(
-    'qgis_eval',
-    'eval',
-    '在某个插件的 QWebEngineView 里执行 JS 表达式（经 plugin_id 路由到该插件的 live driver）。' +
-      '本驱动无 WebEngine view，需指向带 view 的插件。',
-    {
-      type: 'object',
-      properties: {
-        expression: { type: 'string', description: 'JS 表达式。' },
-        plugin_id: { type: 'string', description: '目标 WebEngine 插件 id。' },
-      },
-      required: ['expression', 'plugin_id'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_devreload',
-    'devreload',
-    '重载插件的 repo 侧 bridge/ui（WEBENGINE_DEV_SRC）并刷新其页面，经 plugin_id 路由。',
-    {
-      type: 'object',
-      properties: {
-        plugin_id: { type: 'string', description: '目标 WebEngine 插件 id。' },
-      },
-      required: ['plugin_id'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_devin_run',
-    'devin_run',
-    '在本机启动一个 Devin CLI 代理会话作为后台任务，立即返回 task_id。' +
-      '用 qgis_devin_status 轮询、qgis_devin_result 取输出、qgis_devin_abort 停止。' +
-      'engine: acp（共享 IDE 登录）/ print（需 devin auth login）/ auto；permission_mode 默认 dangerous。每次运行消耗 Devin 额度。',
-    {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string', description: '给 Devin 的任务指令。' },
-        cwd: { type: 'string', description: '工作目录（默认用户主目录）。' },
-        session_id: { type: 'string', description: '恢复某个会话 id。' },
-        model: { type: 'string', description: '模型覆盖。' },
-        permission_mode: { type: 'string', enum: ['normal', 'accept-edits', 'smart', 'dangerous'], description: '权限应答策略。' },
-        engine: { type: 'string', enum: ['auto', 'acp', 'print'], description: 'acp/print/auto。' },
-      },
-      required: ['prompt'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_devin_status',
-    'devin_status',
-    '查询 Devin 任务状态（running/exited/failed）、耗时与最近日志。省略 task_id 列出全部。',
-    {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: '任务 id，省略则列出全部 Devin 任务。' },
-      },
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_devin_result',
-    'devin_result',
-    '取 Devin 任务的捕获输出（日志尾部）。tail 为最大返回字符数，默认 20000。',
-    {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: '任务 id。' },
-        tail: { type: 'integer', description: '最大返回字符数，默认 20000。' },
-      },
-      required: ['task_id'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_devin_abort',
-    'devin_abort',
-    '终止一个由 qgis_devin_run 启动的 Devin 任务。',
-    {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: '任务 id。' },
-      },
-      required: ['task_id'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_copilot_run',
-    'copilot_run',
-    '在本机启动一个 GitHub Copilot CLI 代理会话作为后台任务，立即返回 task_id。' +
-      '用 qgis_copilot_status 轮询、qgis_copilot_result 取输出、qgis_copilot_abort 停止。' +
-      'engine: acp（JSON-RPC）/ print（copilot -p）/ auto；permission_mode 默认 dangerous。每次运行消耗 Copilot 高级请求。',
-    {
-      type: 'object',
-      properties: {
-        prompt: { type: 'string', description: '给 Copilot 的任务指令。' },
-        cwd: { type: 'string', description: '工作目录（默认用户主目录）。' },
-        session_id: { type: 'string', description: '恢复某个会话 id。' },
-        model: { type: 'string', description: '模型覆盖。' },
-        permission_mode: { type: 'string', enum: ['normal', 'accept-edits', 'smart', 'dangerous'], description: '权限应答策略。' },
-        engine: { type: 'string', enum: ['auto', 'acp', 'print'], description: 'acp/print/auto。' },
-      },
-      required: ['prompt'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_copilot_status',
-    'copilot_status',
-    '查询 Copilot 任务状态、耗时与最近日志。省略 task_id 列出全部。',
-    {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: '任务 id，省略则列出全部 Copilot 任务。' },
-      },
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_copilot_result',
-    'copilot_result',
-    '取 Copilot 任务的捕获输出（日志尾部）。tail 为最大返回字符数，默认 20000。',
-    {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: '任务 id。' },
-        tail: { type: 'integer', description: '最大返回字符数，默认 20000。' },
-      },
-      required: ['task_id'],
-    },
-    { deferLoading: true },
-  )
-
-  cmdTool(
-    'qgis_copilot_abort',
-    'copilot_abort',
-    '终止一个由 qgis_copilot_run 启动的 Copilot 任务。',
-    {
-      type: 'object',
-      properties: {
-        task_id: { type: 'string', description: '任务 id。' },
-      },
-      required: ['task_id'],
-    },
-    { deferLoading: true },
   )
 
   // ------------------------------------------------------------------
@@ -2055,6 +1916,7 @@ export function apply(ctx, config = {}) {
 
   registerTool({
     name: 'qgis_export_table',
+    deferLoading: true,
     description:
       '导出图层的完整属性表（不含几何）。format=csv|json（默认 csv）。给定 path 则写文件并返回路径+行数；' +
       '未给 path 时返回内联数据（json 上限 10000 行，带 truncated 标记）。适合一次性取全部属性。',
