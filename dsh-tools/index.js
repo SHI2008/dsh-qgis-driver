@@ -687,6 +687,170 @@ const stringOutput = {
   render: (_args, value) => [{ type: 'text', text: value }],
 }
 
+/**
+ * Output schema of one inline image, copied from the harness `read_image` tool:
+ * a tool result may only carry an image as a durable attachment reference, so
+ * this shape (minus `attachmentId` branding) is what `render` hands the model.
+ */
+const IMAGE_VALUE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['attachmentId', 'mediaType', 'bytes', 'width', 'height'],
+  properties: {
+    attachmentId: { type: 'string' },
+    mediaType: { type: 'string', enum: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] },
+    bytes: { type: 'integer' },
+    width: { type: 'integer' },
+    height: { type: 'integer' },
+    name: { type: 'string' },
+    originalDimensions: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['width', 'height'],
+      properties: {
+        width: { type: 'integer' },
+        height: { type: 'integer' },
+      },
+    },
+  },
+}
+
+/**
+ * Output declaration for tools that can inline one preview image. The canonical
+ * value is `{ text, note?, image? }`: `text` keeps the tool's ordinary JSON
+ * result byte-for-byte, `note` explains why an opt-in inline was skipped, and
+ * `image` is the attachment reference the harness turns into an image block.
+ */
+const inlineOutput = {
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['text'],
+    properties: {
+      text: { type: 'string' },
+      note: { type: 'string' },
+      image: IMAGE_VALUE_SCHEMA,
+    },
+  },
+  render: (_args, value) => {
+    const blocks = [{ type: 'text', text: value && value.text !== undefined ? String(value.text) : '' }]
+    if (value && value.note) blocks.push({ type: 'text', text: String(value.note) })
+    if (value && value.image) blocks.push({ type: 'image', attachment: value.image })
+    return blocks
+  },
+}
+
+/** Image file extension a tool result may name as its visual preview. */
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)$/i
+
+/** First preview-image path found anywhere in a parsed tool result (batch results nest them). */
+function findImagePath(value, depth = 0) {
+  if (depth > 6) return undefined
+  if (typeof value === 'string') return IMAGE_EXT_RE.test(value.trim()) ? value.trim() : undefined
+  if (value === null || typeof value !== 'object') return undefined
+  if (!Array.isArray(value) && typeof value.image_path === 'string' && IMAGE_EXT_RE.test(value.image_path)) {
+    return value.image_path
+  }
+  const items = Array.isArray(value) ? value : Object.values(value)
+  for (const item of items) {
+    const hit = findImagePath(item, depth + 1)
+    if (hit) return hit
+  }
+  return undefined
+}
+
+/**
+ * Locate the preview image a tool result names. Results are JSON text, except
+ * `qgis_map action=screenshot`, which returns a bare absolute PNG path.
+ */
+function findImagePathInText(text) {
+  const t = typeof text === 'string' ? text.trim() : ''
+  if (!t) return undefined
+  try {
+    const parsed = JSON.parse(t)
+    if (typeof parsed === 'string') return IMAGE_EXT_RE.test(parsed) ? parsed : undefined
+    return findImagePath(parsed)
+  } catch {
+    return IMAGE_EXT_RE.test(t) ? t : undefined
+  }
+}
+
+/** Strip branding and keep exactly the fields `IMAGE_VALUE_SCHEMA` admits. */
+function imageValueFromRef(ref) {
+  return {
+    attachmentId: String(ref.attachmentId),
+    mediaType: ref.mediaType,
+    bytes: ref.bytes,
+    width: ref.width,
+    height: ref.height,
+    ...(ref.name === undefined ? {} : { name: ref.name }),
+    ...(ref.originalDimensions === undefined ? {} : {
+      originalDimensions: { width: ref.originalDimensions.width, height: ref.originalDimensions.height },
+    }),
+  }
+}
+
+/**
+ * Check whether the calling route declares image input. Mirrors the harness
+ * `read_image` gate: the exact routed provider/model must list `image`, because
+ * an image block on a text-only request fails the whole provider call instead of
+ * degrading to text.
+ * @returns `{ ok: true }`, or `{ ok: false, why }` naming the reason.
+ */
+async function imageRouteCheck(ctx, exec) {
+  try {
+    const routed = exec?.agent?.session?.requestHeader?.()?.config
+    const provider = routed?.provider ?? exec?.agent?.options?.provider
+    const model = routed?.model ?? exec?.agent?.options?.model
+    const llm = ctx.get('llm')
+    if (!provider || !model || !llm) return { ok: false, why: 'the current model route could not be resolved' }
+    const info = await llm.resolveModelInfo(provider, model, exec?.signal)
+    const modalities = info?.inputModalities
+    if (!Array.isArray(modalities) || !modalities.includes('image')) {
+      return { ok: false, why: `model "${model}" does not declare image input` }
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, why: `image capability check failed: ${e instanceof Error ? e.message : String(e)}` }
+  }
+}
+
+/**
+ * Wrap a tool so an opt-in `inline: true` argument additionally commits the PNG
+ * preview named by the result's `image_path` to the attachment store and returns
+ * an image block beside the unchanged JSON text. Everything else (including every
+ * inline failure) degrades to the plain text result plus one explanatory note, so
+ * image transport can never fail a QGIS call.
+ */
+function withInlineImages(ctx, def) {
+  const impl = def.execute
+  return {
+    ...def,
+    output: inlineOutput,
+    async execute(args, exec) {
+      const text = asText(await impl(args, exec))
+      if (args?.inline !== true) return { text }
+      const imagePath = findImagePathInText(text)
+      if (!imagePath) return { text, note: 'inline=true had no effect: this result carries no image_path' }
+      const route = await imageRouteCheck(ctx, exec)
+      if (!route.ok) return { text, note: `inline skipped: ${route.why}; the preview is still at ${imagePath} (read_image can show it)` }
+      const attachments = ctx.get('attachments')
+      if (!attachments) return { text, note: `inline skipped: no attachment service is mounted; the preview is at ${imagePath}` }
+      try {
+        const data = await fs.promises.readFile(imagePath)
+        const mediaType = /\.jpe?g$/i.test(imagePath) ? 'image/jpeg'
+          : /\.webp$/i.test(imagePath) ? 'image/webp'
+            : /\.gif$/i.test(imagePath) ? 'image/gif' : 'image/png'
+        const ref = await attachments.saveImage({ data: new Uint8Array(data), mediaType, name: path.basename(imagePath) })
+        return { text, image: imageValueFromRef(ref) }
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e)
+        return { text, note: `inline failed: ${detail}; the preview is at ${imagePath}` }
+      }
+    },
+  }
+}
+
 /** Python helper: resolve a layer by id or name (raises ValueError when missing). */
 const PY_FIND_LAYER = [
   'from qgis.core import QgsProject',
@@ -3348,7 +3512,8 @@ export function apply(ctx, config = {}) {
   }
 
   const registerLive = (def) => {
-    const spec = { ...def, output: stringOutput }
+    const base = def.inlineImages === true ? withInlineImages(ctx, def) : def
+    const spec = { ...base, output: base.output || stringOutput }
     const impl = spec.execute
     spec.execute = async (args, exec) => {
       toolUsed = true

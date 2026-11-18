@@ -1556,10 +1556,12 @@ result = {'count': len(_parts_), 'results': _parts_}
         target_crs: { type: 'string' },
         output_name: { type: 'string' },
         format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'] },
+        inline: { type: 'boolean', description: 'export: also return the rendered map preview inline (costs request size on every later turn)' },
       },
       required: ['action'],
     },
     output: stringOutput,
+    inlineImages: true,
     async execute(args, exec) { return call(LAYER_BODY[args?.action], args, exec, undefined, 'qgis_layer'); },
   });
 
@@ -1654,10 +1656,12 @@ result = {'count': len(_parts_), 'results': _parts_}
         format: { type: 'string', enum: ['png', 'pdf'] },
         dpi: { type: 'integer' },
         path: { type: 'string' },
+        inline: { type: 'boolean', description: 'export/export_atlas: also return the PNG preview as an inline image the model can see (one attachment per result; costs request size on every later turn)' },
       },
       required: ['action'],
     },
     output: stringOutput,
+    inlineImages: true,
     async execute(args, exec) { return call(LAYOUT_BODY[args?.action], args, exec, undefined, 'qgis_layout'); },
   });
 
@@ -1702,14 +1706,22 @@ result = {'count': len(_parts_), 'results': _parts_}
         crs: { type: 'string' },
         crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
         layer: { type: 'string' },
+        inline: { type: 'boolean', description: 'screenshot/render: also return the captured image inline so the model can inspect it (costs request size on every later turn)' },
       },
       required: ['action'],
     },
     output: stringOutput,
+    inlineImages: true,
     async execute(args, exec) {
       if (args?.action === 'screenshot') {
-        const out = await runCmd('screenshot', { target: args?.target || 'canvas' }, exec?.signal);
-        return asText(out);
+        const target = args?.target || 'canvas'
+        const out = await runCmd('screenshot', { target }, exec?.signal)
+        const p = typeof out === 'string' ? out : (out && (out.image_path || out.path)) || null
+        return JSON.stringify({
+          target,
+          image_path: p,
+          hint: 'image_path 是截取的 PNG；inline:true 时直接内联，否则用 read_image 查看',
+        }, null, 2)
       }
       const a = args?.action;
       const gui = a === 'set_extent' || a === 'zoom_to_layer' || a === 'screenshot';

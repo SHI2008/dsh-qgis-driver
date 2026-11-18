@@ -30,11 +30,19 @@ round-trip, while hand-written pyeval is one round-trip per step.
 2. **Outputs are PNG.** Visual results come back as `image_path`; open it with `read_image`.
    `format: "pdf"` adds `file_path` and still returns a PNG preview. Never pass `format: pdf`
    just to look at the map.
-3. **Errors are one short English line**: `Type: body (hint)`. A timeout means the QGIS
+3. **Inline the preview when you must look at it now.** `qgis_layout` (export / export_atlas),
+   `qgis_map` (render / screenshot) and `qgis_layer` (export) accept `inline: true`: the same
+   call then returns the PNG preview as an image block beside the usual JSON, so verification
+   needs no second call. Off by default — an inlined image rides every later request of this
+   session (≈2k tokens for a full-page preview) and invalidates the cached prompt suffix, so use
+   it for the verification call itself, not for archiving. If the route's model declares no image
+   input, or the preview is too large, the call still succeeds and adds one note saying why the
+   image was skipped.
+4. **Errors are one short English line**: `Type: body (hint)`. A timeout means the QGIS
    instance died — the call already retried on a fresh one; re-run it once before debugging.
-4. **Check what exists** before acting: `qgis_layer action=list`, `qgis_layout action=list`,
+5. **Check what exists** before acting: `qgis_layer action=list`, `qgis_layout action=list`,
    `qgis_project action=info`. Names are case-sensitive; use `id` when names collide.
-5. **No status polling loops.** `qgis_plugin action=status` only when a call fails.
+6. **No status polling loops.** `qgis_plugin action=status` only when a call fails.
 
 ## Availability
 
@@ -59,7 +67,7 @@ that has a dedicated action.
 
 `qgis_map action=set_extent|zoom_to_layer|screenshot` need a real canvas; the driver starts a
 headless QGIS by default and a GUI instance automatically for these four calls. Everything else
-runs headless.
+runs headless. `screenshot` returns `{target, image_path}` like every other visual action.
 
 ## Pitfalls (each cost a debugging session)
 
