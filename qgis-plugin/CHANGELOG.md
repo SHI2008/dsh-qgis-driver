@@ -6,6 +6,10 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Added
+- `task_cancel` command / `POST /api/task_cancel`: cancel one task (`task_id`) or a group
+  (`task_ids`). A shard still queued in the pool never starts and reports `cancelled`; a running
+  shard cannot be interrupted (Python cannot kill a thread), so it records `cancel_requested` and
+  finishes on its own. Exposed as `check_qgis_task {"cancel": true}`.
 - `pyeval_group` command / `POST /api/pyeval_group`: submit `{tasks: [{name, code}], max_workers}`
   and the plugin queues every shard, then runs it in one shared `ThreadPoolExecutor` (default 4,
   cap 32) instead of one unthrottled thread per task. Task entries now carry `name` and start as

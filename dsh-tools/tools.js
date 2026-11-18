@@ -1409,12 +1409,13 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll a task from submit_qgis_async. done/error is evicted after the first read. Batch: task_ids=[...] checks a whole group in one call.',
+    description: 'Poll a task from submit_qgis_async. done/error is evicted after the first read. Batch: task_ids=[...] checks a whole group in one call. cancel=true stops the given tasks instead of polling: shards still queued never start, ones already running only record the request (Python threads cannot be killed) and must finish on their own.',
     parameters: {
       type: 'object',
       properties: {
         task_id: { type: 'string' },
         task_ids: { type: 'array', items: { type: 'string' }, description: 'batch of task ids' },
+        cancel: { type: 'boolean', description: 'cancel task_id/task_ids instead of polling' },
       },
       required: [],
     },
@@ -1422,6 +1423,11 @@ export function registerConsolidatedTools(deps) {
     async execute(args, exec) {
       const target = await deps.resolve();
       const many = Array.isArray(args?.task_ids) ? args.task_ids.filter((t) => typeof t === 'string' && t.trim()) : [];
+      if (args?.cancel === true) {
+        const ids = many.length ? many : (String(args?.task_id ?? '').trim() ? [String(args.task_id).trim()] : []);
+        if (!ids.length) throw new Error('cancel needs task_id or task_ids');
+        return asText(await deps.callRaw('/api/task_cancel', 'POST', { task_ids: ids }, exec?.signal, target));
+      }
       if (many.length) {
         const out = await Promise.all(many.map(async (id) => {
           try {

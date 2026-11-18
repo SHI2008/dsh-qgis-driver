@@ -7,6 +7,9 @@ with nothing but HTTP POST.
   POST /api/pyeval       {"code": "..."} -> {"result": ...} | {"error": ...}
   POST /api/pyeval_async {"code": "..."} -> {"task_id": "..."} (background task)
   GET  /api/tasks/<id>   {"status": ..., "result"/"error": ...} (poll async task)
+  POST /api/task_cancel  {"task_id": "..."} or {"task_ids": [...]} -> cancel queued
+                         shards (running ones only record the request)
+  POST /api/pyeval_group {"tasks": [{"name","code"}], "max_workers": 4}
   POST /api/eval         {"expression": "...", "plugin_id": "<id>"} (forwarded to a
                          plugin that has a view. Without plugin_id, returns unsupported)
   POST /api/screenshot   {"path": "...?", "plugin_id": "...", "target": "..."}
@@ -526,6 +529,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._api_call({"type": "pyeval_group",
                             "tasks": data.get("tasks") or [],
                             "max_workers": data.get("max_workers")})
+        elif self.path == "/api/task_cancel":
+            self._api_call({"type": "task_cancel",
+                            "task_id": data.get("task_id"),
+                            "task_ids": data.get("task_ids") or []})
         elif self.path == "/api/eval":
             self._api_call({"type": "eval",
                             "expression": data.get("expression", ""),

@@ -460,6 +460,9 @@ function routeToCommand(route, body) {
     return { type: 'pyeval_group', tasks: body?.tasks || [], max_workers: body?.max_workers }
   }
   if (route === '/api/cmd') return { ...(body || {}) }
+  if (route === '/api/task_cancel') {
+    return { type: 'task_cancel', task_id: body?.task_id, task_ids: body?.task_ids || [] }
+  }
   const m = /^\/api\/tasks\/([^/]+)$/.exec(route || '')
   if (m) return { type: 'task_status', task_id: decodeURIComponent(m[1]) }
   throw new Error(`file channel: unsupported endpoint ${route}`)

@@ -65,10 +65,13 @@ _AUTO_IDS = itertools.count(1)
 # queued — a collected ThreadPoolExecutor would drop its pending work.
 _GROUP_POOLS = []
 
+# task_id -> Future for shards that have not started yet (cancel support).
+_GROUP_FUTURES = {}
+
 # Kinds that use plugin_id as their own command argument, not as a route.
 # These are always handled by this driver itself.
 _LOCAL_TYPES = {"status", "open_plugin", "reload_plugin", "bridge_call",
-                "describe_plugins", "instruction"}
+                "describe_plugins", "instruction", "pyeval_group", "task_cancel"}
 
 
 def _to_jsonable(v):
@@ -488,7 +491,7 @@ class TaskRegistry:
     def set_status(self, task_id, status):
         with self._lock:
             t = self._tasks.get(task_id)
-            if t is not None and t["status"] not in ("done", "error"):
+            if t is not None and t["status"] not in ("done", "error", "cancelled"):
                 t["status"] = status
 
     def finish(self, task_id, result=None, error=None):
@@ -499,13 +502,45 @@ class TaskRegistry:
                 t["result"] = result
                 t["error"] = error
 
+    def abort(self, task_id, status="cancelled", reason=None):
+        """Cancel a task. Only a task that has not started yet can be stopped.
+
+        A queued task is marked cancelled before a worker ever touches it; a
+        running one cannot be interrupted (threads cannot be killed in Python),
+        so it only records the request and finishes on its own.
+        """
+        with self._lock:
+            t = self._tasks.get(task_id)
+            if t is None:
+                return {"task_id": task_id, "cancelled": False, "was": None,
+                        "reason": "task not found (already read, or expired)"}
+            was = t["status"]
+            if was == "queued":
+                t["status"] = status
+                t["error"] = reason or "cancelled before it started"
+                return {"task_id": task_id, "cancelled": True, "was": was,
+                        "status": status}
+            if was == "running":
+                t["cancel_requested"] = True
+                return {"task_id": task_id, "cancelled": False, "was": was,
+                        "status": was,
+                        "reason": "already running: Python cannot stop a thread, "
+                                  "it will finish on its own"}
+            return {"task_id": task_id, "cancelled": False, "was": was,
+                    "status": was, "reason": f"task already {was}"}
+
+    def is_cancelled(self, task_id):
+        with self._lock:
+            t = self._tasks.get(task_id)
+            return t is not None and t["status"] == "cancelled"
+
     def get(self, task_id):
         """Return a running task's snapshot, or pop a finished task (one read)."""
         with self._lock:
             t = self._tasks.get(task_id)
             if t is None:
                 return None
-            if t["status"] in ("done", "error"):
+            if t["status"] in ("done", "error", "cancelled"):
                 return self._tasks.pop(task_id)
             return dict(t)
 
@@ -514,7 +549,7 @@ class TaskRegistry:
         with self._lock:
             stale = [k for k, v in self._tasks.items()
                      if now - v["created"] > self._ttl
-                     and v["status"] in ("running", "queued")]
+                     and v["status"] in ("running", "queued", "cancelled")]
             for k in stale:
                 self._tasks.pop(k, None)
 
@@ -694,6 +729,9 @@ class LiveDriver:
             return
         if ctype == "task_status":
             self._task_status(cid, cmd.get("task_id", ""), reply)
+            return
+        if ctype == "task_cancel":
+            self._task_cancel(cid, cmd, reply)
             return
         if ctype == "screenshot":
             self._screenshot(cid, cmd, reply)
@@ -1097,6 +1135,32 @@ class LiveDriver:
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
+    def _task_cancel(self, cid, cmd, reply):
+        """Cancel background tasks: queued shards stop, running ones only note it."""
+        try:
+            ids = cmd.get("task_ids") or []
+            if isinstance(ids, str):
+                ids = [ids]
+            if not ids and cmd.get("task_id"):
+                ids = [cmd["task_id"]]
+            if not ids:
+                reply({"id": cid, "error": "task_id or task_ids required"})
+                return
+            results = []
+            for tid in ids:
+                fut = _GROUP_FUTURES.get(tid)
+                if fut is not None:
+                    try:
+                        fut.cancel()          # stops a shard still waiting in the pool
+                    except Exception:
+                        pass
+                    if fut.cancelled() or fut.done():
+                        _GROUP_FUTURES.pop(tid, None)
+                results.append(self.tasks.abort(tid))
+            reply({"id": cid, "result": {"count": len(results), "results": results}})
+        except Exception:
+            reply({"id": cid, "error": traceback.format_exc()})
+
     def _task_status(self, cid, task_id, reply):
         """Return one background task's state (popping a finished task)."""
         try:
@@ -1155,6 +1219,8 @@ class LiveDriver:
                             "task_id": self.tasks.new(name=name, status="queued")})
 
         def _run(task_id, code):
+            if self.tasks.is_cancelled(task_id):
+                return
             self.tasks.set_status(task_id, "running")
             local_ns = {}
             try:
@@ -1180,7 +1246,8 @@ class LiveDriver:
                                                      thread_name_prefix="pyeval-group")
         _GROUP_POOLS.append(pool)
         for entry, it in zip(started, items):
-            pool.submit(_run, entry["task_id"], str(it.get("code")))
+            fut = pool.submit(_run, entry["task_id"], str(it.get("code")))
+            _GROUP_FUTURES[entry["task_id"]] = fut
         pool.shutdown(wait=False)
         return started
 

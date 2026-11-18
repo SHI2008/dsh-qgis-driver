@@ -130,6 +130,25 @@ What it buys, measured on this machine: I/O shards (4 × 0.4 s) go from **1.61 s
 1.09 s vs 1.11 s) — BLAS already saturates the cores, parallel shards only oversubscribe;
 pure-Python CPU shards are GIL-bound. Shard I/O and per-file work, not linear algebra.
 
+### Cancelling a task (`check_qgis_task {"cancel": true}`)
+
+`check_qgis_task` with `cancel: true` and `task_id` / `task_ids` stops a background task instead of
+polling it. Python threads cannot be killed, so what cancellation can honestly do is bounded:
+
+| task state | result |
+|---|---|
+| `queued` (a shard waiting for a pool slot) | stops for real — `{"cancelled": true, "was": "queued", "status": "cancelled"}`, the shard never runs |
+| `running` | cannot be interrupted: `{"cancelled": false, "status": "running", "reason": "already running: Python cannot stop a thread, it will finish on its own"}`, plus `cancel_requested: true` on the task record |
+| `done` / `error` / already read | `{"cancelled": false, "was": "done", "reason": "task already done"}` — nothing to stop |
+
+A cancelled shard answers `{"status": "cancelled", "result": null, "error": "cancelled before it started"}`
+on its next poll, then it is popped like any other finished task. Writes to QGIS are serial anyway,
+so cancelling the queued tail of a group is the useful case: it stops the remaining file work
+without waiting for the whole batch.
+
+Channel details: plugin command `task_cancel` (`POST /api/task_cancel`, body `{task_id}` or
+`{task_ids}`), mapped in `routeToCommand()` for the file channel.
+
 ### Outputs (one shape for every action)
 
 Everything visual comes back as a **PNG under `%TEMP%\dsh-qgis-driver\`**, in `image_path`,

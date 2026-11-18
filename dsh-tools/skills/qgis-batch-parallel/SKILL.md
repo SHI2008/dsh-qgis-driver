@@ -30,6 +30,20 @@ check_qgis_task({ "task_ids": ["…", "…"] })   // one call polls the whole gr
 - Older plugin builds without `/api/pyeval_group` fall back to per-shard submission
   automatically; the result then carries a `note` — same shape, no concurrency cap.
 
+### Stopping a group
+
+```
+check_qgis_task({ "task_ids": ["…", "…"], "cancel": true })
+```
+
+- A shard still **`queued`** stops for real — it never runs, and its next poll says
+  `{"status": "cancelled", "error": "cancelled before it started"}`.
+- A shard already **`running`** cannot be interrupted (Python threads cannot be killed). You get
+  `{"cancelled": false, "status": "running", "reason": "already running: …"}` and the task record
+  keeps `cancel_requested: true`; it finishes on its own. Do not poll it to death waiting.
+- Cancel only pays off on the **queued tail**, which is exactly the expensive case: 200 shards
+  discovered to be wrong at shard 3 cost one call instead of 197 remaining shards.
+
 ### What actually gets faster
 
 | shard work | parallel gain | why |
