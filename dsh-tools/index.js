@@ -436,6 +436,22 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/** Read the last `maxBytes` of a file and test whether `needle` is present. */
+function tailIncludes(file, needle, maxBytes) {
+  try {
+    const size = fs.statSync(file).size
+    const start = Math.max(0, size - maxBytes)
+    const len = size - start
+    if (len <= 0) return false
+    const buf = Buffer.alloc(len)
+    const fd = fs.openSync(file, 'r')
+    try { fs.readSync(fd, buf, 0, len, start) } finally { fs.closeSync(fd) }
+    return buf.toString('utf8').includes(needle)
+  } catch {
+    return false
+  }
+}
+
 /** Map a REST route + JSON body onto the plugin's command object. */
 function routeToCommand(route, body) {
   if (route === '/api/pyeval') return { type: 'pyeval', code: body?.code }
@@ -494,12 +510,29 @@ async function invokeFileOnce(cmd, signal, target) {
   const id = `dsh-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
   fs.appendFileSync(cmdPath, JSON.stringify({ ...cmd, id, token }) + '\n', 'utf8')
 
+  // Windows shared-mode append can lose a write racing the plugin's read: verify the id
+  // landed, retry once, then fail fast instead of a 15s dead-wait.
+  if (!tailIncludes(cmdPath, id, 8192)) {
+    fs.appendFileSync(cmdPath, JSON.stringify({ ...cmd, id, token }) + String.fromCharCode(10), 'utf8')
+    if (!tailIncludes(cmdPath, id, 8192)) {
+      throw new Error('file channel: command did not reach commands.jsonl (QGIS dead or write denied)')
+    }
+  }
   const timeoutMs = Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
   const resultsSizeAtStart = (() => { try { return fs.statSync(resPath).size } catch { return 0 } })()
   const deadline = Date.now() + timeoutMs
+  let lastLiveness = Date.now()
   while (Date.now() < deadline) {
     if (signal?.aborted) throw new Error('file channel: aborted')
     await delay(FILE_POLL_INTERVAL_MS)
+    // Fail fast if the process died mid-command (avoids a full 15s silent wait).
+    if (target.pid && Date.now() - lastLiveness >= 1000) {
+      lastLiveness = Date.now()
+      if (!pidAlive(target.pid)) {
+        badLiveDirs.add(liveDir)
+        throw new Error('QGIS instance exited mid-command (auto-retry on a live instance)')
+      }
+    }
     let chunk = ''
     try {
       const now = fs.statSync(resPath).size
