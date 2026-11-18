@@ -719,7 +719,6 @@ elif kind == 'legend':
     lg.setAutoUpdateModel(False)
     lay.addLayoutItem(lg)
     lg.attemptMove(QgsLayoutPoint(x, y, MM()))
-    lg.attemptResize(QgsLayoutSize(float(w), float(h or 30), MM()))
     root = lg.model().rootGroup()
     for ch in list(root.children()):
         root.removeChildNode(ch)
@@ -730,6 +729,31 @@ elif kind == 'legend':
     lg.setStyleFont(QgsLegendStyle.Style.Subgroup, QFont(fam, 8))
     lg.setStyleFont(QgsLegendStyle.Style.SymbolLabel, QFont(fam, 8))
     lg.updateLegend()
+    if h is None:
+        rows = 0
+        for ch in root.children():
+            rows += 1
+            try:
+                lyr = ch.layer()
+            except Exception:
+                lyr = None
+            if lyr is None:
+                continue
+            rd = lyr.renderer()
+            for attr in ('categories', 'ranges'):
+                try:
+                    items = getattr(rd, attr)()
+                    if items:
+                        rows += len(items)
+                except Exception:
+                    pass
+            try:
+                if hasattr(rd, 'rootRule'):
+                    rows += len(rd.rootRule().children())
+            except Exception:
+                pass
+        h = 9 + 5.2 * max(rows, 2)
+    lg.attemptResize(QgsLayoutSize(float(w), float(h), MM()))
     item = lg
 elif kind == 'scalebar':
     sb = QgsLayoutItemScaleBar(lay)
