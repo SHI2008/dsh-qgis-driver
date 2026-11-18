@@ -224,7 +224,13 @@ result = {'layer': l.name(), 'crs': crs.authid() or crs.description(),
 l = L(P['layer'])
 if not isinstance(l, QgsVectorLayer):
     raise ValueError('only vector layers are supported')
-sym = l.renderer().symbol().clone() if l.renderer() else None
+sym = None
+try:
+    _rd = l.renderer()
+    if _rd is not None:
+        sym = _rd.symbol().clone()
+except Exception:
+    sym = None
 if sym is None:
     sym = QgsMarkerSymbol() if l.geometryType() == 0 else (
         QgsLineSymbol() if l.geometryType() == 1 else QgsFillSymbol())
