@@ -636,6 +636,91 @@ function tidyError(input) {
   return out
 }
 
+/** Edit distance, only used to suggest a nearby action name. */
+function editDistance(a, b) {
+  const s = String(a ?? ''); const t = String(b ?? '')
+  const prev = new Array(t.length + 1)
+  for (let j = 0; j <= t.length; j += 1) prev[j] = j
+  for (let i = 1; i <= s.length; i += 1) {
+    let diag = prev[0]
+    prev[0] = i
+    for (let j = 1; j <= t.length; j += 1) {
+      const tmp = prev[j]
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (s[i - 1] === t[j - 1] ? 0 : 1))
+      diag = tmp
+    }
+  }
+  return prev[t.length]
+}
+
+/** Closest candidate within a small distance, or '' when nothing is close enough. */
+function nearestName(value, names) {
+  let best = ''
+  let bestScore = Infinity
+  for (const name of names) {
+    const score = editDistance(value, name)
+    if (score < bestScore) { bestScore = score; best = name }
+  }
+  const limit = Math.max(2, Math.floor(String(value ?? '').length / 2))
+  return bestScore <= limit ? best : ''
+}
+
+/** Rewrite a failure into something a model can act on without guessing. */
+function explainFailure(def, action, error) {
+  const raw = error && error.message ? error.message : String(error == null ? '' : error)
+  const label = action ? `${def.name} ${action}` : def.name
+  if (raw.startsWith(`${def.name} `) || raw.startsWith(`${def.name}:`)) return raw
+  const props = def && def.parameters && def.parameters.properties ? def.parameters.properties : {}
+  // A KeyError on a declared parameter means the call was incomplete, not that
+  // an object is missing — say so instead of "object not found".
+  const key = raw.match(/^KeyError:\s*['"]([^'"]+)['"]/)
+  if (key && Object.prototype.hasOwnProperty.call(props, key[1])) {
+    return `${label}: missing required parameter "${key[1]}" — pass it (or the matching batch list); see the tool description`
+  }
+  const body = raw.replace(/\n+/g, ' ').trim()
+  return body ? `${label}: ${body}` : `${label} failed`
+}
+
+/** Reject an unknown action up front and label every failure with tool+action. */
+function guardExecute(def) {
+  const actions = (def.parameters && def.parameters.properties
+    && def.parameters.properties.action && def.parameters.properties.action.enum) || []
+  const inner = def.execute
+  return async (args, exec) => {
+    const action = args && args.action
+    if (actions.length) {
+      if (action == null || action === '') {
+        throw new Error(`${def.name}: action is required — one of ${actions.join(', ')}`)
+      }
+      if (!actions.includes(action)) {
+        const near = nearestName(action, actions)
+        throw new Error(`${def.name}: unknown action "${action}"`
+          + (near ? ` — did you mean "${near}"? valid actions: ${actions.join(', ')}`
+            : `; valid actions: ${actions.join(', ')}`))
+      }
+    }
+    const props = (def.parameters && def.parameters.properties) || {}
+    for (const [key, schema] of Object.entries(props)) {
+      if (key === 'action' || !schema || args?.[key] == null) continue
+      const allowed = Array.isArray(schema.enum) ? schema.enum
+        : (schema.type === 'array' && schema.items && Array.isArray(schema.items.enum) ? schema.items.enum : null)
+      if (!allowed) continue
+      const values = Array.isArray(args[key]) ? args[key] : [args[key]]
+      for (const value of values) {
+        if (typeof value !== 'string' || allowed.includes(value)) continue
+        const near = nearestName(value, allowed)
+        throw new Error(`${def.name} ${action}: invalid ${key} "${value}"`
+          + (near ? ` — did you mean "${near}"?` : `; valid: ${allowed.join(', ')}`))
+      }
+    }
+    try {
+      return await inner(args, exec)
+    } catch (e) {
+      throw new Error(explainFailure(def, action, e))
+    }
+  }
+}
+
 /** Call one endpoint and unwrap { result } / { error } over the target channel. */
 async function callQgis(route, method, body, signal, target) {
   if (target && target.channel === 'file') {
@@ -1082,7 +1167,8 @@ export function apply(ctx, config = {}) {
   }
 
   const registerLive = (def) => {
-    const base = def.inlineImages === true ? withInlineImages(ctx, def) : def
+    const guarded = { ...def, execute: guardExecute(def) }
+    const base = guarded.inlineImages === true ? withInlineImages(ctx, guarded) : guarded
     const spec = { ...base, output: base.output || stringOutput }
     const impl = spec.execute
     spec.execute = async (args, exec) => {

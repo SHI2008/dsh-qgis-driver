@@ -38,8 +38,11 @@ round-trip, while hand-written pyeval is one round-trip per step.
    it for the verification call itself, not for archiving. If the route's model declares no image
    input, or the preview is too large, the call still succeeds and adds one note saying why the
    image was skipped.
-4. **Errors are one short English line**: `Type: body (hint)`. A timeout means the QGIS
-   instance died — the call already retried on a fresh one; re-run it once before debugging.
+4. **Errors are one short English line**: `Type: body (hint)`, prefixed with the call that failed
+   (`qgis_layer export: missing required parameter "path"`). Unknown actions and invalid enum
+   values are rejected locally, before QGIS runs, with the valid list or a `did you mean` — read
+   that line and retry, do not switch tools. A timeout means the QGIS instance died — the call
+   already retried on a fresh one; re-run it once before debugging.
 5. **Check what exists** before acting: `qgis_layer action=list`, `qgis_layout action=list`,
    `qgis_project action=info`. Names are case-sensitive; use `id` when names collide.
 6. **No status polling loops.** `qgis_plugin action=status` only when a call fails.

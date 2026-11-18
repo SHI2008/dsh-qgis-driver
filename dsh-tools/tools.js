@@ -30,8 +30,14 @@ def _prj_extent():
             e = lyr.extent()
         except Exception:
             continue
-        if e.isEmpty():
+        if e is None or e.xMinimum() != e.xMinimum():
             continue
+        if e.width() <= 0 and e.height() <= 0:
+            # A single point (or a vertical/horizontal line) has a zero-area
+            # extent; pad it so the map still renders something visible.
+            pad = 0.01 if prj.crs().isGeographic() else 100.0
+            e = QgsRectangle(e.xMinimum() - pad, e.yMinimum() - pad,
+                             e.xMaximum() + pad, e.yMaximum() + pad)
         if ext is None:
             ext = QgsRectangle(e)
         else:
@@ -1357,7 +1363,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',
-    description: 'Run PyQGIS on the QGIS main thread (sync, <3s). Returns last expression or `result`.',
+    description: 'Run PyQGIS on the QGIS main thread (sync, <3s). Returns last expression or `result`. Prefer the structured qgis_* tools first: they resolve names, validate parameters and return JSON. Reach for raw PyQGIS only for what they do not cover, and load the qgis-driver skill before guessing the QGIS 4 API.',
     parameters: {
       type: 'object',
       properties: { code: { type: 'string' } },
@@ -1371,7 +1377,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: 'Run Python on a worker thread (no QGIS objects). Returns task_id; poll with check_qgis_task. Batch: tasks=[{name,code}] runs as one bounded pool of max_workers threads (default 4, max 32) - use it to split a long processing run across cores.',
+    description: 'Run Python on a worker thread (no QGIS objects). Returns task_id; poll with check_qgis_task. Batch: tasks=[{name,code}] runs as one bounded pool of max_workers threads (default 4, max 32) - use it to split a long processing run across cores. Long loops should call dsh_should_stop() and return early so cancel works.',
     parameters: {
       type: 'object',
       properties: {
@@ -1740,7 +1746,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   registerTool({
     name: 'qgis_map',
     deferLoading: true,
-    description: 'Map: render/screenshot/set_extent/zoom_to_layer (last two need GUI).',
+    description: 'Map: render/screenshot/set_extent/zoom_to_layer. render works headless (saves a PNG, inline=true also returns it); screenshot/set_extent/zoom_to_layer drive the live canvas and need a QGIS GUI window.',
     parameters: {
       type: 'object',
       properties: {

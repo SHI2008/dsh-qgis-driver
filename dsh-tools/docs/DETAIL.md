@@ -203,6 +203,21 @@ result, a route whose model declares no image input, an oversized preview, a mis
 service — still returns the normal text result and appends one short note saying why the image
 was skipped. An image block can never fail a QGIS call.
 
+### Call-time guards (why the first call works)
+
+Every tool validates the call before it reaches QGIS, so a first attempt either runs or comes
+back with something a model can correct in one step:
+
+- `action` must be one of that tool's enum values — an unknown one fails locally with
+  `qgis_layer: unknown action "exports" — did you mean "export"? valid actions: ...`
+  (no QGIS round trip, no Python traceback).
+- Any other enum parameter is checked the same way: `qgis_layer export: invalid format
+  "geojosn" — did you mean "geojson"?`.
+- A `KeyError` on a parameter the schema declares is reported as `missing required parameter
+  "path"` instead of the old `object not found` hint — the call was incomplete, not the project.
+- Every failure that does come from QGIS is prefixed with `tool action:` so one line names the
+  call that failed.
+
 ## Autostart (local)
 
 When no live QGIS instance is found and the target is local (not a configured
