@@ -91,15 +91,21 @@ Where a layer name is ambiguous, pass the layer id instead: `qgis_layer list`
 
 ### Batch (one round-trip for N items)
 
-Two aggregators accept an array so a whole batch runs inside a single `pyeval`:
+Repeated operations run in a single `pyeval`: pass an array, get `{count, results: [...]}`.
 
-- `qgis_layout action=add_item` + `items: [{kind, x, y, ...}, ...]` — each object takes the same
-  fields as a single `add_item` call (plus the top-level fields as defaults).
-- `qgis_layer action=style|symbol|classify` + `layers: ["A", "B"]` — the same style arguments are
-  applied to every listed layer.
+| call | array | entry |
+|---|---|---|
+| `qgis_layer add` | `paths` | `{path, crs_file?, name?}` |
+| `qgis_layer style` / `symbol` / `classify` / `export` | `layers` | layer name (export derives one file per layer) |
+| `qgis_feature query` / `select` / `select_by_location` / `update` / `delete` | `layers` | layer name |
+| `qgis_feature field_add` / `field_calc` / `field_delete` / `field_rename` | `specs` | `{field, field_type?, expression?, new_name?}` |
+| `qgis_analysis run` | `runs` | `{algorithm, params}` |
+| `qgis_layout add_item` | `items` | item args (`kind`, `x`, `y`, …) |
+| `qgis_layout update_item` | `updates` | `{index, x?, y?, width?, height?, remove?}` |
+| `qgis_layout export` / `export_atlas` | `layouts` (+ `formats: ["png","pdf"]`) | layout name |
 
-Both return `{count, results: [...]}`. The single-object form (`kind` / `layer`) is unchanged and the
-two are mutually exclusive per call.
+The single-object form (`kind` / `layer` / `field` / `algorithm`) is unchanged; array and
+single form are mutually exclusive per call.
 
 `layout` and `layout_name` are interchangeable for every `qgis_layout` action.
 returns both.

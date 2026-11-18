@@ -619,13 +619,15 @@ l.commitChanges()
 result = {'layer': l.name(), 'deleted': len(fids), 'feature_count': l.featureCount()}`,
   field_add: `
 l = L(P['layer'])
-types = {'string': 10, 'integer': 2, 'double': 6, 'date': 14, 'datetime': 16}
-ftype = types.get(P.get('field_type') or 'double', 6)
+from qgis.PyQt.QtCore import QVariant as _QV
+tnames = {'string': 'String', 'integer': 'Int', 'double': 'Double', 'date': 'Date', 'datetime': 'DateTime'}
+tname = (P.get('field_type') or 'double')
+ftype = getattr(_QV, tnames.get(tname, 'Double'), _QV.Double)
 l.startEditing()
-l.dataProvider().addAttributes([QgsField(P['field'], ftype)])
+l.dataProvider().addAttributes([QgsField(P['field'], ftype, tname)])
 l.updateFields()
 l.commitChanges()
-result = {'layer': l.name(), 'field': P['field'], 'fields': [f.name() for f in l.fields()]}`,
+result = {'layer': l.name(), 'field': l.fields()[-1].name(), 'added': True}`,
   field_calc: `
 l = L(P['layer'])
 if not P.get('expression'):
@@ -654,7 +656,7 @@ l.startEditing()
 l.dataProvider().deleteAttributes([idx])
 l.updateFields()
 l.commitChanges()
-result = {'layer': l.name(), 'fields': [f.name() for f in l.fields()]}`,
+result = {'layer': l.name(), 'field': P['field'], 'removed': True}`,
   field_rename: `
 l = L(P['layer'])
 if not P.get('new_name'):
@@ -665,7 +667,7 @@ if idx < 0:
 l.startEditing()
 l.renameAttribute(idx, P['new_name'])
 l.commitChanges()
-result = {'layer': l.name(), 'fields': [f.name() for f in l.fields()]}`,
+result = {'layer': l.name(), 'from': P['field'], 'to': P['new_name']}`,
   table: `
 lyr = L(P['layer'])
 fields = P.get('fields') or [f.name() for f in lyr.fields()]
@@ -981,9 +983,27 @@ else:
 lay = LAYOUT(P['layout_name'])
 fmt = (P.get('format') or 'png').lower()
 if fmt == 'pdf':
+    import tempfile
+    if P.get('path'):
+        path = P['path']
+    else:
+        fd, path = tempfile.mkstemp(suffix='.pdf')
+        os.close(fd)
+        os.remove(path)
+    for _it in lay.items():
+        try:
+            if isinstance(_it, QgsLayoutItemMap):
+                _it.invalidateCache()
+        except Exception:
+            pass
+    lay.refresh()
     st = QgsLayoutExporter.PdfExportSettings()
-    r = QgsLayoutExporter(lay).exportToPdf(P['path'], st) if P.get('path') else None
-    result = {'format': 'pdf', 'result': r}
+    r = QgsLayoutExporter(lay).exportToPdf(path, st)
+    if r != 0 or not os.path.exists(path):
+        raise RuntimeError('layout pdf export failed (result %s)' % r)
+    result = {'format': 'pdf', 'result': r, 'size_bytes': os.path.getsize(path),
+              'file_path': path if P.get('path') else _publish(path, 'pdf'),
+              'hint': 'PDF 已写出，用外部查看器打开该路径'}
 else:
     import base64, tempfile
     for _it in lay.items():
@@ -1258,14 +1278,15 @@ added = []
 clean = {}
 for k, v in (out or {}).items():
     if hasattr(v, 'source'):
-        clean[k] = v.source()
         try:
             prj.addMapLayer(v)
             added.append(v.name())
+            clean[k] = v.name()
         except Exception:
-            pass
+            clean[k] = 'layer'
     else:
-        clean[k] = v
+        txt = v if isinstance(v, str) else str(v)
+        clean[k] = txt if len(txt) <= 120 else (txt[:100] + '...')
 result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}`,
   zonal_stats: `
 rname = P.get('raster')
@@ -1367,46 +1388,102 @@ export function registerConsolidatedTools(deps) {
     },
   });
 
-  // Batch support: one tool call = one pyeval round-trip even for N items.
-  // `items` (array of arg objects) or `layers` (array of layer names) re-runs the same
-  // Python body once per entry inside a single command.
-  const BATCH_KEY = { add_item: 'items', style: 'layers', symbol: 'layers', classify: 'layers' };
+  // Batch: one tool call = one pyeval round-trip even for N entries.
+  // A per-tool `action` spec decides which array key batches and where a string
+  // entry is assigned (e.g. layers: ["A","B"] -> P['layer'] = "A" / "B").
+  const BATCH_SPEC = {
+    'qgis_layer:add': { key: 'paths', assign: 'path' },
+    'qgis_layer:export': { key: 'layers', assign: 'layer', perPath: true },
+    'qgis_layer:style': { key: 'layers', assign: 'layer' },
+    'qgis_layer:symbol': { key: 'layers', assign: 'layer' },
+    'qgis_layer:classify': { key: 'layers', assign: 'layer' },
+    'qgis_feature:query': { key: 'layers', assign: 'layer' },
+    'qgis_feature:select': { key: 'layers', assign: 'layer' },
+    'qgis_feature:select_by_location': { key: 'layers', assign: 'layer' },
+    'qgis_feature:update': { key: 'layers', assign: 'layer' },
+    'qgis_feature:delete': { key: 'layers', assign: 'layer' },
+    'qgis_feature:field_add': { key: 'specs' },
+    'qgis_feature:field_calc': { key: 'specs' },
+    'qgis_feature:field_delete': { key: 'specs' },
+    'qgis_feature:field_rename': { key: 'specs' },
+    'qgis_analysis:run': { key: 'runs' },
+    'qgis_layout:add_item': { key: 'items' },
+    'qgis_layout:update_item': { key: 'updates' },
+    'qgis_layout:export': { key: 'layouts', assign: 'layout', formats: true },
+    'qgis_layout:export_atlas': { key: 'layouts', assign: 'layout', formats: true },
+  };
 
-  function batchBody(body, key) {
+  function batchItems(args, spec) {
+    const raw = args?.[spec.key];
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    if (spec.perPath) {
+      // several layers into one `path` would overwrite each other -> per-layer file
+      const p0 = args?.path;
+      if (p0 && raw.length > 1) {
+        const m = /^(.*?)(\.[^./\\]+)$/.exec(String(p0));
+        const stem = m ? m[1] : String(p0);
+        const ext = m ? m[2] : '';
+        return raw.map((it) => {
+          const name = typeof it === 'string' ? it : it?.layer;
+          const safe = String(name ?? 'layer').replace(/[\\/:*?"<>|]/g, '_');
+          const path = stem + '_' + safe + ext;
+          return typeof it === 'string' ? { layer: it, path } : { ...it, path };
+        });
+      }
+      return raw.slice();
+    }
+    if (!spec.formats) return raw.slice();
+    const fmts = Array.isArray(args?.formats) && args.formats.length ? args.formats : null;
+    if (!fmts) return raw.slice();
+    const out = [];
+    for (const it of raw) {
+      for (const f of fmts) {
+        out.push(typeof it === 'string' ? { [spec.assign]: it, format: f } : { ...it, format: f });
+      }
+    }
+    return out;
+  }
+
+  function batchBody(body, spec) {
     const indented = body
       .split('\n')
       .map((line) => (line.length ? '    ' + line : line))
       .join('\n');
+    let setItem = '    P.update(_it_)';
+    if (spec.assign === 'layout') {
+      setItem = "    if isinstance(_it_, str):\n        P['layout'] = _it_\n        P['layout_name'] = _it_\n    else:\n        P.update(_it_)";
+    } else if (spec.assign) {
+      setItem = "    if isinstance(_it_, str):\n        P['" + spec.assign + "'] = _it_\n    else:\n        P.update(_it_)";
+    }
     return `
-_items_ = P.get('${key}') or []
-if not _items_:
-    raise ValueError('${key} is empty')
+_items_ = P.get('${spec.key}') or []
 _orig_ = dict(P)
 _parts_ = []
 for _it_ in _items_:
     P.clear()
     P.update(_orig_)
-    P.pop('${key}', None)
-    if isinstance(_it_, str):
-        P['layer'] = _it_
-    else:
-        P.update(_it_)
+    P.pop('${spec.key}', None)
+${setItem}
+    if P.get('layout') is None and P.get('layout_name') is not None:
+        P['layout'] = P['layout_name']
+    if P.get('layout_name') is None and P.get('layout') is not None:
+        P['layout_name'] = P['layout']
 ${indented}
     _parts_.append(result)
 result = {'count': len(_parts_), 'results': _parts_}
 `;
   }
 
-  const call = async (body, args, exec, opts) => {
+  const call = async (body, args, exec, opts, tool) => {
     // args may be frozen — work on a shallow copy.
     const a = args ? { ...args } : {};
     // `layout` and `layout_name` are used interchangeably by different bodies.
     if (a.layout === undefined && a.layout_name !== undefined) a.layout = a.layout_name;
     if (a.layout_name === undefined && a.layout !== undefined) a.layout_name = a.layout;
-    const key = BATCH_KEY[a.action];
-    const batch = key && Array.isArray(a[key]) && a[key].length > 0;
-    const payload = batch ? batchBody(body, key) : body;
-    if (a[key] === undefined) delete a[key];
+    const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;
+    const items = spec ? batchItems(a, spec) : null;
+    const payload = items ? batchBody(body, spec) : body;
+    if (items) a[spec.key] = items;
     const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(a))) + payload;
     return asText(await run(code, exec?.signal, opts));
   };
@@ -1426,19 +1503,20 @@ result = {'count': len(_parts_), 'results': _parts_}
       required: ['action'],
     },
     output: stringOutput,
-    async execute(args, exec) { return call(PROJECT_BODY[args?.action], args, exec); },
+    async execute(args, exec) { return call(PROJECT_BODY[args?.action], args, exec, undefined, 'qgis_project'); },
   });
 
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description: 'Layers: list/info/fields/add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject/export/export_table.',
+    description: 'Layers: list/info/fields/add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject/export/export_table. Batch: paths[] for add, layers[] for style/symbol/classify/export.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
         layer: { type: 'string' },
-        layers: { type: 'array', items: { type: 'string' }, description: 'style/symbol/classify: batch of layer names (one round-trip)' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'style/symbol/classify/export: batch of layer names (one round-trip)' },
+        paths: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add: batch [{path,crs_file,name}]' },
         path: { type: 'string' },
         name: { type: 'string' },
         provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
@@ -1471,13 +1549,13 @@ result = {'count': len(_parts_), 'results': _parts_}
       required: ['action'],
     },
     output: stringOutput,
-    async execute(args, exec) { return call(LAYER_BODY[args?.action], args, exec); },
+    async execute(args, exec) { return call(LAYER_BODY[args?.action], args, exec, undefined, 'qgis_layer'); },
   });
 
   // ---------------- feature
   registerTool({
     name: 'qgis_feature',
-    description: 'Features/fields: query/table/select/select_by_location/selected/add/update/delete/field_add/field_calc/field_delete/field_rename.',
+    description: 'Features/fields: query/table/select/select_by_location/selected/add/update/delete/field_add/field_calc/field_delete/field_rename. Batch: layers[] for query/select/update/delete, specs[] for field_*.',
     parameters: {
       type: 'object',
       properties: {
@@ -1500,17 +1578,18 @@ result = {'count': len(_parts_), 'results': _parts_}
         field: { type: 'string' },
         field_type: { type: 'string', enum: ['string', 'integer', 'double', 'date', 'datetime'] },
         new_name: { type: 'string' },
+        specs: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'field_*: batch [{field,field_type,expression,new_name}]' },
       },
-      required: ['action', 'layer'],
+      required: ['action'],
     },
     output: stringOutput,
-    async execute(args, exec) { return call(FEATURE_BODY[args?.action], args, exec); },
+    async execute(args, exec) { return call(FEATURE_BODY[args?.action], args, exec, undefined, 'qgis_feature'); },
   });
 
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description: 'Layouts: list/create/info/add_item/update_item/legend_edit/align/export/export_atlas.',
+    description: 'Layouts: list/create/info/add_item/update_item/legend_edit/align/export/export_atlas. Batch: items[] add_item, updates[] update_item, layouts[]+formats[] export.',
     parameters: {
       type: 'object',
       properties: {
@@ -1523,6 +1602,9 @@ result = {'count': len(_parts_), 'results': _parts_}
         remove: { type: 'boolean' },
         kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add_item: batch of item arg objects (one round-trip)' },
+        updates: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'update_item: batch [{index,x,y,width,height,remove}]' },
+        layouts: { type: 'array', items: { type: 'string' }, description: 'export/export_atlas: batch of layout names' },
+        formats: { type: 'array', items: { type: 'string', enum: ['png', 'pdf'] }, description: 'export: batch of formats (x layouts)' },
         background: { type: 'string', description: 'page/map background #rrggbb' },
         z: { type: 'number' },
         map: { type: 'integer', description: 'graticule: map item index' },
@@ -1565,13 +1647,13 @@ result = {'count': len(_parts_), 'results': _parts_}
       required: ['action'],
     },
     output: stringOutput,
-    async execute(args, exec) { return call(LAYOUT_BODY[args?.action], args, exec); },
+    async execute(args, exec) { return call(LAYOUT_BODY[args?.action], args, exec, undefined, 'qgis_layout'); },
   });
 
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description: 'Processing: list/help/run, zonal_stats, reclassify.',
+    description: 'Processing: list/help/run, zonal_stats, reclassify. Batch: runs[] for run.',
     parameters: {
       type: 'object',
       properties: {
@@ -1584,11 +1666,12 @@ result = {'count': len(_parts_), 'results': _parts_}
         prefix: { type: 'string' },
         table: { type: 'array', items: { type: 'number' } },
         output: { type: 'string' },
+        runs: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'run: batch [{algorithm,params}] executed in one call' },
       },
       required: ['action'],
     },
     output: stringOutput,
-    async execute(args, exec) { return call(ANALYSIS_BODY[args?.action], args, exec); },
+    async execute(args, exec) { return call(ANALYSIS_BODY[args?.action], args, exec, undefined, 'qgis_analysis'); },
   });
 
   // ---------------- map (GUI-only canvas ops + offscreen render)
@@ -1619,7 +1702,7 @@ result = {'count': len(_parts_), 'results': _parts_}
       }
       const a = args?.action;
       const gui = a === 'set_extent' || a === 'zoom_to_layer' || a === 'screenshot';
-      return call(MAP_BODY[a], args, exec, gui ? { gui: true } : undefined);
+      return call(MAP_BODY[a], args, exec, gui ? { gui: true } : undefined, 'qgis_map');
     },
   });
 

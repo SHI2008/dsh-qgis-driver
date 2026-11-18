@@ -6,9 +6,21 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Added
-- Batch execution for repeated operations (one round-trip instead of N):
-  `qgis_layout action=add_item` accepts `items: [...]`; `qgis_layer action=style|symbol|classify`
-  accepts `layers: [...]`. Both return `{count, results}`; the single-object form is unchanged.
+- Batch execution for repeated operations (one round-trip instead of N), all returning
+  `{count, results}`: `qgis_layer add` (`paths`), `qgis_layer style|symbol|classify|export`
+  (`layers`), `qgis_feature query|select|select_by_location|update|delete` (`layers`),
+  `qgis_feature field_*` (`specs`), `qgis_analysis run` (`runs`), `qgis_layout add_item`
+  (`items`), `update_item` (`updates`), `export|export_atlas` (`layouts` + `formats`).
+  The single-object form is unchanged.
+- `qgis_layout export` with `format=pdf` now works without an explicit `path` (writes a temp
+  PDF and returns `file_path`), so `formats: ["png","pdf"]` batches end to end.
+
+### Fixed
+- `qgis_feature field_add` failed with `QgsField(): arguments did not match any overloaded call`
+  (integer type ids instead of `QVariant.<Type>`).
+- Batch `qgis_layer export` with one `path` no longer overwrites itself: each layer gets
+  `<stem>_<layer><ext>`.
+- Field ops return `{layer, field}` instead of dumping the whole field list.
 
 ### Fixed
 - `layout` and `layout_name` are now accepted interchangeably by every `qgis_layout` action
