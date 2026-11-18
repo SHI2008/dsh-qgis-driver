@@ -107,5 +107,9 @@ them is a QGIS 3 name, a wrong target object, or a stale C++ object:
 
 For anything beyond this page, load the locally installed **`pyqgis` skill** (covers
 `QgsApplication.initQgis`, `processing.run` after `Processing.initialize()`, rendering and layout
-recipes) instead of guessing the API — one skill read is cheaper than three tracebacks.
+recipes) instead of guessing the API — one skill read is cheaper than three tracebacks. If it is
+not in your skill list, read
+`%USERPROFILE%\.dsh\profiles\<profile>\node_modules\@dsh-gis\dsh-opengis-skill\assets\pyqgis\SKILL.md`
+directly. Do **not** call `QgsApplication.initQgis()` here: the driver already owns a live
+application and `prj` is `QgsProject.instance()`.
 
