@@ -12,6 +12,7 @@ except ImportError:
     QCoreApplication = None
 
 from .i18n_json import install_translator
+from .profile_store import registry_dir
 
 
 def _log(msg):
@@ -37,12 +38,8 @@ def _http_allowed():
 
 
 def _registry_dir():
-    # The spawned side has no env vars, so write the
-    # discovery info to a fixed path ~/.qgis-live/
-    return os.environ.get(
-        "QGIS_LIVE_REGISTRY",
-        os.path.join(os.path.expanduser("~"), ".qgis-live"),
-    )
+    # The spawned side has no env vars, so discovery info lives at ~/.qgis-live/.
+    return registry_dir()
 
 
 def _restrict_file(path):

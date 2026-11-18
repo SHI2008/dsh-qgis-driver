@@ -51,6 +51,7 @@ import urllib.request
 import uuid
 
 from .http_api import TOOLS
+from .profile_store import registry_dir
 
 try:
     from qgis.PyQt.QtCore import QCoreApplication, QT_TRANSLATE_NOOP
@@ -1430,9 +1431,7 @@ def system_prompt(plugins=None, agent_text=None, skills=None,
 # with the same name takes precedence (overrides it).
 
 def _registry_dir():
-    return os.environ.get(
-        "QGIS_LIVE_REGISTRY",
-        os.path.join(os.path.expanduser("~"), ".qgis-live"))
+    return registry_dir()
 
 
 def agents_dir():

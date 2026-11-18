@@ -5,6 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Changed
+- Internal consolidation (no behaviour change): `layer_org` and `scale_style` now share one
+  `profile_store.ProfileStore` for the bundled+user JSON profile layout instead of two copies of
+  the same `list_profiles`/`load_profile`/`profiles_dir`/`_bundled_dir` code; `ai_client`,
+  `credential_store`, `connection_info`, `__init__` and `live_driver` all resolve the
+  `~/.qgis-live` registry root through `profile_store.registry_dir()` (one implementation of the
+  `QGIS_LIVE_REGISTRY` override). Verified identical profile ids, payloads and paths against the
+  previous implementation.
+
 ### Added
 - `task_cancel` command / `POST /api/task_cancel`: cancel one task (`task_id`) or a group
   (`task_ids`). A shard still queued in the pool never starts and reports `cancelled`; a running

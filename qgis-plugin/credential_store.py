@@ -29,6 +29,8 @@ import shutil
 import subprocess  # nosec B404  # needed to run icacls/security/secret-tool
 import sys
 
+from .profile_store import registry_dir
+
 try:
     from qgis.PyQt.QtCore import QCoreApplication, QT_TRANSLATE_NOOP
 except ImportError:
@@ -52,10 +54,7 @@ _SERVICE = "qgis-live-driver"
 
 
 def _secrets_path():
-    d = os.environ.get(
-        "QGIS_LIVE_REGISTRY",
-        os.path.join(os.path.expanduser("~"), ".qgis-live"))
-    return os.path.join(d, "ai-secrets.json")
+    return os.path.join(registry_dir(), "ai-secrets.json")
 
 
 def _restrict_file(path):

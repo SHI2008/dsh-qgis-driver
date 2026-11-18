@@ -40,71 +40,34 @@ methods, so this module itself imports with stdlib only (unit test target).
 import json
 import os
 
+from .profile_store import DEFAULT_PROFILE, ProfileStore
+
+_PROFILES = ProfileStore("scale_style")
+
 from .layer_org import _match_all, layer_attrs
 
-_SETTING_PROFILE = "dsh_qgis_driver/scale_style/profile"
-_DEFAULT_PROFILE = "default"
-
-
-def _registry_dir():
-    return os.environ.get(
-        "QGIS_LIVE_REGISTRY",
-        os.path.join(os.path.expanduser("~"), ".qgis-live"))
+_SETTING_PROFILE = _PROFILES.setting_key
+_DEFAULT_PROFILE = DEFAULT_PROFILE
 
 
 def profiles_dir():
     """Directory for user-defined profiles: ~/.qgis-live/scale_style/."""
-    return os.path.join(_registry_dir(), "scale_style")
+    return _PROFILES.user_dir
 
 
 def _bundled_dir():
     """Directory of the plugin's bundled default profiles."""
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        "scale_style")
+    return _PROFILES.bundled_dir
 
 
 def list_profiles():
-    """Available profiles. [{id,name,description,builtin,path}].
-
-    Scans bundled then user; a same stem is overridden by the user side.
-    """
-    out = {}
-    for d, builtin in ((_bundled_dir(), True), (profiles_dir(), False)):
-        if not os.path.isdir(d):
-            continue
-        for f in sorted(os.listdir(d)):
-            if not f.lower().endswith(".json"):
-                continue
-            stem = f[:-5]
-            if not builtin or stem not in out:
-                p = os.path.join(d, f)
-                name, desc = stem, ""
-                try:
-                    with open(p, "r", encoding="utf-8") as fh:
-                        meta = json.load(fh)
-                    name = meta.get("name") or stem
-                    desc = meta.get("description") or ""
-                except Exception:  # nosec B110  # acceptable by design
-                    pass
-                out[stem] = {"id": stem, "name": name, "description": desc,
-                             "path": p, "builtin": builtin}
-    return [out[k] for k in sorted(out)]
+    """Available profiles. [{id,name,description,builtin,path}]."""
+    return _PROFILES.list()
 
 
 def load_profile(name):
     """Profile id -> (dict, path). (None, None) when not found."""
-    for p in list_profiles():
-        if p["id"] == name:
-            try:
-                with open(p["path"], "r", encoding="utf-8") as f:
-                    prof = json.load(f)
-            except Exception:
-                return None, None
-            prof["_path"] = p["path"]
-            prof["_dir"] = os.path.dirname(p["path"])
-            prof["id"] = name
-            return prof, p["path"]
-    return None, None
+    return _PROFILES.load(name)
 
 
 def band_for_scale(prof, scale):
@@ -250,31 +213,13 @@ class ScaleStyler:
     # ---------- profile resolution ----------
 
     def active_profile_name(self):
-        try:
-            from qgis.PyQt.QtCore import QSettings
-            v = QSettings().value(_SETTING_PROFILE, _DEFAULT_PROFILE)
-            return str(v or _DEFAULT_PROFILE)
-        except Exception:
-            return _DEFAULT_PROFILE
+        return _PROFILES.active_name()
 
     def set_active_profile(self, name):
-        prof, _ = load_profile(str(name or ""))
-        if prof is None:
-            return {"ok": False,
-                    "error": f"profile not found: {name}",
-                    "profiles": [p["id"] for p in list_profiles()]}
-        try:
-            from qgis.PyQt.QtCore import QSettings
-            QSettings().setValue(_SETTING_PROFILE, str(name))
-        except Exception:  # nosec B110  # acceptable by design
-            pass
-        return {"ok": True, "active": str(name)}
+        return _PROFILES.set_active(str(name or ""))
 
     def profile(self, name=None):
-        prof, _ = load_profile(name or self.active_profile_name())
-        if prof is None or prof.get("enabled") is False:
-            return None
-        return prof
+        return _PROFILES.profile(name)
 
     def describe(self, name=None):
         """Profile summary for bridge display."""

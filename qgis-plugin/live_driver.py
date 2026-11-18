@@ -55,6 +55,8 @@ import traceback
 
 from qgis.PyQt.QtCore import QTimer
 
+from .profile_store import registry_dir
+
 POLL_MS = 200
 
 # Auto-numbering for commands without an id (HTTP /api/* etc.). In the target eval
@@ -97,9 +99,7 @@ _AUDIT_DEFAULT_MAX_FILES = 14
 
 def _audit_base_dir():
     """Where the audit log lives (same registry dir as connection info and instructions)."""
-    return os.environ.get(
-        "QGIS_LIVE_REGISTRY",
-        os.path.join(os.path.expanduser("~"), ".qgis-live"))
+    return registry_dir()
 
 
 def _audit_conf():
@@ -1183,23 +1183,28 @@ class LiveDriver:
         async namespace is isolated from the QGIS process (no iface/QgsProject).
         """
         task_id = self.tasks.new()
-
-        def _run(_tid=task_id):
-            local_ns = {}
-            try:
-                try:
-                    code_obj = compile(code, "<pyeval_async>", "eval")
-                except SyntaxError:
-                    code_obj = compile(code, "<pyeval_async>", "exec")
-                res = eval(code_obj, {}, local_ns)  # nosec B307  # arbitrary execution is intended
-                if res is None:
-                    res = local_ns.get("result")
-                self.tasks.finish(_tid, result=_to_jsonable(res))
-            except Exception:
-                self.tasks.finish(_tid, error=traceback.format_exc())
-
-        threading.Thread(target=_run, daemon=True).start()
+        threading.Thread(target=self._run_task, args=(task_id, code),
+                         daemon=True).start()
         return task_id
+
+    def _run_task(self, task_id, code, tag="<pyeval_async>"):
+        """Execute one pure-Python snippet for a registered task and record the outcome.
+
+        The one place that knows how a background task ends: eval in a fresh
+        namespace, fall back to `result`, then finish with the JSON-safe value.
+        """
+        local_ns = {}
+        try:
+            try:
+                code_obj = compile(code, tag, "eval")
+            except SyntaxError:
+                code_obj = compile(code, tag, "exec")
+            res = eval(code_obj, {}, local_ns)  # nosec B307  # arbitrary execution is intended
+            if res is None:
+                res = local_ns.get("result")
+            self.tasks.finish(task_id, result=_to_jsonable(res))
+        except Exception:
+            self.tasks.finish(task_id, error=traceback.format_exc())
 
     def submit_pyeval_group(self, tasks, max_workers=4):
         """Queue pure-Python shards in one bounded pool; return [{name, task_id}].
@@ -1222,18 +1227,7 @@ class LiveDriver:
             if self.tasks.is_cancelled(task_id):
                 return
             self.tasks.set_status(task_id, "running")
-            local_ns = {}
-            try:
-                try:
-                    code_obj = compile(code, "<pyeval_group>", "eval")
-                except SyntaxError:
-                    code_obj = compile(code, "<pyeval_group>", "exec")
-                res = eval(code_obj, {}, local_ns)  # nosec B307  # arbitrary execution is intended
-                if res is None:
-                    res = local_ns.get("result")
-                self.tasks.finish(task_id, result=_to_jsonable(res))
-            except Exception:
-                self.tasks.finish(task_id, error=traceback.format_exc())
+            self._run_task(task_id, code, "<pyeval_group>")
 
         # Prune pools whose work is finished, then keep this one referenced.
         for pool in list(_GROUP_POOLS):

@@ -18,6 +18,8 @@ import os
 
 from qgis.PyQt.QtCore import QCoreApplication
 
+from .profile_store import registry_dir
+
 
 def _tr(s):
     return QCoreApplication.translate("dsh_qgis_driver", s)
@@ -58,9 +60,7 @@ def build_sections(plugin):
     if repo:
         snippets["repo"] = repo
 
-    reg_dir = os.environ.get(
-        "QGIS_LIVE_REGISTRY",
-        os.path.join(os.path.expanduser("~"), ".qgis-live"))
+    reg_dir = registry_dir()
     reg_path = getattr(plugin, "_reg_path", None) or os.path.join(
         reg_dir, f"{os.getpid()}-dsh_qgis_driver.json")
     fields = {"reg": reg_path, "livedir": None, "token": None}
