@@ -48,11 +48,23 @@ def _publish(src, ext):
     shutil.copyfile(src, dst)
     return dst
 
+def _names(items, n=8):
+    names = []
+    for it in items[:n]:
+        try:
+            names.append(it.name())
+        except Exception:
+            pass
+    return ', '.join(names) + (' ...' if len(items) > n else '')
+
 def L(name):
     ls = prj.mapLayersByName(name)
-    if not ls:
-        raise ValueError('layer not found: ' + str(name))
-    return ls[0]
+    if ls:
+        return ls[0]
+    found = prj.mapLayer(str(name))
+    if found is not None:
+        return found
+    raise ValueError('layer not found: %s (have: %s)' % (name, _names(list(prj.mapLayers().values()))))
 
 def MM():
     return QgsUnitTypes.LayoutMillimeters
@@ -60,7 +72,7 @@ def MM():
 def LAYOUT(name):
     lay = prj.layoutManager().layoutByName(name)
     if lay is None:
-        raise ValueError('layout not found: ' + str(name))
+        raise ValueError('layout not found: %s (have: %s)' % (name, _names(list(prj.layoutManager().layouts()))))
     return lay
 
 def rect_of(it):
@@ -94,7 +106,7 @@ result = {'opened': bool(r), 'layers': len(prj.mapLayers()), 'file': prj.fileNam
   save: `
 path = P.get('path') or prj.fileName()
 if not path:
-    raise ValueError('工程尚未保存过，请提供 path')
+    raise ValueError('project not saved yet: pass path')
 result = {'saved': bool(prj.write(path)), 'file': path}`,
   set_crs: `
 crs = QgsCoordinateReferenceSystem(P['crs'])
@@ -546,7 +558,7 @@ result = {'layer': l.name(), 'added': bool(ok), 'feature_count': l.featureCount(
   update: `
 l = L(P['layer'])
 if not P.get('confirm'):
-    raise ValueError('必须传 confirm=true 确认写操作')
+    raise ValueError('confirm=true required for update')
 expr = P.get('expression') or ''
 values = P.get('values') or {}
 limit = int(P.get('limit') or 1000)
@@ -565,7 +577,7 @@ result = {'layer': l.name(), 'updated': n}`,
   delete: `
 l = L(P['layer'])
 if not P.get('confirm'):
-    raise ValueError('必须传 confirm=true 确认删除')
+    raise ValueError('confirm=true required for delete')
 expr = P.get('expression') or ''
 limit = int(P.get('limit') or 1000)
 req = QgsFeatureRequest().setLimit(limit)
@@ -589,7 +601,7 @@ result = {'layer': l.name(), 'field': P['field'], 'fields': [f.name() for f in l
   field_calc: `
 l = L(P['layer'])
 if not P.get('expression'):
-    raise ValueError('必须提供 expression')
+    raise ValueError('expression required')
 idx = l.fields().indexOf(P['field'])
 if idx < 0:
     raise ValueError('field not found: ' + P['field'])
@@ -618,7 +630,7 @@ result = {'layer': l.name(), 'fields': [f.name() for f in l.fields()]}`,
   field_rename: `
 l = L(P['layer'])
 if not P.get('new_name'):
-    raise ValueError('必须提供 new_name')
+    raise ValueError('new_name required')
 idx = l.fields().indexOf(P['field'])
 if idx < 0:
     raise ValueError('field not found: ' + P['field'])
@@ -686,7 +698,7 @@ w = P.get('width'); h = P.get('height')
 layers = [L(n) for n in (P.get('layers') or [])]
 if kind == 'map':
     if w is None:
-        raise ValueError('kind=map 需要 width')
+        raise ValueError('kind=map requires width')
     m = QgsLayoutItemMap(lay)
     lay.addLayoutItem(m)
     m.attemptMove(QgsLayoutPoint(x, y, MM()))
@@ -710,7 +722,7 @@ if kind == 'map':
     item = m
 elif kind == 'legend':
     if w is None:
-        raise ValueError('kind=legend 需要 width')
+        raise ValueError('kind=legend requires width')
     lg = QgsLayoutItemLegend(lay)
     base = first_map(lay)
     if base is not None:
@@ -780,7 +792,7 @@ elif kind == 'north_arrow':
     item = na
 elif kind == 'text':
     if not P.get('text'):
-        raise ValueError('kind=text 需要 text')
+        raise ValueError('kind=text requires text')
     t = QgsLayoutItemLabel(lay)
     t.setText(P['text'])
     f = QFont(P.get('family') or 'Microsoft YaHei', int(P.get('size') or 10))
@@ -793,7 +805,7 @@ elif kind == 'text':
     item = t
 elif kind == 'rect':
     if w is None or h is None:
-        raise ValueError('kind=rect 需要 width 与 height')
+        raise ValueError('kind=rect requires width and height')
     s = QgsLayoutItemShape(lay)
     s.setShapeType(QgsLayoutItemShape.Rectangle)
     sym = QgsFillSymbol.createSimple({'color': P.get('color') or '#ffffff',
@@ -986,7 +998,7 @@ result = {'width': w, 'height': h, 'size_bytes': os.path.getsize(path),
   set_extent: `
 canvas = list(iface.mapCanvases())[0] if iface is not None else None
 if canvas is None:
-    raise RuntimeError('no map canvas: 该操作需要在 QGIS GUI 会话中使用')
+    raise RuntimeError('no map canvas: needs a GUI session')
 rect = QgsRectangle(float(P['xmin']), float(P['ymin']), float(P['xmax']), float(P['ymax']))
 crs = QgsCoordinateReferenceSystem(P['crs']) if P.get('crs') else canvas.mapSettings().destinationCrs()
 xf = QgsCoordinateTransform(crs, canvas.mapSettings().destinationCrs(), prj)
@@ -996,7 +1008,7 @@ result = {'extent': [round(v, 1) for v in (rect.xMinimum(), rect.yMinimum(), rec
   zoom_to_layer: `
 canvas = list(iface.mapCanvases())[0] if iface is not None else None
 if canvas is None:
-    raise RuntimeError('no map canvas: 该操作需要在 QGIS GUI 会话中使用')
+    raise RuntimeError('no map canvas: needs a GUI session')
 l = L(P['layer'])
 xf = QgsCoordinateTransform(l.crs(), canvas.mapSettings().destinationCrs(), prj)
 canvas.setExtent(xf.transformBoundingBox(l.extent())); canvas.refresh()
@@ -1006,12 +1018,12 @@ canvas = list(iface.mapCanvases())[0] if iface is not None else None
 target = P.get('target') or 'canvas'
 if target == 'mainwindow':
     if iface is None:
-        raise RuntimeError('no main window: 需要 QGIS GUI 会话')
+        raise RuntimeError('no main window: needs a GUI session')
     shot = iface.mainWindow().grab()
 elif canvas is not None:
     shot = canvas.grab()
 else:
-    raise RuntimeError('no map canvas: 该操作需要在 QGIS GUI 会话中使用')
+    raise RuntimeError('no map canvas: needs a GUI session')
 import base64, tempfile
 fd, path = tempfile.mkstemp(suffix='.png'); os.close(fd)
 shot.save(path, 'PNG')
@@ -1085,7 +1097,7 @@ for pdef in ad.parameterDefinitions():
 try:
     out = processing.run(alg, mapped)
 except Exception as e:
-    raise ValueError('%s —— 参数可能不完整，先用 action=help 查看 %s 的参数；也可显式传 params.OUTPUT。' % (e, alg))
+    raise ValueError('%s (incomplete params: try action=help %s)' % (e, alg))
 added = []
 clean = {}
 for k, v in (out or {}).items():
@@ -1157,12 +1169,10 @@ export function registerConsolidatedTools(deps) {
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',
-    description:
-      '在 QGIS 主线程同步执行 PyQGIS 代码并返回结果（可访问 iface/QgsProject）。' +
-      '只用于短任务（<3 秒），否则 QGIS 界面会卡死；耗时任务用 submit_qgis_async。',
+    description: 'Run PyQGIS on the QGIS main thread (sync, <3s). Returns last expression or `result`.',
     parameters: {
       type: 'object',
-      properties: { code: { type: 'string', description: 'Python 代码；最后一个表达式或 result 变量会被返回。' } },
+      properties: { code: { type: 'string' } },
       required: ['code'],
     },
     output: stringOutput,
@@ -1173,10 +1183,10 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: '在后台线程异步执行 Python 代码，立即返回 task_id；之后用 check_qgis_task 轮询结果。后台环境不导入 qgis。',
+    description: 'Run Python on a worker thread (no QGIS objects). Returns task_id; poll with check_qgis_task.',
     parameters: {
       type: 'object',
-      properties: { code: { type: 'string', description: 'Python 代码（不能访问 QGIS 对象）。' } },
+      properties: { code: { type: 'string' } },
       required: ['code'],
     },
     output: stringOutput,
@@ -1188,10 +1198,10 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: '查询 submit_qgis_async 的任务状态；done/error 首次读取后即从缓存移除。',
+    description: 'Poll a task from submit_qgis_async. done/error is evicted after the first read.',
     parameters: {
       type: 'object',
-      properties: { task_id: { type: 'string', description: 'submit_qgis_async 返回的 task_id。' } },
+      properties: { task_id: { type: 'string' } },
       required: ['task_id'],
     },
     output: stringOutput,
@@ -1209,15 +1219,13 @@ export function registerConsolidatedTools(deps) {
   // ---------------- project
   registerTool({
     name: 'qgis_project',
-    description:
-      '工程级操作。action=info 返回文件/标题/CRS/范围/图层/版面；open 打开 .qgs/.qgz；' +
-      'save 保存（未保存过需 path）；save_as 另存到新路径；set_crs 设置工程坐标系（不重投影数据）。',
+    description: 'Project: info/open/save/save_as/set_crs.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs'] },
-        path: { type: 'string', description: 'open/save 的文件路径。' },
-        crs: { type: 'string', description: 'set_crs 的目标坐标系（EPSG:xxxx）。' },
+        path: { type: 'string' },
+        crs: { type: 'string' },
       },
       required: ['action'],
     },
@@ -1228,45 +1236,39 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description:
-      '图层操作（一个入口）。action=list 列出图层；info 元数据（矢量/栅格+波段统计）；fields 字段；' +
-      'add 加载数据源（path/provider/name）；create 新建内存图层（geometry_type/crs/fields）；remove 移除；' +
-      'visibility 显隐；crs 指定坐标系（CRS 为空会导致图层不渲染，必用）；style 颜色/透明度；' +
-      'classify 分类或分级符号化；style_multi 按字段多符号；style_rule 规则符号化；' +
-      'symbol 调线宽/点径/边线；labels 按字段标注；annotate 生成带标注的注记图层；reproject 重投影为新内存图层；' +
-      'export 导出矢量文件（gpkg/geojson/shp/csv）；export_table 导出属性表（csv/json）。',
+    description: 'Layers: list/info/fields/add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject/export/export_table.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
-        layer: { type: 'string', description: '图层名（除 list/add/create 外必填）。' },
-        path: { type: 'string', description: 'add/export/export_table 的文件路径。' },
-        name: { type: 'string', description: 'add 的图层名；create 的图层名。' },
-        provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'], description: 'add 的数据源类型，默认 auto。' },
-        geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'], description: 'create 的几何类型。' },
-        crs: { type: 'string', description: 'create/crs 的坐标系。' },
-        fields: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'create 的字段 [{name,type}]。' },
-        visible: { type: 'boolean', description: 'visibility 的目标可见性。' },
-        set_project: { type: 'boolean', description: 'crs 时同时设为工程坐标系。' },
-        color: { type: 'string', description: 'style/classify 的颜色（#rrggbb）。' },
-        opacity: { type: 'number', description: 'style 的不透明度 0-1。' },
-        field: { type: 'string', description: 'classify/labels 使用的字段。' },
-        mode: { type: 'string', enum: ['categorized', 'graduated'], description: 'classify 模式。' },
-        width: { type: 'number', description: 'style_multi/style_rule/symbol 的线宽（mm）。' },
-        outline_color: { type: 'string', description: 'style_multi/style_rule/symbol 的边线颜色。' },
-        outline_width: { type: 'number', description: 'symbol 的边线宽度。' },
-        rules: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'style_rule 规则 [{expression,label,color,width,size}]。' },
-        label_field: { type: 'string', description: 'annotate 的标注字段（默认取 layer 字段或第一个字段）。' },
-        classes: { type: 'integer', description: 'classify graduated 级数（默认 5）。' },
-        colors: { type: 'array', items: { type: 'string' }, description: 'classify 配色列表。' },
-        size: { type: 'number', description: 'labels 字号（pt）。' },
-        buffer_size: { type: 'number', description: 'labels 描边宽度（mm）。' },
-        buffer_color: { type: 'string', description: 'labels 描边颜色。' },
-        placement: { type: 'string', enum: ['around_point', 'over_point', 'line', 'horizontal', 'curved'], description: 'labels 放置方式。' },
-        enabled: { type: 'boolean', description: 'labels=false 关闭标注。' },
-        target_crs: { type: 'string', description: 'reproject 目标坐标系。' },
-        output_name: { type: 'string', description: 'reproject 新图层名。' },
-        format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'], description: 'export/export_table 格式。' },
+        layer: { type: 'string' },
+        path: { type: 'string' },
+        name: { type: 'string' },
+        provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
+        geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'] },
+        crs: { type: 'string' },
+        fields: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'create: [{name,type}]' },
+        visible: { type: 'boolean' },
+        set_project: { type: 'boolean', description: 'also set project CRS' },
+        color: { type: 'string' },
+        opacity: { type: 'number' },
+        field: { type: 'string' },
+        mode: { type: 'string', enum: ['categorized', 'graduated'] },
+        width: { type: 'number' },
+        outline_color: { type: 'string' },
+        outline_width: { type: 'number' },
+        rules: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'style_rule: [{expression,label,color,width,size}]' },
+        label_field: { type: 'string' },
+        classes: { type: 'integer' },
+        colors: { type: 'array', items: { type: 'string' }, description: 'palette #rrggbb' },
+        size: { type: 'number' },
+        buffer_size: { type: 'number', description: 'label halo (mm)' },
+        buffer_color: { type: 'string' },
+        placement: { type: 'string', enum: ['around_point', 'over_point', 'line', 'horizontal', 'curved'] },
+        enabled: { type: 'boolean' },
+        target_crs: { type: 'string' },
+        output_name: { type: 'string' },
+        format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'] },
       },
       required: ['action'],
     },
@@ -1277,33 +1279,29 @@ export function registerConsolidatedTools(deps) {
   // ---------------- feature
   registerTool({
     name: 'qgis_feature',
-    description:
-      '要素与字段操作。action=query 按表达式查询；select 属性选择；select_by_location 空间选择' +
-      '（intersects/within/contains/touches/overlaps/crosses/disjoint，可加缓冲距离）；selected 读已选；' +
-      'table 读属性表（可排序/分页）；add 新增要素（values/geometry_wkt）；update 批量改属性（需 confirm）；delete 批量删除（需 confirm）；' +
-      'field_add / field_calc（expression）/ field_delete / field_rename（new_name）。',
+    description: 'Features/fields: query/table/select/select_by_location/selected/add/update/delete/field_add/field_calc/field_delete/field_rename.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['query', 'table', 'select', 'select_by_location', 'selected', 'add', 'update', 'delete', 'field_add', 'field_calc', 'field_delete', 'field_rename'] },
-        layer: { type: 'string', description: '目标图层名（必填）。' },
-        expression: { type: 'string', description: 'query/select/update/delete 的过滤表达式；field_calc 的计算表达式。' },
-        fields: { type: 'array', items: { type: 'string' }, description: 'query 返回的字段。' },
-        limit: { type: 'integer', description: 'query/selected 行数上限，或 update/delete 影响数量上限。' },
-        include_geometry: { type: 'boolean', description: 'query 是否返回 WKT。' },
-        sort_by: { type: 'string', description: 'table 的排序字段。' },
-        order: { type: 'string', enum: ['asc', 'desc'], description: 'table 排序方向。' },
-        offset: { type: 'integer', description: 'table 分页起点。' },
-        mode: { type: 'string', enum: ['replace', 'add', 'remove', 'new'], description: 'select/select_by_location 的选择模式。' },
-        source_layer: { type: 'string', description: 'select_by_location 的筛选依据图层。' },
-        predicate: { type: 'string', enum: ['intersects', 'within', 'contains', 'touches', 'overlaps', 'crosses', 'disjoint'], description: 'select_by_location 谓词。' },
-        distance: { type: 'number', description: 'select_by_location 缓冲距离（图层单位）。' },
-        values: { type: 'object', description: 'add/update 的字段值映射。', additionalProperties: true },
-        geometry_wkt: { type: 'string', description: 'add 的 WKT 几何。' },
-        confirm: { type: 'boolean', description: 'update/delete 必须为 true。' },
-        field: { type: 'string', description: 'field_add/calc/delete/rename 的字段名。' },
-        field_type: { type: 'string', enum: ['string', 'integer', 'double', 'date', 'datetime'], description: 'field_add 的字段类型。' },
-        new_name: { type: 'string', description: 'field_rename 的新字段名。' },
+        layer: { type: 'string' },
+        expression: { type: 'string' },
+        fields: { type: 'array', items: { type: 'string' } },
+        limit: { type: 'integer' },
+        include_geometry: { type: 'boolean' },
+        sort_by: { type: 'string' },
+        order: { type: 'string', enum: ['asc', 'desc'] },
+        offset: { type: 'integer' },
+        mode: { type: 'string', enum: ['replace', 'add', 'remove', 'new'] },
+        source_layer: { type: 'string' },
+        predicate: { type: 'string', enum: ['intersects', 'within', 'contains', 'touches', 'overlaps', 'crosses', 'disjoint'] },
+        distance: { type: 'number' },
+        values: { type: 'object', additionalProperties: true },
+        geometry_wkt: { type: 'string' },
+        confirm: { type: 'boolean', description: 'true required for write/delete' },
+        field: { type: 'string' },
+        field_type: { type: 'string', enum: ['string', 'integer', 'double', 'date', 'datetime'] },
+        new_name: { type: 'string' },
       },
       required: ['action', 'layer'],
     },
@@ -1314,48 +1312,43 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description:
-      '打印版面操作。action=list 列出；create 新建（layout_name，可选 page_width/page_height）；' +
-      'info 看页面与要素（含 index）；add_item 加要素（kind=map/legend/scalebar/north_arrow/text/rect，' +
-      '毫米坐标，map 可用 fit_layer 自动算长宽比）；update_item 移动/缩放/删除（按 index）；' +
-      'legend_edit 图例项定制（op=style/columns/text/remove/title）；align 对齐/分布（left/right/top/bottom/center_h/center_v/distribute_h/distribute_v）；' +
-      'export 导出 PNG/PDF；export_atlas 导出图集（需布局已启用 atlas）。',
+    description: 'Layouts: list/create/info/add_item/update_item/legend_edit/align/export/export_atlas.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'create', 'info', 'add_item', 'update_item', 'legend_edit', 'align', 'export', 'export_atlas'] },
-        layout: { type: 'string', description: '版面名（info/add_item/update_item 必填）。' },
-        layout_name: { type: 'string', description: 'create/export/export_atlas 的版面名。' },
-        page_width: { type: 'number', description: 'create 的页宽（mm）。' },
-        page_height: { type: 'number', description: 'create 的页高（mm）。' },
-        index: { type: 'integer', description: 'update_item 的要素序号。' },
-        remove: { type: 'boolean', description: 'update_item=true 删除该要素。' },
-        kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect'], description: 'add_item 的要素类型。' },
-        x: { type: 'number', description: '左上角 X（mm）。' },
-        y: { type: 'number', description: '左上角 Y（mm）。' },
-        width: { type: 'number', description: '宽（mm）。' },
-        height: { type: 'number', description: '高（mm）。' },
-        fit_layer: { type: 'string', description: 'map 按该图层范围定比例。' },
-        layers: { type: 'array', items: { type: 'string' }, description: 'map 显示图层列表；legend 保留的图层。' },
-        text: { type: 'string', description: 'text 内容。' },
-        size: { type: 'number', description: 'text 字号 / north_arrow 尺寸。' },
-        bold: { type: 'boolean', description: 'text 加粗。' },
-        color: { type: 'string', description: 'text 字色 / rect 填充色。' },
-        outline_color: { type: 'string', description: 'rect 边框色。' },
-        outline_width: { type: 'number', description: 'rect 边框宽度。' },
-        title: { type: 'string', description: 'legend 标题。' },
-        op: { type: 'string', enum: ['style', 'columns', 'text', 'remove', 'title'], description: 'legend_edit 的操作。' },
-        columns: { type: 'integer', description: 'legend_edit columns 的列数。' },
-        item_text: { type: 'string', description: 'legend_edit text 的新文字（配 layer）。' },
-        align: { type: 'string', enum: ['left', 'right', 'top', 'bottom', 'center_h', 'center_v', 'distribute_h', 'distribute_v'], description: 'align 的对齐方式。' },
-        indexes: { type: 'array', items: { type: 'integer' }, description: 'align 的要素序号列表（省略=全部）。' },
-        segments: { type: 'number', description: 'scalebar 段数。' },
-        units_per_segment: { type: 'number', description: 'scalebar 每段长度。' },
-        unit: { type: 'string', description: 'scalebar 单位（km/m）。' },
-        family: { type: 'string', description: '字体（默认 Microsoft YaHei）。' },
-        format: { type: 'string', enum: ['png', 'pdf'], description: 'export 格式。' },
-        dpi: { type: 'integer', description: 'export 的 DPI（默认 300）。' },
-        path: { type: 'string', description: 'export pdf 的输出路径（可选）。' },
+        layout: { type: 'string' },
+        layout_name: { type: 'string' },
+        page_width: { type: 'number' },
+        page_height: { type: 'number' },
+        index: { type: 'integer' },
+        remove: { type: 'boolean' },
+        kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect'] },
+        x: { type: 'number' },
+        y: { type: 'number' },
+        width: { type: 'number' },
+        height: { type: 'number' },
+        fit_layer: { type: 'string', description: 'map extent from this layer' },
+        layers: { type: 'array', items: { type: 'string' } },
+        text: { type: 'string' },
+        size: { type: 'number' },
+        bold: { type: 'boolean' },
+        color: { type: 'string' },
+        outline_color: { type: 'string' },
+        outline_width: { type: 'number' },
+        title: { type: 'string' },
+        op: { type: 'string', enum: ['style', 'columns', 'text', 'remove', 'title'] },
+        columns: { type: 'integer' },
+        item_text: { type: 'string' },
+        align: { type: 'string', enum: ['left', 'right', 'top', 'bottom', 'center_h', 'center_v', 'distribute_h', 'distribute_v'] },
+        indexes: { type: 'array', items: { type: 'integer' }, description: 'item indexes (from action=info)' },
+        segments: { type: 'number' },
+        units_per_segment: { type: 'number', description: 'km per segment' },
+        unit: { type: 'string' },
+        family: { type: 'string' },
+        format: { type: 'string', enum: ['png', 'pdf'] },
+        dpi: { type: 'integer' },
+        path: { type: 'string' },
       },
       required: ['action'],
     },
@@ -1366,21 +1359,19 @@ export function registerConsolidatedTools(deps) {
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description:
-      '处理框架（空间分析）。action=list 列出算法（可按 keyword 过滤）；help 查算法参数；' +
-      'run 执行算法（algorithm + params，图层参数可传图层名）；zonal_stats 分区统计到图层字段；reclassify 栅格重分类。',
+    description: 'Processing: list/help/run, zonal_stats, reclassify.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'help', 'run', 'zonal_stats', 'reclassify'] },
-        keyword: { type: 'string', description: 'list 的关键字过滤。' },
-        algorithm: { type: 'string', description: 'help/run 的算法 id，如 native:buffer。' },
-        params: { type: 'object', description: 'run 的算法参数。', additionalProperties: true },
-        raster: { type: 'string', description: 'zonal_stats/reclassify 的栅格图层名。' },
-        band: { type: 'integer', description: 'zonal_stats 的波段（默认 1）。' },
-        prefix: { type: 'string', description: 'zonal_stats 输出字段前缀（默认 z_）。' },
-        table: { type: 'array', items: { type: 'number' }, description: 'reclassify 的重分类表 [min,max,value,...]。' },
-        output: { type: 'string', description: 'reclassify 的输出图层名（默认 <raster>_reclass）。' },
+        keyword: { type: 'string' },
+        algorithm: { type: 'string' },
+        params: { type: 'object', additionalProperties: true, description: 'algorithm params (see action=help)' },
+        raster: { type: 'string' },
+        band: { type: 'integer' },
+        prefix: { type: 'string' },
+        table: { type: 'array', items: { type: 'number' } },
+        output: { type: 'string' },
       },
       required: ['action'],
     },
@@ -1392,20 +1383,18 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_map',
     deferLoading: true,
-    description:
-      '地图视图与截图。action=render 离屏渲染项目全图返回 PNG；screenshot 截画布/主窗口（需 GUI）；' +
-      'set_extent 设画布范围；zoom_to_layer 缩放到图层（需 GUI）。',
+    description: 'Map: render/screenshot/set_extent/zoom_to_layer (last two need GUI).',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['render', 'screenshot', 'set_extent', 'zoom_to_layer'] },
-        width: { type: 'integer', description: 'render 宽度（默认 800）。' },
-        height: { type: 'integer', description: 'render 高度（默认 600）。' },
-        target: { type: 'string', enum: ['canvas', 'mainwindow'], description: 'screenshot 目标。' },
+        width: { type: 'integer' },
+        height: { type: 'integer' },
+        target: { type: 'string', enum: ['canvas', 'mainwindow'] },
         xmin: { type: 'number' }, ymin: { type: 'number' },
         xmax: { type: 'number' }, ymax: { type: 'number' },
-        crs: { type: 'string', description: 'set_extent 的坐标系。' },
-        layer: { type: 'string', description: 'zoom_to_layer 的图层名。' },
+        crs: { type: 'string' },
+        layer: { type: 'string' },
       },
       required: ['action'],
     },
@@ -1423,22 +1412,19 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description:
-      '插件与应用诊断。action=status 进程/端口/插件状态；describe 列出可调用插件的 bridge 能力；' +
-      'open/reload 按 plugin_id 加载或热重载；bridge 调用插件 bridge 方法（method 可选 args）；' +
-      'instruction 管理本地 AI 指令文件（op=list|read|save|delete，kind=agents|skills|prompts）。',
+    description: 'Plugin: status/describe/open/reload/bridge/instruction.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction'] },
-        plugin_id: { type: 'string', description: 'open/reload 的插件 id（默认 dsh_qgis_driver）。' },
-        method: { type: 'string', description: 'bridge 的方法名。' },
-        args: { type: 'array', items: {}, description: 'bridge 的位置参数。' },
-        op: { type: 'string', enum: ['list', 'read', 'save', 'delete'], description: 'instruction 操作。' },
-        kind: { type: 'string', enum: ['agents', 'skills', 'prompts'], description: 'instruction 类别。' },
-        id: { type: 'string', description: 'instruction 的文件名（stem）。' },
-        name: { type: 'string', description: 'instruction save 的文件名。' },
-        text: { type: 'string', description: 'instruction save 的正文。' },
+        plugin_id: { type: 'string' },
+        method: { type: 'string' },
+        args: { type: 'array', items: {} },
+        op: { type: 'string', enum: ['list', 'read', 'save', 'delete'] },
+        kind: { type: 'string', enum: ['agents', 'skills', 'prompts'] },
+        id: { type: 'string' },
+        name: { type: 'string' },
+        text: { type: 'string' },
       },
       required: ['action'],
     },

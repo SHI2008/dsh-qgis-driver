@@ -57,14 +57,14 @@ function resolveRemoteTarget(config) {
   const key = config?.key || process.env.QGIS_LIVE_REMOTE_KEY || ''
   if (!host && !portRaw) return null
   if (!host || !portRaw) {
-    throw new Error('远程 QGIS 配置不完整：host 和 port 必须同时提供（QGIS_LIVE_REMOTE_HOST/PORT 或 config）')
+    throw new Error('remote QGIS: host and port required (QGIS_LIVE_REMOTE_HOST/PORT or config)')
   }
   const port = Number(portRaw)
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`远程 QGIS 端口无效：${portRaw}`)
+    throw new Error(`remote QGIS: invalid port ${portRaw}`)
   }
   if (!key) {
-    throw new Error('已配置远程 QGIS (host/port) 但缺少 Key（QGIS_LIVE_REMOTE_KEY 或 config.key）')
+    throw new Error('remote QGIS: Key required (QGIS_LIVE_REMOTE_KEY or config.key)')
   }
   return { base: `http://${host}:${port}`, token: key }
 }
@@ -168,7 +168,7 @@ async function findActiveQgis(startedAt = 0, requireGui = false) {
         }
       }
       if (resp.status === 401) {
-        throw new Error('QGIS 凭证已过期或无效（注册 token 与运行实例不一致）')
+        throw new Error('QGIS auth failed: token does not match the running instance')
       }
     } catch (e) {
       // 401 is a hard failure; timeout/refused/other → try the next candidate.
@@ -176,9 +176,7 @@ async function findActiveQgis(startedAt = 0, requireGui = false) {
       continue
     }
   }
-  throw new Error(
-    '未找到活跃的 dsh-qgis-driver 实例（请确认 QGIS 正在运行且 dsh_qgis_driver 插件已启动，' +
-    '或配置远程连接 QGIS_LIVE_REMOTE_HOST/PORT/KEY）')
+  throw new Error('no active QGIS instance (start QGIS with the plugin enabled, or set QGIS_LIVE_REMOTE_HOST/PORT/KEY)')
 }
 
 const DEFAULT_AUTOSTART_TIMEOUT_MS = 90000
@@ -303,7 +301,7 @@ function ensureProfilePlugin(root) {
 function launchBuiltin(mode) {
   const root = findQgisRoot()
   if (!root) {
-    throw new Error('未找到 QGIS 安装：请设置 QGIS_ROOT，或把 QGIS 装到 H:\\QGIS / Program Files 下')
+    throw new Error('QGIS not found: set QGIS_ROOT (or install under H:\\QGIS / Program Files)')
   }
   const env = qgisEnv(root)
   if (mode === 'headless') {
@@ -361,7 +359,7 @@ async function autostartQgis(auto, requireGui = false) {
     try {
       launchBuiltin(auto.builtin)
     } catch (e) {
-      throw new Error(`QGIS 自动启动失败：${e && e.message ? e.message : e}`)
+      throw new Error(`QGIS autostart failed: ${e && e.message ? e.message : e}`)
     }
   } else {
     try {
@@ -374,7 +372,7 @@ async function autostartQgis(auto, requireGui = false) {
       })
       child.unref()
     } catch (e) {
-      throw new Error(`QGIS 自动启动失败（${auto.command}）：${e.message}`)
+      throw new Error(`QGIS autostart failed (${auto.command}): ${e.message}`)
     }
   }
   const deadline = Date.now() + auto.timeoutMs
@@ -390,8 +388,8 @@ async function autostartQgis(auto, requireGui = false) {
     }
   }
   throw new Error(
-    `已启动 QGIS（${auto.builtin || auto.command}），但 ${Math.round(auto.timeoutMs / 1000)} 秒内没有检测到实例` +
-    `${lastError ? `。最后错误：${lastError.message}` : ''}`)
+    `QGIS started (${auto.builtin || auto.command}) but no instance in ${Math.round(auto.timeoutMs / 1000)}s` +
+    `${lastError ? `: ${lastError.message}` : ''}`)
 }
 
 const FILE_CHANNEL_TIMEOUT_MS = 15000
@@ -413,7 +411,7 @@ function routeToCommand(route, body) {
   if (route === '/api/cmd') return { ...(body || {}) }
   const m = /^\/api\/tasks\/([^/]+)$/.exec(route || '')
   if (m) return { type: 'task_status', task_id: decodeURIComponent(m[1]) }
-  throw new Error(`文件通道不支持该端点：${route}`)
+  throw new Error(`file channel: unsupported endpoint ${route}`)
 }
 
 /**
@@ -432,12 +430,12 @@ function invokeFile(cmd, signal, target) {
 
 async function invokeFileOnce(cmd, signal, target) {
   const liveDir = target.liveDir
-  if (!liveDir) throw new Error('文件通道缺少 live_dir（注册表条目没有 live_dir 字段）')
+  if (!liveDir) throw new Error('file channel: live_dir missing in registry')
   let token = target.token
   if (!token) {
     try { token = fs.readFileSync(path.join(liveDir, 'token'), 'utf8').trim() } catch { token = '' }
   }
-  if (!token) throw new Error('无法读取 QGIS 文件通道 token（live_dir 内没有 token 文件）')
+  if (!token) throw new Error('file channel: token file missing')
 
   const cmdPath = path.join(liveDir, 'commands.jsonl')
   const resPath = path.join(liveDir, 'results.jsonl')
@@ -464,7 +462,7 @@ async function invokeFileOnce(cmd, signal, target) {
   const resultsSizeAtStart = (() => { try { return fs.statSync(resPath).size } catch { return 0 } })()
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    if (signal?.aborted) throw new Error('文件通道等待已中止')
+    if (signal?.aborted) throw new Error('file channel: aborted')
     await delay(FILE_POLL_INTERVAL_MS)
     let chunk = ''
     try {
@@ -499,7 +497,7 @@ async function invokeFileOnce(cmd, signal, target) {
       try { obj = JSON.parse(line) } catch { continue }
       if (!obj || obj.id !== id) continue
       if (obj.error) {
-        throw new Error(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error))
+        throw new Error(tidyError(typeof obj.error === 'string' ? obj.error : JSON.stringify(obj.error)))
       }
       return obj.result
     }
@@ -507,12 +505,61 @@ async function invokeFileOnce(cmd, signal, target) {
   badLiveDirs.add(liveDir)
   const grew = (() => { try { return fs.statSync(resPath).size - resultsSizeAtStart } catch { return -1 } })()
   throw new Error(
-    `QGIS 文件通道超时（${Math.round(timeoutMs / 1000)} 秒）：命令已写入 ${cmdPath}（id=${id}），` +
+    `file channel timeout ${Math.round(timeoutMs / 1000)}s (id=${id})` +
     (grew > 0
-      ? `results.jsonl 期间新增 ${grew} 字节，但没有匹配的回包（可能有其它客户端在共享同一 live_dir）。`
-      : 'results.jsonl 完全没有新增 —— QGIS 没有读取命令：进程已退出/无响应、插件未启用，' +
-        '或该 live_dir 属于一个已失效的实例。') +
-    '可用 QGIS_LIVE_FILE_TIMEOUT_MS 调整超时。')
+      ? ' — results.jsonl grew but no matching reply (another client?)'
+      : ' — QGIS did not read the command (dead process, plugin disabled, or stale live_dir)'))
+}
+
+/** Turn a Python traceback into one actionable line. */
+function tidyError(input) {
+  let message = typeof input === 'string' ? input : String(input == null ? '' : input)
+  if (!/Traceback \(most recent call last\)/.test(message)) return message
+  const lines = message.split(/\r?\n/)
+  let exc = ''
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].trim()) { exc = lines[i].trim(); break }
+  }
+  let frame = ''
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (/^\s*File "/.test(lines[i])) { frame = lines[i].trim().replace(/^File "([^"]+)", line (\d+).*$/, '$1:$2'); break }
+  }
+  const m = exc.match(/^([A-Za-z_][\w.]*):\s*([\s\S]*)$/)
+  const type = m ? m[1] : ''
+  const body = m ? m[2].trim() : exc
+  const hints = {
+    KeyError: 'object not found — use the matching list action',
+    IndexError: 'index out of range — check action=info',
+    NameError: 'missing parameter',
+    AttributeError: 'API differs on QGIS 4 — see DETAIL.md',
+    TypeError: 'argument type mismatch (numbers as numbers, booleans as true/false)',
+    ValueError: 'invalid value — check the enum/range',
+    ImportError: 'module unavailable',
+    ModuleNotFoundError: 'module unavailable',
+    QgsNotSupportedException: 'needs a GUI session',
+    QgsProcessingException: 'incomplete algorithm parameters — try action=help',
+  }
+  const patterns = [
+    [/layer not found|no layer named/i, 'use qgis_layer action=list'],
+    [/layout not found|no layout named/i, 'use qgis_layout action=list'],
+    [/field .*not found|field not found/i, 'use qgis_layer action=fields'],
+    [/no map canvas|requires a gui/i, 'needs GUI session'],
+    [/permission denied|access is denied/i, 'file locked or no permission'],
+    [/no such file|file not found|not exist/i, 'check path'],
+    [/no value specified for parameter/i, 'use qgis_analysis action=help'],
+    [/could not load source layer/i, 'check layer name'],
+    [/processing plugin has not been loaded/i, 'restart QGIS'],
+  ]
+  let hint = ''
+  for (const [re, text] of patterns) {
+    if (re.test(body) || re.test(exc)) { hint = text; break }
+  }
+  if (!hint) hint = hints[type] || ''
+  const head = type ? `${type}: ${body}` : exc
+  let out = type ? `${type}: ${body}` : body
+  if (hint) out += ` (${hint})`
+  if (out.length > 160) out = out.slice(0, 156) + '...'
+  return out
 }
 
 /** Call one endpoint and unwrap { result } / { error } over the target channel. */
@@ -539,9 +586,9 @@ async function callQgis(route, method, body, signal, target) {
   const text = await resp.text()
   let data
   try { data = JSON.parse(text) } catch { data = { error: text || `HTTP ${resp.status}` } }
-  if (resp.status === 401) throw new Error('QGIS 凭证已过期或无效（Key/token 不匹配）')
+  if (resp.status === 401) throw new Error('QGIS auth failed: Key/token mismatch')
   if (data.error) {
-    throw new Error(typeof data.error === 'string' ? data.error : JSON.stringify(data.error))
+    throw new Error(tidyError(typeof data.error === 'string' ? data.error : JSON.stringify(data.error)))
   }
   return data.result
 }
@@ -596,7 +643,7 @@ export function apply(ctx, config = {}) {
           headers: { Authorization: `Bearer ${remote.token}` },
           signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
         })
-        if (resp.status === 401) throw new Error('QGIS 凭证已过期或无效（Key 不匹配）')
+        if (resp.status === 401) throw new Error('QGIS auth failed: Key mismatch')
         if (resp.status !== 200) throw new Error(`远程 QGIS 不可用：${remote.base}/api/health → HTTP ${resp.status}`)
       } catch (e) {
         if (e instanceof Error && e.message.includes('凭证')) throw e
