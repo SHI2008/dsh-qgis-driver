@@ -298,6 +298,14 @@ function ensureProfilePlugin(root) {
 }
 
 /** Spawn QGIS itself (no cmd.exe / batch wrapper). */
+function autostartLogPath(tag) {
+  const dir = path.join(os.tmpdir(), 'dsh-qgis-driver')
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+  } catch (e) { /* ignore */ }
+  return path.join(dir, `qgis-${tag}.log`)
+}
+
 function launchBuiltin(mode) {
   const root = findQgisRoot()
   if (!root) {
@@ -308,10 +316,17 @@ function launchBuiltin(mode) {
     const py = path.join(root, 'apps', 'Python312', 'python.exe')
     const script = path.join(bundleRepoRoot(), 'dsh-tools', 'scripts', 'qgis-headless.py')
     env.QGIS_LIVE_PLUGIN_ROOT = bundleRepoRoot()
+    const logPath = autostartLogPath('headless')
+    let out = 'ignore'
+    try {
+      out = fs.openSync(logPath, 'a')
+    } catch (e) {
+      out = 'ignore'
+    }
     const child = spawn(py, ['-u', script], {
-      env,
+      env: { ...env, PYTHONUNBUFFERED: '1' },
       detached: true,
-      stdio: 'ignore',
+      stdio: out === 'ignore' ? 'ignore' : ['ignore', out, out],
       windowsHide: true,
     })
     child.unref()
@@ -319,6 +334,12 @@ function launchBuiltin(mode) {
   }
   ensureProfilePlugin(root)
   const bin = path.join(root, 'bin', 'qgis-bin.exe')
+  let out = 'ignore'
+  try {
+    out = fs.openSync(autostartLogPath('gui'), 'a')
+  } catch (e) {
+    out = 'ignore'
+  }
   const child = spawn(bin, [], {
     env,
     detached: true,

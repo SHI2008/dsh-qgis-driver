@@ -74,4 +74,10 @@ except Exception:
     traceback.print_exc()
     sys.exit(3)
 
+# Keep the event loop alive: a bare QgsApplication.exec() returns as soon as the
+# last window closes, which used to make the headless runtime exit mid-session.
+from qgis.PyQt.QtCore import QTimer  # noqa: E402
+
+_keepalive = QTimer()
+_keepalive.start(1000)
 app.exec()

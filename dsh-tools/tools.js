@@ -18,9 +18,9 @@ from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
     QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer, QgsPalLayerSettings,
     QgsTextFormat, QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLegendStyle,
     QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer, QgsRendererRange, QgsRuleBasedRenderer,
-    QgsRendererCategory, QgsRectangle, QgsMapSettings, QgsMapRendererCustomPainterJob, Qgis)
+    QgsRendererCategory, QgsRectangle, QgsMapSettings, QgsMapRendererCustomPainterJob, QgsPointXY, Qgis)
 from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter
-from qgis.PyQt.QtCore import QSize
+from qgis.PyQt.QtCore import QSize, Qt
 prj = QgsProject.instance()
 P = json.loads(__PARAMS__)
 def _prj_extent():
@@ -37,6 +37,8 @@ def _prj_extent():
         else:
             ext.combineExtentWith(e)
     return None if ext is None or ext.isEmpty() else ext
+def io_open(path):
+    return open(path, 'r', encoding='utf-8', errors='ignore')
 _OUT = os.path.join(tempfile.gettempdir(), 'dsh-qgis-driver')
 try:
     os.makedirs(_OUT, exist_ok=True)
@@ -149,6 +151,16 @@ result = d`,
 l = L(P['layer'])
 result = [{'name': f.name(), 'type': f.typeName(), 'alias': f.alias()} for f in l.fields()]`,
   add: `
+# Suppress the "unknown CRS" prompt: a modal dialog would block the QGIS event
+# loop (the live driver polls from a timer) and hang every later tool call.
+try:
+    from qgis.core import QgsSettings
+    _s = QgsSettings()
+    _s.setValue('/Projections/defaultBehaviour', 'useProject')
+    if not _s.value('/Projections/layerDefaultCrs'):
+        _s.setValue('/Projections/layerDefaultCrs', 'EPSG:4326')
+except Exception:
+    pass
 path = P['path']
 prov = P.get('provider') or 'auto'
 name = P.get('name') or os.path.splitext(os.path.basename(path))[0]
@@ -161,6 +173,14 @@ for c in candidates:
         break
 if l is None:
     raise ValueError('cannot load: ' + path)
+_cf = P.get('crs_file')
+if _cf and os.path.isfile(_cf):
+    _c = QgsCoordinateReferenceSystem()
+    _c.createFromWkt(io_open(_cf).read())
+    if _c.isValid():
+        l.setCrs(_c)
+        if P.get('set_project'):
+            prj.setCrs(_c)
 prj.addMapLayer(l)
 result = {'id': l.id(), 'name': l.name(), 'type': 'Vector' if isinstance(l, QgsVectorLayer) else 'Raster',
           'crs': l.crs().authid() or l.crs().description(),
@@ -673,6 +693,14 @@ if P.get('page_width') and P.get('page_height'):
     pg = lay.pageCollection().pages()[0]
     pg.setPageSize(QgsLayoutSize(float(P['page_width']), float(P['page_height']), MM()))
 lm.addLayout(lay)
+_bg = P.get('background')
+if _bg:
+    _pg = lay.pageCollection().pages()[0]
+    _s = QgsLayoutItemShape(lay); _s.setShapeType(QgsLayoutItemShape.Rectangle)
+    _s.setSymbol(QgsFillSymbol.createSimple({'color': _bg, 'outline_color': _bg, 'outline_width': '0'}))
+    lay.addLayoutItem(_s); _s.setZValue(-1000)
+    _s.attemptMove(QgsLayoutPoint(0, 0, MM()))
+    _s.attemptResize(QgsLayoutSize(_pg.pageSize().width(), _pg.pageSize().height(), MM()))
 result = {'name': lay.name(), 'layouts': [l.name() for l in lm.layouts()]}`,
   info: `
 lay = LAYOUT(P['layout'])
@@ -695,7 +723,9 @@ lay = LAYOUT(P['layout'])
 kind = P['kind']
 x = float(P.get('x') or 0); y = float(P.get('y') or 0)
 w = P.get('width'); h = P.get('height')
+z = P.get('z')
 layers = [L(n) for n in (P.get('layers') or [])]
+item = None
 if kind == 'map':
     if w is None:
         raise ValueError('kind=map requires width')
@@ -714,8 +744,11 @@ if kind == 'map':
         if h is None:
             h = float(w) * 0.6
         m.attemptResize(QgsLayoutSize(float(w), float(h), MM()))
+    m.setBackgroundEnabled(True)
+    m.setBackgroundColor(QColor(P.get('background') or '#ffffff'))
     if layers:
-        m.setLayers(layers); m.setKeepLayerSet(True)
+        m.setLayers(layers)
+        m.setKeepLayerSet(True)
     if target is not None:
         m.zoomToExtent(target.extent())
     m.invalidateCache()
@@ -795,30 +828,171 @@ elif kind == 'text':
         raise ValueError('kind=text requires text')
     t = QgsLayoutItemLabel(lay)
     t.setText(P['text'])
-    f = QFont(P.get('family') or 'Microsoft YaHei', int(P.get('size') or 10))
+    f = QFont(P.get('family') or 'Microsoft YaHei')
+    f.setPointSizeF(float(P.get('size') or 10))
     f.setBold(bool(P.get('bold')))
     t.setFont(f)
-    t.setFontColor(QColor(P.get('color') or '#1a1a1a'))
-    t.adjustSizeToText()
+    t.setFontColor(QColor(P.get('color') or '#2E2A24'))
     lay.addLayoutItem(t)
-    t.attemptMove(QgsLayoutPoint(x, y, MM()))
+    al = str(P.get('align') or 'left').lower()
+    if w is not None:
+        t.attemptMove(QgsLayoutPoint(x, y, MM()))
+        t.attemptResize(QgsLayoutSize(float(w), float(h or 6), MM()))
+        t.setHAlign(Qt.AlignmentFlag.AlignRight if al.startswith('r') else (Qt.AlignmentFlag.AlignHCenter if al.startswith('c') else Qt.AlignmentFlag.AlignLeft))
+    else:
+        t.adjustSizeToText()
+        t.attemptMove(QgsLayoutPoint(x, y, MM()))
     item = t
 elif kind == 'rect':
     if w is None or h is None:
         raise ValueError('kind=rect requires width and height')
     s = QgsLayoutItemShape(lay)
     s.setShapeType(QgsLayoutItemShape.Rectangle)
-    sym = QgsFillSymbol.createSimple({'color': P.get('color') or '#ffffff',
-                                      'outline_color': P.get('outline_color') or 'transparent',
-                                      'outline_width': str(P.get('outline_width') or 0)})
-    s.setSymbol(sym)
+    s.setSymbol(QgsFillSymbol.createSimple({'color': P.get('color') or '#ffffff',
+                                            'outline_color': P.get('outline_color') or 'transparent',
+                                            'outline_width': str(P.get('outline_width') or 0)}))
     lay.addLayoutItem(s)
     s.attemptMove(QgsLayoutPoint(x, y, MM()))
     s.attemptResize(QgsLayoutSize(float(w), float(h), MM()))
     item = s
+elif kind == 'swatch':
+    shape = str(P.get('shape') or 'circle').lower()
+    col = QColor(P.get('color') or '#B04A32')
+    sz = float(P.get('size') or 3)
+    if shape == 'line':
+        s = QgsLayoutItemShape(lay)
+        s.setShapeType(QgsLayoutItemShape.Rectangle)
+        s.setSymbol(QgsFillSymbol.createSimple({'color': col.name(), 'outline_color': col.name(), 'outline_width': '0'}))
+        lay.addLayoutItem(s)
+        s.attemptMove(QgsLayoutPoint(x, y, MM()))
+        s.attemptResize(QgsLayoutSize(float(P.get('length') or 12), float(P.get('line_width') or 0.5), MM()))
+    else:
+        s = QgsLayoutItemShape(lay)
+        s.setShapeType(QgsLayoutItemShape.Ellipse if shape == 'circle' else QgsLayoutItemShape.Rectangle)
+        s.setSymbol(QgsFillSymbol.createSimple({'color': col.name(),
+                                                'outline_color': P.get('outline_color') or col.name(),
+                                                'outline_width': str(P.get('outline_width') or 0.15)}))
+        lay.addLayoutItem(s)
+        s.attemptMove(QgsLayoutPoint(x, y, MM()))
+        s.attemptResize(QgsLayoutSize(sz, sz, MM()))
+    item = s
+elif kind == 'graticule':
+    maps = [it for it in lay.items() if it.type() == 65639]
+    if not maps:
+        raise ValueError('graticule requires a map item first')
+    m = maps[int(P.get('map') or 0)]
+    step = float(P.get('step') or 1)
+    col = QColor(P.get('color') or '#A99C83')
+    lw = float(P.get('width') or 0.15)
+    pos = m.positionWithUnits()
+    sz = m.sizeWithUnits()
+    mx = pos.x(); my = pos.y(); mw = sz.width(); mh = sz.height()
+    ext = m.extent()
+    mcr = m.crs()
+    src = QgsCoordinateReferenceSystem('EPSG:4326')
+    fwd = QgsCoordinateTransform(src, mcr, prj)
+    inv = QgsCoordinateTransform(mcr, src, prj)
+    ctr = QgsPointXY((ext.xMinimum() + ext.xMaximum()) / 2.0, (ext.yMinimum() + ext.yMaximum()) / 2.0)
+    cg = inv.transform(ctr)
+    corners = []
+    for px, py in ((ext.xMinimum(), ext.yMinimum()), (ext.xMaximum(), ext.yMinimum()),
+                   (ext.xMinimum(), ext.yMaximum()), (ext.xMaximum(), ext.yMaximum())):
+        try:
+            corners.append(inv.transform(QgsPointXY(px, py)))
+        except Exception:
+            pass
+    gx = [c.x() for c in corners] or [cg.x()]
+    gy = [c.y() for c in corners] or [cg.y()]
+    made = []
+    lon = step * round(min(gx) / step)
+    while lon <= max(gx) + step * 0.5:
+        try:
+            q = fwd.transform(QgsPointXY(lon, cg.y()))
+            px = mx + (q.x() - ext.xMinimum()) / (ext.xMaximum() - ext.xMinimum()) * mw
+        except Exception:
+            px = None
+        if px is not None and mx - 0.5 <= px <= mx + mw + 0.5:
+            s = QgsLayoutItemShape(lay)
+            s.setShapeType(QgsLayoutItemShape.Rectangle)
+            s.setSymbol(QgsFillSymbol.createSimple({'color': col.name(), 'outline_color': col.name(), 'outline_width': '0'}))
+            lay.addLayoutItem(s)
+            s.attemptMove(QgsLayoutPoint(px - lw / 2.0, my, MM()))
+            s.attemptResize(QgsLayoutSize(lw, mh, MM()))
+            made.append(s)
+            if P.get('labels', True):
+                t = QgsLayoutItemLabel(lay)
+                t.setText('%g°E' % lon)
+                f = QFont(P.get('family') or 'Microsoft YaHei')
+                f.setPointSizeF(float(P.get('label_size') or 7))
+                t.setFont(f)
+                t.setFontColor(col)
+                t.adjustSizeToText()
+                lay.addLayoutItem(t)
+                t.attemptMove(QgsLayoutPoint(px - 4.2, my - 4.6, MM()))
+                made.append(t)
+        lon += step
+    lat = step * round(min(gy) / step)
+    while lat <= max(gy) + step * 0.5:
+        try:
+            q = fwd.transform(QgsPointXY(cg.x(), lat))
+            py = my + (ext.yMaximum() - q.y()) / (ext.yMaximum() - ext.yMinimum()) * mh
+        except Exception:
+            py = None
+        if py is not None and my - 0.5 <= py <= my + mh + 0.5:
+            s = QgsLayoutItemShape(lay)
+            s.setShapeType(QgsLayoutItemShape.Rectangle)
+            s.setSymbol(QgsFillSymbol.createSimple({'color': col.name(), 'outline_color': col.name(), 'outline_width': '0'}))
+            lay.addLayoutItem(s)
+            s.attemptMove(QgsLayoutPoint(mx, py - lw / 2.0, MM()))
+            s.attemptResize(QgsLayoutSize(mw, lw, MM()))
+            made.append(s)
+            if P.get('labels', True):
+                t = QgsLayoutItemLabel(lay)
+                t.setText('%g°N' % lat)
+                f = QFont(P.get('family') or 'Microsoft YaHei')
+                f.setPointSizeF(float(P.get('label_size') or 7))
+                t.setFont(f)
+                t.setFontColor(col)
+                t.adjustSizeToText()
+                lay.addLayoutItem(t)
+                t.attemptMove(QgsLayoutPoint(mx - 7.6, py - 2.2, MM()))
+                made.append(t)
+        lat += step
+    item = made[0] if made else None
+elif kind == 'table':
+    rows = P.get('rows') or []
+    widths = [float(v) for v in (P.get('widths') or [])]
+    rh = float(P.get('row_height') or 5.2)
+    fs = float(P.get('size') or 7.4)
+    fam = P.get('family') or 'Microsoft YaHei'
+    col = QColor(P.get('color') or '#2E2A24')
+    al = str(P.get('align') or 'left').lower()
+    for ri, row in enumerate(rows):
+        cx = x
+        for ci, cell in enumerate(row):
+            cw = widths[ci] if ci < len(widths) else 20.0
+            t = QgsLayoutItemLabel(lay)
+            t.setText(str(cell))
+            f = QFont(fam)
+            f.setPointSizeF(fs)
+            f.setBold(bool(P.get('bold')) or (ri == 0 and bool(P.get('header'))))
+            t.setFont(f)
+            t.setFontColor(col)
+            lay.addLayoutItem(t)
+            t.attemptMove(QgsLayoutPoint(cx, y + ri * rh, MM()))
+            t.attemptResize(QgsLayoutSize(cw, rh, MM()))
+            t.setHAlign(Qt.AlignmentFlag.AlignRight if al.startswith('r') else Qt.AlignmentFlag.AlignLeft)
+            cx += cw
+    item = None
 else:
     raise ValueError('unknown kind: ' + str(kind))
-result = {'layout': lay.name(), 'kind': kind, 'rect': rect_of(item)}`,
+if item is not None and z is not None:
+    item.setZValue(float(z))
+if item is not None:
+    rect = rect_of(item)
+else:
+    rect = [x, y, float(w or sum([float(v) for v in (P.get('widths') or [])])), float(h or 0)]
+result = {'layout': lay.name(), 'kind': kind, 'rect': rect}`,
   update_item: `
 lay = LAYOUT(P['layout'])
 items = [it for it in lay.items() if isinstance(it, QgsLayoutItem)]
@@ -1211,9 +1385,9 @@ export function registerConsolidatedTools(deps) {
     },
   });
 
-  const call = async (body, args, exec) => {
+  const call = async (body, args, exec, opts) => {
     const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(args || {}))) + body;
-    return asText(await run(code, exec?.signal, args?.action === undefined ? undefined : undefined));
+    return asText(await run(code, exec?.signal, opts));
   };
 
   // ---------------- project
@@ -1226,6 +1400,7 @@ export function registerConsolidatedTools(deps) {
         action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs'] },
         path: { type: 'string' },
         crs: { type: 'string' },
+        crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
       },
       required: ['action'],
     },
@@ -1247,6 +1422,7 @@ export function registerConsolidatedTools(deps) {
         provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
         geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'] },
         crs: { type: 'string' },
+        crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
         fields: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'create: [{name,type}]' },
         visible: { type: 'boolean' },
         set_project: { type: 'boolean', description: 'also set project CRS' },
@@ -1323,7 +1499,20 @@ export function registerConsolidatedTools(deps) {
         page_height: { type: 'number' },
         index: { type: 'integer' },
         remove: { type: 'boolean' },
-        kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect'] },
+        kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },
+        background: { type: 'string', description: 'page/map background #rrggbb' },
+        z: { type: 'number' },
+        map: { type: 'integer', description: 'graticule: map item index' },
+        step: { type: 'number', description: 'graticule step in degrees' },
+        labels: { type: 'boolean', description: 'graticule degree labels' },
+        label_size: { type: 'number' },
+        shape: { type: 'string', enum: ['circle', 'line', 'polygon'] },
+        length: { type: 'number', description: 'swatch line length' },
+        line_width: { type: 'number' },
+        rows: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+        widths: { type: 'array', items: { type: 'number' } },
+        row_height: { type: 'number' },
+        header: { type: 'boolean' },
         x: { type: 'number' },
         y: { type: 'number' },
         width: { type: 'number' },
@@ -1394,6 +1583,7 @@ export function registerConsolidatedTools(deps) {
         xmin: { type: 'number' }, ymin: { type: 'number' },
         xmax: { type: 'number' }, ymax: { type: 'number' },
         crs: { type: 'string' },
+        crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
         layer: { type: 'string' },
       },
       required: ['action'],
@@ -1404,7 +1594,9 @@ export function registerConsolidatedTools(deps) {
         const out = await runCmd('screenshot', { target: args?.target || 'canvas' }, exec?.signal);
         return asText(out);
       }
-      return call(MAP_BODY[args?.action], args, exec);
+      const a = args?.action;
+      const gui = a === 'set_extent' || a === 'zoom_to_layer' || a === 'screenshot';
+      return call(MAP_BODY[a], args, exec, gui ? { gui: true } : undefined);
     },
   });
 
