@@ -715,7 +715,7 @@ elif kind == 'legend':
     base = first_map(lay)
     if base is not None:
         lg.setLinkedMap(base)
-    lg.setTitle(P.get('title') or '图例')
+    _legend_title = P.get('title') or '图例'
     lg.setAutoUpdateModel(False)
     lay.addLayoutItem(lg)
     lg.attemptMove(QgsLayoutPoint(x, y, MM()))
@@ -729,6 +729,7 @@ elif kind == 'legend':
     lg.setStyleFont(QgsLegendStyle.Style.Subgroup, QFont(fam, 8))
     lg.setStyleFont(QgsLegendStyle.Style.SymbolLabel, QFont(fam, 8))
     lg.updateLegend()
+    lg.setTitle(_legend_title)
     if h is None:
         rows = 0
         for ch in root.children():
