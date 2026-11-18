@@ -349,7 +349,7 @@ opts.fileEncoding = 'UTF-8'
 ret = QgsVectorFileWriter.writeAsVectorFormatV3(l, path, prj.transformContext(), opts)
 if int(ret[0]) != 0:
     raise ValueError('write failed: ' + str(ret))
-result = {'path': path, 'format': fmt, 'bytes': os.path.getsize(path)}`,
+result = {'path': path, 'file_path': path, 'format': fmt, 'bytes': os.path.getsize(path)}`,
   export_table: `
 l = L(P['layer'])
 fields = [f.name() for f in l.fields()]
@@ -364,7 +364,7 @@ if path:
         import csv
         with open(path, 'w', encoding='utf-8-sig', newline='') as fh:
             w = csv.writer(fh); w.writerow(fields); w.writerows(rows)
-    result = {'path': path, 'rows': len(rows), 'columns': fields}
+    result = {'path': path, 'file_path': path, 'rows': len(rows), 'columns': fields}
 elif fmt == 'json':
     result = {'fields': fields, 'rows': rows[:10000], 'truncated': len(rows) > 10000}
 else:
@@ -1001,9 +1001,14 @@ if fmt == 'pdf':
     r = QgsLayoutExporter(lay).exportToPdf(path, st)
     if r != 0 or not os.path.exists(path):
         raise RuntimeError('layout pdf export failed (result %s)' % r)
+    fd2, png = tempfile.mkstemp(suffix='.png'); os.close(fd2); os.remove(png)
+    st2 = QgsLayoutExporter.ImageExportSettings()
+    st2.dpi = int(P.get('dpi') or 300)
+    r2 = QgsLayoutExporter(lay).exportToImage(png, st2)
     result = {'format': 'pdf', 'result': r, 'size_bytes': os.path.getsize(path),
               'file_path': path if P.get('path') else _publish(path, 'pdf'),
-              'hint': 'PDF 已写出，用外部查看器打开该路径'}
+              'image_path': _publish(png, 'png') if r2 == 0 and os.path.exists(png) else None,
+              'hint': 'image_path 是 PNG 预览（用 read_image 看）；file_path 是交付用 PDF'}
 else:
     import base64, tempfile
     for _it in lay.items():
@@ -1043,8 +1048,14 @@ lay.refresh()
 os.remove(path)
 if st is None:
     r = QgsLayoutExporter(lay).exportToPdf(path, QgsLayoutExporter.PdfExportSettings())
+    fd2, png = tempfile.mkstemp(suffix='.png'); os.close(fd2); os.remove(png)
+    st2 = QgsLayoutExporter.ImageExportSettings()
+    st2.dpi = int(P.get('dpi') or 200)
+    r2 = QgsLayoutExporter(lay).exportToImage(png, st2)
     result = {'format': 'pdf', 'pages': n, 'result': r, 'size_bytes': os.path.getsize(path),
-              'file_path': _publish(path, 'pdf')}
+              'file_path': _publish(path, 'pdf'),
+              'image_path': _publish(png, 'png') if r2 == 0 and os.path.exists(png) else None,
+              'hint': 'image_path 是 PNG 预览（用 read_image 看）；file_path 是交付用 PDF'}
 else:
     st.dpi = int(P.get('dpi') or 300)
     r = QgsLayoutExporter(lay).exportToImage(path, st)

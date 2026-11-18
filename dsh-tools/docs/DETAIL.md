@@ -107,6 +107,23 @@ Repeated operations run in a single `pyeval`: pass an array, get `{count, result
 The single-object form (`kind` / `layer` / `field` / `algorithm`) is unchanged; array and
 single form are mutually exclusive per call.
 
+### Outputs (one shape for every action)
+
+Everything visual comes back as a **PNG under `%TEMP%\dsh-qgis-driver\`**, in `image_path`,
+and is read with the `read_image` tool. PNG is the only format the model can look at directly,
+so it is always produced:
+
+| action | returns |
+|---|---|
+| `qgis_layout export|export_atlas` (`format` omitted or `png`) | `image_path`, `size_bytes` |
+| `qgis_layout export|export_atlas` (`format: "pdf"`) | `image_path` (PNG preview) + `file_path` (PDF for delivery) |
+| `qgis_map render|screenshot` | `image_path`, `width`, `height` |
+| `qgis_layer export`, `qgis_layer export_table` | `file_path` (= `path`), `bytes` / `rows` |
+
+`formats: ["png","pdf"]` yields one result per format; both carry `image_path`, the PDF one adds
+`file_path`. Never request `format: "pdf"` when you only need to look at the map — the PNG entry
+alone is cheaper.
+
 `layout` and `layout_name` are interchangeable for every `qgis_layout` action.
 returns both.
 

@@ -22,6 +22,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
   `<stem>_<layer><ext>`.
 - Field ops return `{layer, field}` instead of dumping the whole field list.
 
+### Changed
+- One output shape for every action: all visual results are a PNG `image_path` (read with
+  `read_image`); a PDF export additionally returns `file_path` and its PNG preview, so the
+  model never has to guess which of PNG/PDF came back. Vector/table exports return `file_path`.
+
 ### Fixed
 - `layout` and `layout_name` are now accepted interchangeably by every `qgis_layout` action
   (previously `add_item` required `layout` while `export` required `layout_name`).
