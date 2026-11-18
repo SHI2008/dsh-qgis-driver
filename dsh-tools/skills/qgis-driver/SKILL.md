@@ -87,3 +87,25 @@ runs headless. `screenshot` returns `{target, image_path}` like every other visu
 - Never reuse a renderer's own symbol when re-styling — clone it.
 - `initializeDefaults()` is required before exporting a layout (the create action does it).
 - `QgsProject` has no `extent()`; use layer extents.
+
+### Raw PyQGIS: the API mismatches that actually happen
+
+These are the failures recorded from real `execute_qgis_sync` calls on QGIS 4.2. Every one of
+them is a QGIS 3 name, a wrong target object, or a stale C++ object:
+
+| you wrote | what QGIS 4.2 wants |
+|---|---|
+| `QgsLayoutExporter(lay).exportToImage/exportToPdf` → `IndexError: list index out of range` | composition has no page or is stale — call `qgis_layout export` (it rebuilds); raw export only right after `create` + `add_item` |
+| `fmt.setBufferEnabled(True)` | `buf = QgsTextBufferSettings(); buf.setEnabled(True); fmt.setBuffer(buf)` |
+| `legend.model().setLegendFilterByMapEnabled(...)` | `setLegendFilterByMap(True)` (renamed in QGIS 4) |
+| `raster.setProviderKey("gdal")` | providers come from the URI — `setDataSource(uri)`, or the tool's `provider` argument |
+| `layer.setItemVisibilityChecked(False)` | that is a layer-tree call: `prj.layerTreeRoot().findLayer(layer.id()).setItemVisibilityChecked(False)` |
+| `QgsSingleSymbolRenderer(QgsSimpleLineSymbolLayer())` | pass the symbol: `QgsLineSymbol()` / `QgsMarkerSymbol()` / `QgsFillSymbol()` |
+| `renderer.symbol` on categorized/graduated | `renderer.symbols()` (list) or `renderer.updateSymbols(...)` |
+| `Qt.CompositionMode_*` | painter constants: `QPainter.CompositionMode_*` |
+| reusing `lay` across calls → `wrapped C/C++ object ... has been deleted` | the object was collected; keep it on the project (`prj.addLayout(lay)`) and rebuild instead of reusing the old handle |
+
+For anything beyond this page, load the locally installed **`pyqgis` skill** (covers
+`QgsApplication.initQgis`, `processing.run` after `Processing.initialize()`, rendering and layout
+recipes) instead of guessing the API — one skill read is cheaper than three tracebacks.
+

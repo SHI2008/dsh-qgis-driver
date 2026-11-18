@@ -70,7 +70,7 @@ one tool keeps the first-turn prompt small — 10 descriptions instead of the
 
 | Tool | Actions |
 | --- | --- |
-| `execute_qgis_sync` | run PyQGIS on the QGIS main thread (short tasks only, < 3 s) |
+| `execute_qgis_sync` | run PyQGIS on the QGIS main thread (short tasks only, < 3 s); load the `qgis-driver` skill before writing raw API, it lists the QGIS 4 renames that actually trip models |
 | `submit_qgis_async` | run Python off-thread, returns a `task_id`; `tasks=[{name,code}] + max_workers` submits a bounded worker pool |
 | `check_qgis_task` | poll an async task (result is popped on first read); `task_ids=[…]` polls a whole group |
 | `qgis_project` | `info` / `open` / `save` / `save_as` / `set_crs` |
