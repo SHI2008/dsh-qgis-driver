@@ -39,6 +39,7 @@ another plugin, and the result returns to the caller's results.jsonl
 (so this driver is the unified control point for all plugins).
 """
 
+import concurrent.futures
 import datetime
 import hmac
 import inspect
@@ -59,6 +60,10 @@ POLL_MS = 200
 # Auto-numbering for commands without an id (HTTP /api/* etc.). In the target eval
 # cid is the key matched against JS reports, so leaving it None drops all results
 _AUTO_IDS = itertools.count(1)
+
+# Live worker pools for pyeval_group. Kept referenced for as long as tasks are
+# queued — a collected ThreadPoolExecutor would drop its pending work.
+_GROUP_POOLS = []
 
 # Kinds that use plugin_id as their own command argument, not as a route.
 # These are always handled by this driver itself.
@@ -467,17 +472,24 @@ class TaskRegistry:
         self._lock = threading.Lock()
         self._ttl = ttl
 
-    def new(self):
+    def new(self, name=None, status="running"):
         task_id = secrets.token_hex(12)
         with self._lock:
             self._tasks[task_id] = {
                 "task_id": task_id,
-                "status": "running",
+                "name": name or "",
+                "status": status,
                 "result": None,
                 "error": None,
                 "created": time.monotonic(),
             }
         return task_id
+
+    def set_status(self, task_id, status):
+        with self._lock:
+            t = self._tasks.get(task_id)
+            if t is not None and t["status"] not in ("done", "error"):
+                t["status"] = status
 
     def finish(self, task_id, result=None, error=None):
         with self._lock:
@@ -502,7 +514,7 @@ class TaskRegistry:
         with self._lock:
             stale = [k for k, v in self._tasks.items()
                      if now - v["created"] > self._ttl
-                     and v["status"] == "running"]
+                     and v["status"] in ("running", "queued")]
             for k in stale:
                 self._tasks.pop(k, None)
 
@@ -676,6 +688,9 @@ class LiveDriver:
             return
         if ctype == "pyeval_async":
             self._pyeval_async(cid, cmd.get("code", ""), reply)
+            return
+        if ctype == "pyeval_group":
+            self._pyeval_group(cid, cmd, reply)
             return
         if ctype == "task_status":
             self._task_status(cid, cmd.get("task_id", ""), reply)
@@ -1067,6 +1082,21 @@ class LiveDriver:
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
+    def _pyeval_group(self, cid, cmd, reply):
+        """Start several background pyeval tasks through one bounded worker pool.
+
+        Unlike pyeval_async (one daemon thread per task, unbounded), every task
+        here is queued in a pool of at most max_workers threads, so a long
+        processing split over many shards cannot oversubscribe the machine.
+        Tasks register immediately as queued and go running as workers pick
+        them up; poll each task_id with task_status.
+        """
+        try:
+            started = self.submit_pyeval_group(cmd.get("tasks"), cmd.get("max_workers"))
+            reply({"id": cid, "result": {"tasks": started, "count": len(started)}})
+        except Exception:
+            reply({"id": cid, "error": traceback.format_exc()})
+
     def _task_status(self, cid, task_id, reply):
         """Return one background task's state (popping a finished task)."""
         try:
@@ -1106,6 +1136,53 @@ class LiveDriver:
 
         threading.Thread(target=_run, daemon=True).start()
         return task_id
+
+    def submit_pyeval_group(self, tasks, max_workers=4):
+        """Queue pure-Python shards in one bounded pool; return [{name, task_id}].
+
+        Each shard runs in its own namespace with no QGIS objects, exactly like
+        submit_pyeval_async, but at most max_workers of them run at once.
+        """
+        items = [t for t in (tasks or [])
+                 if isinstance(t, dict) and str(t.get("code") or "").strip()]
+        if not items:
+            raise ValueError("tasks 不能为空（每项 {name, code}）")
+        workers = max(1, min(int(max_workers or 4), 32, len(items)))
+        started = []
+        for it in items:
+            name = str(it.get("name") or "")
+            started.append({"name": name,
+                            "task_id": self.tasks.new(name=name, status="queued")})
+
+        def _run(task_id, code):
+            self.tasks.set_status(task_id, "running")
+            local_ns = {}
+            try:
+                try:
+                    code_obj = compile(code, "<pyeval_group>", "eval")
+                except SyntaxError:
+                    code_obj = compile(code, "<pyeval_group>", "exec")
+                res = eval(code_obj, {}, local_ns)  # nosec B307  # arbitrary execution is intended
+                if res is None:
+                    res = local_ns.get("result")
+                self.tasks.finish(task_id, result=_to_jsonable(res))
+            except Exception:
+                self.tasks.finish(task_id, error=traceback.format_exc())
+
+        # Prune pools whose work is finished, then keep this one referenced.
+        for pool in list(_GROUP_POOLS):
+            try:
+                if not any(t.is_alive() for t in getattr(pool, "_threads", ())):
+                    _GROUP_POOLS.remove(pool)
+            except Exception:
+                pass
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers,
+                                                     thread_name_prefix="pyeval-group")
+        _GROUP_POOLS.append(pool)
+        for entry, it in zip(started, items):
+            pool.submit(_run, entry["task_id"], str(it.get("code")))
+        pool.shutdown(wait=False)
+        return started
 
     def _reply(self, obj):
         os.makedirs(os.path.dirname(self.res_path), exist_ok=True)

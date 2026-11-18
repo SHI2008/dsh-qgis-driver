@@ -456,6 +456,9 @@ function tailIncludes(file, needle, maxBytes) {
 function routeToCommand(route, body) {
   if (route === '/api/pyeval') return { type: 'pyeval', code: body?.code }
   if (route === '/api/pyeval_async') return { type: 'pyeval_async', code: body?.code }
+  if (route === '/api/pyeval_group') {
+    return { type: 'pyeval_group', tasks: body?.tasks || [], max_workers: body?.max_workers }
+  }
   if (route === '/api/cmd') return { ...(body || {}) }
   const m = /^\/api\/tasks\/([^/]+)$/.exec(route || '')
   if (m) return { type: 'task_status', task_id: decodeURIComponent(m[1]) }

@@ -6,6 +6,10 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Added
+- `pyeval_group` command / `POST /api/pyeval_group`: submit `{tasks: [{name, code}], max_workers}`
+  and the plugin queues every shard, then runs it in one shared `ThreadPoolExecutor` (default 4,
+  cap 32) instead of one unthrottled thread per task. Task entries now carry `name` and start as
+  `queued`, so a group is pollable item by item with the existing `task_status` channel.
 - Batch execution for repeated operations (one round-trip instead of N), all returning
   `{count, results}`: `qgis_layer add` (`paths`), `qgis_layer style|symbol|classify|export`
   (`layers`), `qgis_feature query|select|select_by_location|update|delete` (`layers`),

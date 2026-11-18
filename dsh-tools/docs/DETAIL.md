@@ -71,8 +71,8 @@ one tool keeps the first-turn prompt small — 10 descriptions instead of the
 | Tool | Actions |
 | --- | --- |
 | `execute_qgis_sync` | run PyQGIS on the QGIS main thread (short tasks only, < 3 s) |
-| `submit_qgis_async` | run Python off-thread, returns a `task_id` |
-| `check_qgis_task` | poll an async task (result is popped on first read) |
+| `submit_qgis_async` | run Python off-thread, returns a `task_id`; `tasks=[{name,code}] + max_workers` submits a bounded worker pool |
+| `check_qgis_task` | poll an async task (result is popped on first read); `task_ids=[…]` polls a whole group |
 | `qgis_project` | `info` / `open` / `save` / `save_as` / `set_crs` |
 | `qgis_layer` | `list` / `info` / `fields` / `add` / `create` / `remove` / `visibility` / `crs` / `style` / `symbol` / `classify` / `style_multi` / `style_rule` / `labels` / `annotate` / `reproject` / `export` / `export_table` |
 | `qgis_feature` | `query` / `table` / `select` / `select_by_location` / `selected` / `add` / `update` / `delete` / `field_add` / `field_calc` / `field_delete` / `field_rename` |
@@ -106,6 +106,29 @@ Repeated operations run in a single `pyeval`: pass an array, get `{count, result
 
 The single-object form (`kind` / `layer` / `field` / `algorithm`) is unchanged; array and
 single form are mutually exclusive per call.
+
+### Parallel shards (`tasks[]`)
+
+`submit_qgis_async` also takes `tasks: [{name, code}]` plus `max_workers` (default 4, cap 32).
+The plugin registers every shard as a `queued` task up front, then runs them in one shared
+`ThreadPoolExecutor`, so N shards never spin up N unthrottled threads. It replies immediately:
+
+```jsonc
+{"tasks": [{"name": "shard-1", "task_id": "…"}, …], "count": 2}
+```
+
+Poll the group in one call with `check_qgis_task {"task_ids": ["…", "…"]}`; unfinished shards
+report `queued` / `running`, finished ones are popped on first read exactly like a single task.
+
+Channel details: the plugin command is `pyeval_group` (`POST /api/pyeval_group`, body
+`{tasks, max_workers}`), and the file channel maps `/api/pyeval_group` in `routeToCommand()`.
+If the plugin predates the endpoint, the bundle falls back to one `/api/pyeval_async` per shard
+and adds a `note` to the result — same shape, no concurrency cap.
+
+What it buys, measured on this machine: I/O shards (4 × 0.4 s) go from **1.61 s** at
+`max_workers=1` to **0.41 s** at 4. numpy/BLAS shards do **not** speed up (8 × 600² matmul:
+1.09 s vs 1.11 s) — BLAS already saturates the cores, parallel shards only oversubscribe;
+pure-Python CPU shards are GIL-bound. Shard I/O and per-file work, not linear algebra.
 
 ### Outputs (one shape for every action)
 

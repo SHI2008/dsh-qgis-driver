@@ -19,7 +19,7 @@ round-trip, while hand-written pyeval is one round-trip per step.
 | `qgis_analysis` | list / help / run / zonal_stats / reclassify |
 | `qgis_map` | render / screenshot / set_extent / zoom_to_layer |
 | `qgis_plugin` | status / describe / open / reload / bridge / instruction |
-| `execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task` | escape hatch for anything not covered |
+| `execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task` | escape hatch for anything not covered; `submit_qgis_async` takes `tasks=[{name,code}] + max_workers` for a bounded worker pool, `check_qgis_task` takes `task_ids=[]` for a whole group |
 
 ## Rules
 
@@ -43,6 +43,11 @@ round-trip, while hand-written pyeval is one round-trip per step.
 5. **Check what exists** before acting: `qgis_layer action=list`, `qgis_layout action=list`,
    `qgis_project action=info`. Names are case-sensitive; use `id` when names collide.
 6. **No status polling loops.** `qgis_plugin action=status` only when a call fails.
+7. **Parallel shards for long jobs.** `submit_qgis_async tasks=[{name,code}] max_workers=N`
+   runs the shards in one bounded pool and `check_qgis_task task_ids=[…]` polls them in one
+   call. Shards are pure Python (no `iface`/`QgsProject`) and pay off on I/O and per-file work,
+   not on numpy/BLAS. Reads may fan out across subagents; **writes stay serial** — one agent
+   owns project/layout mutation. See the `qgis-batch-parallel` skill before splitting a run.
 
 ## Availability
 

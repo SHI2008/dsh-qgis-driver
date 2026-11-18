@@ -1371,31 +1371,71 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: 'Run Python on a worker thread (no QGIS objects). Returns task_id; poll with check_qgis_task.',
+    description: 'Run Python on a worker thread (no QGIS objects). Returns task_id; poll with check_qgis_task. Batch: tasks=[{name,code}] runs as one bounded pool of max_workers threads (default 4, max 32) - use it to split a long processing run across cores.',
     parameters: {
       type: 'object',
-      properties: { code: { type: 'string' } },
-      required: ['code'],
+      properties: {
+        code: { type: 'string', description: 'single task body (pure Python)' },
+        tasks: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'batch [{name, code}] submitted as one worker pool' },
+        max_workers: { type: 'integer', description: 'pool size for tasks (default 4, max 32)' },
+      },
+      required: [],
     },
     output: stringOutput,
     async execute(args, exec) {
       const target = await deps.resolve();
-      return asText(await deps.callRaw('/api/pyeval_async', 'POST', { code: String(args?.code ?? '') }, exec?.signal, target));
+      const group = Array.isArray(args?.tasks)
+        ? args.tasks.filter((t) => t && typeof t.code === 'string' && t.code.trim())
+        : [];
+      if (group.length) {
+        const workers = Math.max(1, Math.min(Number(args?.max_workers) || 4, 32));
+        try {
+          return asText(await deps.callRaw('/api/pyeval_group', 'POST', { tasks: group, max_workers: workers }, exec?.signal, target));
+        } catch (e) {
+          if (!/not found|unsupported endpoint|不支持/i.test(String(e && e.message))) throw e;
+          // Older plugin without the group endpoint: submit each shard on its own.
+          const started = await Promise.all(group.map(async (t) => {
+            const r = await deps.callRaw('/api/pyeval_async', 'POST', { code: String(t.code) }, exec?.signal, target);
+            return { name: t.name || '', ...(r && typeof r === 'object' ? r : { result: r }) };
+          }));
+          return asText({ tasks: started, count: started.length, note: 'plugin has no /api/pyeval_group; submitted individually (no concurrency cap)' });
+        }
+      }
+      const code = String(args?.code ?? '');
+      if (!code.trim()) throw new Error('give code or tasks');
+      return asText(await deps.callRaw('/api/pyeval_async', 'POST', { code }, exec?.signal, target));
     },
   });
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll a task from submit_qgis_async. done/error is evicted after the first read.',
+    description: 'Poll a task from submit_qgis_async. done/error is evicted after the first read. Batch: task_ids=[...] checks a whole group in one call.',
     parameters: {
       type: 'object',
-      properties: { task_id: { type: 'string' } },
-      required: ['task_id'],
+      properties: {
+        task_id: { type: 'string' },
+        task_ids: { type: 'array', items: { type: 'string' }, description: 'batch of task ids' },
+      },
+      required: [],
     },
     output: stringOutput,
     async execute(args, exec) {
       const target = await deps.resolve();
-      return asText(await deps.callRaw('/api/tasks/' + encodeURIComponent(String(args?.task_id ?? '')), 'GET', null, exec?.signal, target));
+      const many = Array.isArray(args?.task_ids) ? args.task_ids.filter((t) => typeof t === 'string' && t.trim()) : [];
+      if (many.length) {
+        const out = await Promise.all(many.map(async (id) => {
+          try {
+            const r = await deps.callRaw('/api/tasks/' + encodeURIComponent(id), 'GET', null, exec?.signal, target);
+            return r && typeof r === 'object' ? { task_id: id, ...r } : { task_id: id, result: r };
+          } catch (e) {
+            return { task_id: id, status: 'error', error: e?.message || String(e) };
+          }
+        }));
+        return asText(out);
+      }
+      const id = String(args?.task_id ?? '');
+      if (!id.trim()) throw new Error('give task_id or task_ids');
+      return asText(await deps.callRaw('/api/tasks/' + encodeURIComponent(id), 'GET', null, exec?.signal, target));
     },
   });
 
@@ -1574,6 +1614,7 @@ result = {'count': len(_parts_), 'results': _parts_}
       properties: {
         action: { type: 'string', enum: ['query', 'table', 'select', 'select_by_location', 'selected', 'add', 'update', 'delete', 'field_add', 'field_calc', 'field_delete', 'field_rename'] },
         layer: { type: 'string' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'batch of layer names for query/select/select_by_location/update/delete (one round-trip)' },
         expression: { type: 'string' },
         fields: { type: 'array', items: { type: 'string' } },
         limit: { type: 'integer' },

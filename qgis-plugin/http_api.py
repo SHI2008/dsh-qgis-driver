@@ -522,6 +522,10 @@ class _Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/pyeval_async":
             self._api_call({"type": "pyeval_async",
                             "code": data.get("code", "")})
+        elif self.path == "/api/pyeval_group":
+            self._api_call({"type": "pyeval_group",
+                            "tasks": data.get("tasks") or [],
+                            "max_workers": data.get("max_workers")})
         elif self.path == "/api/eval":
             self._api_call({"type": "eval",
                             "expression": data.get("expression", ""),
