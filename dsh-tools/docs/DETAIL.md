@@ -138,11 +138,26 @@ polling it. Python threads cannot be killed, so what cancellation can honestly d
 | task state | result |
 |---|---|
 | `queued` (a shard waiting for a pool slot) | stops for real — `{"cancelled": true, "was": "queued", "status": "cancelled"}`, the shard never runs |
-| `running` | cannot be interrupted: `{"cancelled": false, "status": "running", "reason": "already running: Python cannot stop a thread, it will finish on its own"}`, plus `cancel_requested: true` on the task record |
+| `running` | not killable, but stoppable *cooperatively*: `{"cancelled": false, "status": "running", "reason": "already running: Python cannot stop a thread, it will finish on its own"}`, plus `cancel_requested: true` on the task record. The snippet stops within one loop iteration if it polls `dsh_should_stop()` |
 | `done` / `error` / already read | `{"cancelled": false, "was": "done", "reason": "task already done"}` — nothing to stop |
 
 A cancelled shard answers `{"status": "cancelled", "result": null, "error": "cancelled before it started"}`
-on its next poll, then it is popped like any other finished task. Writes to QGIS are serial anyway,
+on its next poll, then it is popped like any other finished task.
+
+A long snippet can honour the request itself: every background namespace exposes
+`dsh_should_stop()` (and `dsh_task_id`), so a loop bails out on the next iteration instead of
+running to the end:
+
+```python
+for i, path in enumerate(paths):
+    if dsh_should_stop():
+        result = {"stopped_after": i}
+        break
+    process(path)
+```
+
+Without that poll a running shard still runs to completion — the flag is only advisory.
+ Writes to QGIS are serial anyway,
 so cancelling the queued tail of a group is the useful case: it stops the remaining file work
 without waiting for the whole batch.
 

@@ -534,6 +534,18 @@ class TaskRegistry:
             t = self._tasks.get(task_id)
             return t is not None and t["status"] == "cancelled"
 
+    def stop_requested(self, task_id):
+        """True when the task should stop: cancelled while queued, or a running one was asked.
+
+        The running branch is cooperative: the snippet has to poll
+        ``dsh_should_stop()`` for it to have any effect.
+        """
+        with self._lock:
+            t = self._tasks.get(task_id)
+            if t is None:
+                return False
+            return t["status"] == "cancelled" or bool(t.get("cancel_requested"))
+
     def get(self, task_id):
         """Return a running task's snapshot, or pop a finished task (one read)."""
         with self._lock:
@@ -1192,14 +1204,20 @@ class LiveDriver:
 
         The one place that knows how a background task ends: eval in a fresh
         namespace, fall back to `result`, then finish with the JSON-safe value.
+        The namespace exposes `dsh_task_id` and `dsh_should_stop()` so a long
+        snippet can stop itself once `task_cancel` asked it to.
         """
         local_ns = {}
+        global_ns = {
+            "dsh_task_id": task_id,
+            "dsh_should_stop": lambda: self.tasks.stop_requested(task_id),
+        }
         try:
             try:
                 code_obj = compile(code, tag, "eval")
             except SyntaxError:
                 code_obj = compile(code, tag, "exec")
-            res = eval(code_obj, {}, local_ns)  # nosec B307  # arbitrary execution is intended
+            res = eval(code_obj, global_ns, local_ns)  # nosec B307  # arbitrary execution is intended
             if res is None:
                 res = local_ns.get("result")
             self.tasks.finish(task_id, result=_to_jsonable(res))

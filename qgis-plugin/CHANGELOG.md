@@ -5,6 +5,13 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Added
+- Cooperative cancellation for background work: every task namespace now exposes
+  `dsh_should_stop()` (and `dsh_task_id`), so a long snippet can bail out on the next iteration
+  after `task_cancel` instead of running to the end. `TaskRegistry.stop_requested()` is the single
+  predicate behind it. Without polling, a running shard still finishes on its own — the flag stays
+  advisory, because Python threads cannot be killed.
+
 ### Changed
 - Internal consolidation (no behaviour change): `layer_org` and `scale_style` now share one
   `profile_store.ProfileStore` for the bundled+user JSON profile layout instead of two copies of
