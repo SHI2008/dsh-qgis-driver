@@ -1,7 +1,7 @@
 {
   "component": "dsh_qgis_driver",
   "component_type": "qgis_plugin",
-  "version": "0.16.2",
+  "version": "rc-0.16.2",
   "driver": {
     "type": "qgis_live_harness",
     "detect": "GET http://127.0.0.1:<http_port>/api/health",
