@@ -88,6 +88,20 @@ write the PNG to a temp file and return its path; open it with `read_image`.
 load on demand — they stay callable but do not cost prompt space up front.
 
 Where a layer name is ambiguous, pass the layer id instead: `qgis_layer list`
+
+### Batch (one round-trip for N items)
+
+Two aggregators accept an array so a whole batch runs inside a single `pyeval`:
+
+- `qgis_layout action=add_item` + `items: [{kind, x, y, ...}, ...]` — each object takes the same
+  fields as a single `add_item` call (plus the top-level fields as defaults).
+- `qgis_layer action=style|symbol|classify` + `layers: ["A", "B"]` — the same style arguments are
+  applied to every listed layer.
+
+Both return `{count, results: [...]}`. The single-object form (`kind` / `layer`) is unchanged and the
+two are mutually exclusive per call.
+
+`layout` and `layout_name` are interchangeable for every `qgis_layout` action.
 returns both.
 
 

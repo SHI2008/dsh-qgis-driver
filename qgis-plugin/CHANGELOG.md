@@ -5,6 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Added
+- Batch execution for repeated operations (one round-trip instead of N):
+  `qgis_layout action=add_item` accepts `items: [...]`; `qgis_layer action=style|symbol|classify`
+  accepts `layers: [...]`. Both return `{count, results}`; the single-object form is unchanged.
+
+### Fixed
+- `layout` and `layout_name` are now accepted interchangeably by every `qgis_layout` action
+  (previously `add_item` required `layout` while `export` required `layout_name`).
+
 - **Fixed**: `qgis_layer action=style` no longer crashes QGIS. It reused the
   layer renderer's own symbol object (which the old renderer owns and deletes
   on replacement), leaving a dangling pointer that segfaulted at the next

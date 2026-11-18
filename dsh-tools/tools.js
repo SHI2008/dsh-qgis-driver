@@ -1367,8 +1367,47 @@ export function registerConsolidatedTools(deps) {
     },
   });
 
+  // Batch support: one tool call = one pyeval round-trip even for N items.
+  // `items` (array of arg objects) or `layers` (array of layer names) re-runs the same
+  // Python body once per entry inside a single command.
+  const BATCH_KEY = { add_item: 'items', style: 'layers', symbol: 'layers', classify: 'layers' };
+
+  function batchBody(body, key) {
+    const indented = body
+      .split('\n')
+      .map((line) => (line.length ? '    ' + line : line))
+      .join('\n');
+    return `
+_items_ = P.get('${key}') or []
+if not _items_:
+    raise ValueError('${key} is empty')
+_orig_ = dict(P)
+_parts_ = []
+for _it_ in _items_:
+    P.clear()
+    P.update(_orig_)
+    P.pop('${key}', None)
+    if isinstance(_it_, str):
+        P['layer'] = _it_
+    else:
+        P.update(_it_)
+${indented}
+    _parts_.append(result)
+result = {'count': len(_parts_), 'results': _parts_}
+`;
+  }
+
   const call = async (body, args, exec, opts) => {
-    const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(args || {}))) + body;
+    // args may be frozen — work on a shallow copy.
+    const a = args ? { ...args } : {};
+    // `layout` and `layout_name` are used interchangeably by different bodies.
+    if (a.layout === undefined && a.layout_name !== undefined) a.layout = a.layout_name;
+    if (a.layout_name === undefined && a.layout !== undefined) a.layout_name = a.layout;
+    const key = BATCH_KEY[a.action];
+    const batch = key && Array.isArray(a[key]) && a[key].length > 0;
+    const payload = batch ? batchBody(body, key) : body;
+    if (a[key] === undefined) delete a[key];
+    const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(a))) + payload;
     return asText(await run(code, exec?.signal, opts));
   };
 
@@ -1399,6 +1438,7 @@ export function registerConsolidatedTools(deps) {
       properties: {
         action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
         layer: { type: 'string' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'style/symbol/classify: batch of layer names (one round-trip)' },
         path: { type: 'string' },
         name: { type: 'string' },
         provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
@@ -1482,6 +1522,7 @@ export function registerConsolidatedTools(deps) {
         index: { type: 'integer' },
         remove: { type: 'boolean' },
         kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },
+        items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add_item: batch of item arg objects (one round-trip)' },
         background: { type: 'string', description: 'page/map background #rrggbb' },
         z: { type: 'number' },
         map: { type: 'integer', description: 'graticule: map item index' },

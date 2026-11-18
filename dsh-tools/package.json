@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-qgis-driver",
-  "version": "rc-0.1.23",
+  "version": "rc-0.1.26",
   "private": true,
   "type": "module",
   "exports": {
