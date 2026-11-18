@@ -36,6 +36,14 @@ round-trip, while hand-written pyeval is one round-trip per step.
    `qgis_project action=info`. Names are case-sensitive; use `id` when names collide.
 5. **No status polling loops.** `qgis_plugin action=status` only when a call fails.
 
+## Availability
+
+All ten tools are registered globally: every agent — including subagents — can call them,
+including `qgis_map` and `qgis_plugin` (deferred descriptions still callable). If your tool list
+does not show `qgis_*`, call it anyway; the listing can lag a reload. Never conclude "the tool is
+missing" from a listing alone, and do not fall back to hand-written `execute_qgis_sync` for a job
+that has a dedicated action.
+
 ## Recipes
 
 - **Load a folder of shapefiles**: one call
