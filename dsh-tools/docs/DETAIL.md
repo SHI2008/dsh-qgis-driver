@@ -125,8 +125,26 @@ so it is always produced:
 alone is cheaper.
 
 `layout` and `layout_name` are interchangeable for every `qgis_layout` action.
-returns both.
 
+### Inline previews (`inline: true`, opt-in)
+
+`qgis_layout export|export_atlas`, `qgis_map render|screenshot` and `qgis_layer export` accept
+`inline: true`. The call then returns the PNG preview as an image block **beside** the unchanged
+JSON, so the model can look at it without a second `read_image` round trip:
+
+```json
+qgis_layout {"action":"export","layouts":["A3"],"formats":["pdf"],"inline":true}
+→ text block: {"count":1,"results":[{... "file_path":"...pdf", "image_path":"...png"}]}
+→ image block: the same PNG (attachment reference, webp-normalized)
+```
+
+The image is committed through the harness attachment store, exactly like `read_image`: it is a
+durable reference, not base64, so it survives reloads and prompt cache. Cost is roughly 2.2k
+tokens for a full A4 preview (billed once; later requests hit the prompt cache), and it only
+pays off on the verification call, so it defaults to off. Every refusal — no `image_path` in the
+result, a route whose model declares no image input, an oversized preview, a missing attachment
+service — still returns the normal text result and appends one short note saying why the image
+was skipped. An image block can never fail a QGIS call.
 
 ## Autostart (local)
 
