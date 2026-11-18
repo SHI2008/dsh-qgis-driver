@@ -70,6 +70,10 @@ function resolveRemoteTarget(config) {
 }
 
 /** Whether a PID is alive (used to skip stale registry files). */
+// Liveness probe. Node maps signal 0 to OpenProcess on Windows, which is safe.
+// NEVER port this to Python as os.kill(pid, 0): on Windows 0 == CTRL_C_EVENT, so it
+// sends Ctrl+C to the target and silently kills QGIS (no crash dump, no WER event).
+// Use psutil.pid_exists(), tasklist, or Get-Process -Id for Python/PowerShell checks.
 function pidAlive(pid) {
   if (!pid) return true
   try {

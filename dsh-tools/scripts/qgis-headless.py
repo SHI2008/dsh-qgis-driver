@@ -40,7 +40,9 @@ try:
     from processing.core.Processing import Processing
 
     Processing.initialize()
-    print("[dsh-qgis-driver] processing initialized:", Processing.initialized())
+    # QGIS 4 has no Processing.initialized(); printing it raised AttributeError
+    # on every start. Just report that initialize() returned without raising.
+    print("[dsh-qgis-driver] processing initialized", flush=True)
 except Exception:  # nosec B110 - Processing is optional
     traceback.print_exc()
 
