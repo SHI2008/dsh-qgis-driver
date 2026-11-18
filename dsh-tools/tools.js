@@ -224,7 +224,7 @@ result = {'layer': l.name(), 'crs': crs.authid() or crs.description(),
 l = L(P['layer'])
 if not isinstance(l, QgsVectorLayer):
     raise ValueError('only vector layers are supported')
-sym = l.renderer().symbol() if l.renderer() else None
+sym = l.renderer().symbol().clone() if l.renderer() else None
 if sym is None:
     sym = QgsMarkerSymbol() if l.geometryType() == 0 else (
         QgsLineSymbol() if l.geometryType() == 1 else QgsFillSymbol())
@@ -980,10 +980,20 @@ if fmt == 'pdf':
     result = {'format': 'pdf', 'result': r}
 else:
     import base64, tempfile
+    for _it in lay.items():
+        try:
+            if isinstance(_it, QgsLayoutItemMap):
+                _it.invalidateCache()
+        except Exception:
+            pass
+    lay.refresh()
     st = QgsLayoutExporter.ImageExportSettings()
     st.dpi = int(P.get('dpi') or 300)
     fd, path = tempfile.mkstemp(suffix='.png'); os.close(fd)
+    os.remove(path)
     r = QgsLayoutExporter(lay).exportToImage(path, st)
+    if r != 0 or not os.path.exists(path):
+        raise RuntimeError('layout export failed (result %s)' % r)
     result = {'format': 'png', 'result': r, 'size_bytes': os.path.getsize(path),
               'image_path': _publish(path, 'png'),
               'hint': '使用 read_image 工具查看该图片路径'}`,
@@ -997,6 +1007,14 @@ n = atlas.count()
 import base64, tempfile
 st = QgsLayoutExporter.ImageExportSettings() if (P.get('format') or 'pdf') == 'png' else None
 fd, path = tempfile.mkstemp(suffix='.pdf' if st is None else '.png'); os.close(fd)
+for _it in lay.items():
+    try:
+        if isinstance(_it, QgsLayoutItemMap):
+            _it.invalidateCache()
+    except Exception:
+        pass
+lay.refresh()
+os.remove(path)
 if st is None:
     r = QgsLayoutExporter(lay).exportToPdf(path, QgsLayoutExporter.PdfExportSettings())
     result = {'format': 'pdf', 'pages': n, 'result': r, 'size_bytes': os.path.getsize(path),

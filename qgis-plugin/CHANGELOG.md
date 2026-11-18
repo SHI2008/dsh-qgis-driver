@@ -5,6 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+- **Fixed**: `qgis_layer action=style` no longer crashes QGIS. It reused the
+  layer renderer's own symbol object (which the old renderer owns and deletes
+  on replacement), leaving a dangling pointer that segfaulted at the next
+  render — typically a layout export minutes later. The symbol is now cloned
+  before it is modified and handed to a new renderer.
+- **Fixed**: `qgis_layout action=export` now refreshes the layout and clears
+  every map item's render cache first, and reports a clean error when the
+  exporter returns a non-zero result instead of returning a 0-byte file.
+
 - **Changed**: the tool surface was condensed from 54 tools to 10 — related
   operations now share one tool and dispatch on an `action` argument
   (`qgis_project`, `qgis_layer`, `qgis_feature`, `qgis_layout`, `qgis_analysis`,
