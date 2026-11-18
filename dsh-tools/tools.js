@@ -12,7 +12,7 @@ const PRELUDE = `
 import json, os, shutil, tempfile, time, secrets, base64
 from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
     QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeatureRequest, QgsFeature,
-    QgsGeometry, QgsField, QgsPrintLayout, QgsLayoutItem, QgsLayoutItemMap,
+    QgsGeometry, QgsField, QgsPrintLayout, QgsLayoutItem, QgsLayoutItemMap, QgsLayoutItemMapGrid,
     QgsLayoutItemLabel, QgsLayoutItemLegend, QgsLayoutItemScaleBar, QgsLayoutItemPicture,
     QgsLayoutItemShape, QgsLayoutPoint, QgsLayoutSize, QgsUnitTypes, QgsLayoutExporter,
     QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer, QgsPalLayerSettings,
@@ -176,7 +176,9 @@ if l is None:
 _cf = P.get('crs_file')
 if _cf and os.path.isfile(_cf):
     _c = QgsCoordinateReferenceSystem()
-    _c.createFromWkt(io_open(_cf).read())
+    with io_open(_cf) as _fh:
+        _wkt = _fh.read()
+    _c.createFromWkt(_wkt)
     if _c.isValid():
         l.setCrs(_c)
         if P.get('set_project'):
@@ -884,81 +886,37 @@ elif kind == 'graticule':
     step = float(P.get('step') or 1)
     col = QColor(P.get('color') or '#A99C83')
     lw = float(P.get('width') or 0.15)
-    pos = m.positionWithUnits()
-    sz = m.sizeWithUnits()
-    mx = pos.x(); my = pos.y(); mw = sz.width(); mh = sz.height()
-    ext = m.extent()
-    mcr = m.crs()
-    src = QgsCoordinateReferenceSystem('EPSG:4326')
-    fwd = QgsCoordinateTransform(src, mcr, prj)
-    inv = QgsCoordinateTransform(mcr, src, prj)
-    ctr = QgsPointXY((ext.xMinimum() + ext.xMaximum()) / 2.0, (ext.yMinimum() + ext.yMaximum()) / 2.0)
-    cg = inv.transform(ctr)
-    corners = []
-    for px, py in ((ext.xMinimum(), ext.yMinimum()), (ext.xMaximum(), ext.yMinimum()),
-                   (ext.xMinimum(), ext.yMaximum()), (ext.xMaximum(), ext.yMaximum())):
+    # Use the map item's own grid: native, stable, and it draws the annotations.
+    g = m.grid()
+    g.setEnabled(True)
+    g.setCrs(QgsCoordinateReferenceSystem('EPSG:4326'))
+    g.setIntervalX(step)
+    g.setIntervalY(step)
+    g.setStyle(QgsLayoutItemMapGrid.Cross)
+    g.setCrossLength(4.0)
+    g.setFrameStyle(QgsLayoutItemMapGrid.NoFrame)
+    try:
+        g.setGridLineSymbol(QgsLineSymbol.createSimple({'color': col.name(), 'width': str(lw)}))
+    except Exception:
+        pass
+    g.setAnnotationEnabled(bool(P.get('labels', True)))
+    if P.get('labels', True):
+        f = QFont(P.get('family') or 'Microsoft YaHei')
+        f.setPointSizeF(float(P.get('label_size') or 7))
+        g.setAnnotationFont(f)
+        g.setAnnotationFontColor(col)
         try:
-            corners.append(inv.transform(QgsPointXY(px, py)))
+            g.setAnnotationFormat(QgsLayoutItemMapGrid.DegreeMinute)
+        except Exception:
+            g.setAnnotationFormat(QgsLayoutItemMapGrid.Degree)
+        g.setAnnotationPrecision(0)
+        try:
+            g.setAnnotationDisplay(QgsLayoutItemMapGrid.ShowAll)
         except Exception:
             pass
-    gx = [c.x() for c in corners] or [cg.x()]
-    gy = [c.y() for c in corners] or [cg.y()]
-    made = []
-    lon = step * round(min(gx) / step)
-    while lon <= max(gx) + step * 0.5:
-        try:
-            q = fwd.transform(QgsPointXY(lon, cg.y()))
-            px = mx + (q.x() - ext.xMinimum()) / (ext.xMaximum() - ext.xMinimum()) * mw
-        except Exception:
-            px = None
-        if px is not None and mx - 0.5 <= px <= mx + mw + 0.5:
-            s = QgsLayoutItemShape(lay)
-            s.setShapeType(QgsLayoutItemShape.Rectangle)
-            s.setSymbol(QgsFillSymbol.createSimple({'color': col.name(), 'outline_color': col.name(), 'outline_width': '0'}))
-            lay.addLayoutItem(s)
-            s.attemptMove(QgsLayoutPoint(px - lw / 2.0, my, MM()))
-            s.attemptResize(QgsLayoutSize(lw, mh, MM()))
-            made.append(s)
-            if P.get('labels', True):
-                t = QgsLayoutItemLabel(lay)
-                t.setText('%g°E' % lon)
-                f = QFont(P.get('family') or 'Microsoft YaHei')
-                f.setPointSizeF(float(P.get('label_size') or 7))
-                t.setFont(f)
-                t.setFontColor(col)
-                t.adjustSizeToText()
-                lay.addLayoutItem(t)
-                t.attemptMove(QgsLayoutPoint(px - 4.2, my - 4.6, MM()))
-                made.append(t)
-        lon += step
-    lat = step * round(min(gy) / step)
-    while lat <= max(gy) + step * 0.5:
-        try:
-            q = fwd.transform(QgsPointXY(cg.x(), lat))
-            py = my + (ext.yMaximum() - q.y()) / (ext.yMaximum() - ext.yMinimum()) * mh
-        except Exception:
-            py = None
-        if py is not None and my - 0.5 <= py <= my + mh + 0.5:
-            s = QgsLayoutItemShape(lay)
-            s.setShapeType(QgsLayoutItemShape.Rectangle)
-            s.setSymbol(QgsFillSymbol.createSimple({'color': col.name(), 'outline_color': col.name(), 'outline_width': '0'}))
-            lay.addLayoutItem(s)
-            s.attemptMove(QgsLayoutPoint(mx, py - lw / 2.0, MM()))
-            s.attemptResize(QgsLayoutSize(mw, lw, MM()))
-            made.append(s)
-            if P.get('labels', True):
-                t = QgsLayoutItemLabel(lay)
-                t.setText('%g°N' % lat)
-                f = QFont(P.get('family') or 'Microsoft YaHei')
-                f.setPointSizeF(float(P.get('label_size') or 7))
-                t.setFont(f)
-                t.setFontColor(col)
-                t.adjustSizeToText()
-                lay.addLayoutItem(t)
-                t.attemptMove(QgsLayoutPoint(mx - 7.6, py - 2.2, MM()))
-                made.append(t)
-        lat += step
-    item = made[0] if made else None
+    m.invalidateCache()
+    lay.refresh()
+    item = m
 elif kind == 'table':
     rows = P.get('rows') or []
     widths = [float(v) for v in (P.get('widths') or [])]

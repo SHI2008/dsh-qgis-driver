@@ -118,7 +118,10 @@ function findLocalLiveDir(startedAt = 0, requireGui = false) {
   for (const { p } of registryCandidates(startedAt)) {
     let reg
     try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
-    if (reg.pid && !pidAlive(reg.pid)) continue
+    if (reg.pid && !pidAlive(reg.pid)) {
+      try { fs.unlinkSync(p) } catch { /* ignore */ }
+      continue
+    }
     if (requireGui && reg.gui !== true) continue
     const liveDir = reg.live_dir
     if (!liveDir) continue
@@ -150,6 +153,10 @@ async function findActiveQgis(startedAt = 0, requireGui = false) {
   for (const { p } of registryCandidates(startedAt)) {
     let reg
     try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
+    if (reg.pid && !pidAlive(reg.pid)) {
+      try { fs.unlinkSync(p) } catch { /* ignore */ }
+      continue
+    }
     if (requireGui && reg.gui !== true) continue
     const host = reg.host || '127.0.0.1'
     const port = reg.http_port
@@ -456,6 +463,10 @@ function invokeFile(cmd, signal, target) {
 async function invokeFileOnce(cmd, signal, target) {
   const liveDir = target.liveDir
   if (!liveDir) throw new Error('file channel: live_dir missing in registry')
+  if (target.pid && !pidAlive(target.pid)) {
+    try { badLiveDirs.add(liveDir) } catch { /* ignore */ }
+    throw new Error('QGIS instance is not running (restart QGIS)')
+  }
   let token = target.token
   if (!token) {
     try { token = fs.readFileSync(path.join(liveDir, 'token'), 'utf8').trim() } catch { token = '' }
