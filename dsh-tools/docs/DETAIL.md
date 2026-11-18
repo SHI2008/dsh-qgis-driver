@@ -230,3 +230,15 @@ first QGIS tool call in the session, or right away when *Settings →
 dsh-qgis-driver → show connection status widget* is enabled. Local calls use the
 plugin's file channel (`commands.jsonl` → `results.jsonl`); remote calls use
 REST with `host:port` + Key.
+
+## Code layout
+
+Two rules keep the tree from drifting back into patchwork:
+
+- `dsh-tools/tools.js` owns every tool definition (`registerConsolidatedTools`);
+  `dsh-tools/index.js` owns transport only (target discovery, file channel, REST, autostart,
+  inline attachments) and registers that one bundle. Adding a tool in `index.js` has no effect —
+  the old single-function layer there was removed in rc-0.1.41.
+- `qgis-plugin/profile_store.py` is the single implementation of the `~/.qgis-live` root and of
+  the bundled+user JSON profile layout. `layer_org` and `scale_style` supply profile *content*
+  only; anything that needs a registry path imports `profile_store.registry_dir()`.
