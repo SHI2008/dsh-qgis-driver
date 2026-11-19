@@ -581,6 +581,15 @@ if not isinstance(l, QgsVectorLayer):
     raise ValueError('only vector layers are supported')
 f = QgsFeature(l.fields())
 values = P.get('values') or {}
+_have = [fl.name() for fl in l.fields()]
+_missing = [k for k in values if k not in _have]
+if _missing:
+    raise ValueError(
+        'the layer has no field(s) %s (it has: %s). Add them first with '
+        'qgis_feature action=field_add {field: "%s", field_type: "string"}, '
+        'or drop them from values.' % (
+            ', '.join(repr(m) for m in _missing),
+            ', '.join(_have) or 'none', _missing[0]))
 for k, v in values.items():
     f[k] = v
 if P.get('geometry_wkt'):
@@ -600,6 +609,12 @@ req = QgsFeatureRequest().setLimit(limit)
 if expr:
     req.setFilterExpression(expr)
 idx = {k: l.fields().indexOf(k) for k in values}
+_missing = [k for k, i in idx.items() if i < 0]
+if _missing:
+    raise ValueError(
+        'the layer has no field(s) %s (it has: %s) - nothing was changed.' % (
+            ', '.join(repr(m) for m in _missing),
+            ', '.join(fl.name() for fl in l.fields()) or 'none'))
 l.startEditing()
 n = 0
 for f in l.getFeatures(req):
@@ -848,6 +863,19 @@ elif kind == 'scalebar':
     sb.setFont(QFont(P.get('family') or 'Microsoft YaHei', 8))
     lay.addLayoutItem(sb)
     sb.attemptMove(QgsLayoutPoint(x, y, MM()))
+    # A scale bar's width follows the map scale, so a coarse units_per_segment can push it
+    # far past the page edge (a 50 km segment over a small extent is metres wide on paper).
+    # Shrink it until it fits the page instead of exporting a bar that runs off the sheet.
+    _page = lay.pageCollection().pages()[0].pageSize()
+    _maxw = float(_page.width()) - x - 5
+    for _ in range(12):
+        _w = sb.rect().width()
+        if _w <= _maxw or _w <= 1:
+            break
+        _up = sb.unitsPerSegment() * (_maxw / _w)
+        if _up <= 0:
+            break
+        sb.setUnitsPerSegment(max(_up, 0.001))
     item = sb
 elif kind == 'north_arrow':
     na = QgsLayoutItemPicture(lay)
@@ -1940,7 +1968,7 @@ export function registerConsolidatedTools(deps) {
         layout_name: { type: 'string' },
         page_width: { type: 'number' },
         page_height: { type: 'number' },
-        index: { type: 'integer', description: 'update_item: item index from action=info (add_item returns it)' },
+        index: { type: 'integer', description: 'update_item: index from action=info or add_item; it shifts as items are added, uuid never does' },
         uuid: { type: 'string', description: 'update_item: item uuid from add_item or info — alternative to index' },
         remove: { type: 'boolean' },
         kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },

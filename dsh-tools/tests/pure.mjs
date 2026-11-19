@@ -82,7 +82,8 @@ await fails('an unknown endpoint is refused instead of sent',
 await ok('tracebacks collapse to one line with the exception type', () => {
   const tb = 'Traceback (most recent call last):\n  File "<pyeval>", line 3, in <module>\nKeyError: \'path\''
   assert.equal(tidyError(tb),
-    "KeyError: 'path' (object not found — use the matching list action)")
+    "KeyError: 'path' (no such field or object — list it (action=list / action=fields); "
+    + 'a new layer starts with no fields)')
 })
 await ok('a plain message passes through untouched', () => {
   assert.equal(tidyError('layer not found: roads'), 'layer not found: roads')

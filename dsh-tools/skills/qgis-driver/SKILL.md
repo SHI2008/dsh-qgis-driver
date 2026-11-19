@@ -84,7 +84,9 @@ round-trip, while hand-written pyeval is one round-trip per step.
     differently, and returns results in a shape nothing else can read. The driver *is* the
     execution path: `execute_qgis_sync` for main-thread PyQGIS, `submit_qgis_async tasks[]`
     for background work, `qgis_analysis run` for Processing. If a call is too slow or too big,
-    say so and split it — do not escape the driver.
+    say so and split it — do not escape the driver. This is enforced: a snippet that calls
+    `initQgis()`/`QgsApplication(...)` is refused with an explanation, because it would kill the
+    instance for every later call.
 
 ## Availability
 

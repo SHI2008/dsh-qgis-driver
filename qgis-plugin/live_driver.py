@@ -33,6 +33,7 @@ import concurrent.futures
 import datetime
 import hmac
 import inspect
+import io
 import itertools
 import json
 import os
@@ -41,6 +42,7 @@ import re
 import secrets
 import threading
 import time
+import tokenize
 import traceback
 
 from qgis.PyQt.QtCore import QTimer
@@ -504,6 +506,48 @@ class TaskRegistry:
                 self._tasks.pop(k, None)
 
 
+# Spinning up a second QApplication inside a running QGIS is the one mistake that
+# takes the whole instance down: the singleton is replaced, the event loop this
+# driver polls from is orphaned, and every later call fails with "no QGIS". Refuse
+# it with an explanation instead of letting one bad call cost the whole session.
+_INSTANCE_KILLERS = re.compile(r"\b(initQgis|QgsApplication)\s*\(", re.I)
+
+
+def _strip_strings(code):
+    """Drop STRING/COMMENT tokens so a mention in text cannot trip the guard."""
+    try:
+        parts = []
+        for tok in tokenize.generate_tokens(io.StringIO(code).readline):
+            if tok.type in (tokenize.STRING, tokenize.COMMENT):
+                continue
+            parts.append(tok.string)
+        return " ".join(parts)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return code
+
+
+def _refuse_instance_killer(code):
+    """Explain why `code` must not run, or return None when it is fine.
+
+    The driver already lives inside a running QGIS, so bootstrapping another one
+    is never needed; it only destroys the instance the caller is talking to.
+    """
+    if not isinstance(code, str):
+        return None
+    if not _INSTANCE_KILLERS.search(_strip_strings(code)):
+        return None
+    return (
+        "refused: this code calls initQgis()/QgsApplication() inside a running "
+        "QGIS, which replaces the application singleton and kills the instance "
+        "for every later call. The driver already runs inside QGIS, so those "
+        "calls are never needed: use `prj`, `iface`, `QgsProject.instance()` or "
+        "the Qgs* classes directly. Background shards cannot touch QGIS objects "
+        "at all - use execute_qgis_sync or a structured qgis_* tool. Do not "
+        "write a .py file and start a second QGIS either: this plugin is the "
+        "only supported path."
+    )
+
+
 class LiveDriver:
     def __init__(self, live_dir, iface):
         self.iface = iface
@@ -521,11 +565,14 @@ class LiveDriver:
         # JSON (both aim for user-only ACLs)
         self.token = secrets.token_hex(24)
         self._ns = {"iface": iface, "view": None, "driver": self}
-        # Pre-import the QGIS APIs frequently used in pyeval (for convenience)
+        # Seed the names every snippet expects. `prj` in particular used to come
+        # only from the client's prelude, so a raw /api/cmd call (or any client
+        # that forgot it) failed with `NameError: prj` before doing any work.
         try:
             from qgis.core import QgsProject, QgsApplication
             self._ns.update({"QgsProject": QgsProject,
-                             "QgsApplication": QgsApplication})
+                             "QgsApplication": QgsApplication,
+                             "prj": QgsProject.instance()})
         except Exception:  # nosec B110  # acceptable by design
             pass
         # Non-file command input (injected from other threads such as the HTTP server).
@@ -761,6 +808,10 @@ class LiveDriver:
         namespace (view etc.).
         """
         reply = reply or self._reply
+        explain = _refuse_instance_killer(code)
+        if explain:
+            reply({"id": cid, "error": explain})
+            return
         self._ns.pop("result", None)
         # A caller may ask for a longer budget for one heavy call (layout export, long
         # analysis). Clamped so a bad value can never hang the instance.
@@ -905,6 +956,10 @@ class LiveDriver:
         snippet can stop itself once `task_cancel` asked it to.
         """
         local_ns = {}
+        explain = _refuse_instance_killer(code)
+        if explain:
+            self.tasks.finish(task_id, error=explain)
+            return
         global_ns = {
             "dsh_task_id": task_id,
             "dsh_should_stop": lambda: self.tasks.stop_requested(task_id),

@@ -368,13 +368,46 @@ session fixed. All are plain scripts: no framework, exit code 1 on failure.
 | `tests/docdrift.mjs` | the SKILL.md action table vs the registered schema enums, and the scope tables vs real actions | no |
 | `tests/batch.mjs` | every batch action renders a shim that a real Python interpreter parses | no (skips the parse without one) |
 | `tests/live.mjs` | lease acquire/refuse/release, runaway-loop interruption, instance survival, group submit + cancel, audit log, counters | yes (skips when no instance) |
+| `tests/chaos.mjs` | the four ways a call goes wrong (runaway loop, sync `initQgis()`, async `initQgis()`, missing object) each stay one bad call: same pid, instance still answers | yes (skips when no instance) |
 
 ```
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/pure.mjs
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/docdrift.mjs
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/batch.mjs
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/live.mjs
+ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/chaos.mjs
 ```
+
+## A bad call stays one bad call
+
+The exam run's worst symptom was not any single error: one wedged call turned
+every later call red, and the model gave up on the tools and started its own
+QGIS process. Three things caused that, and all three are now closed:
+
+* **A second QApplication killed the instance.** `initQgis()` /
+  `QgsApplication(...)` inside a running QGIS replaces the singleton and
+  orphans the event loop the driver polls from. `live_driver.py` now refuses
+  such code in `pyeval`, `pyeval_async` and `pyeval_group`, with a message that
+  says what to use instead (`prj`, `iface`, `QgsProject.instance()`).
+* **A runaway call held the main thread.** The hard timeout interrupts it at
+  the next bytecode and the instance keeps its pid; `tests/chaos.mjs` asserts
+  exactly that.
+* **`prj` only came from the client prelude.** The plugin now seeds
+  `prj`/`QgsProject`/`QgsApplication` in the eval namespace, so a raw
+  `/api/cmd` call — or any client that forgot the prelude — does not fail with
+  `NameError: prj` before it does any work.
+
+When the process really does die, the failure is reported once as `DEAD` and
+the next call autostarts a fresh instance; nothing repeats the error for you.
+
+### Elements that size themselves
+
+`scalebar` follows the linked map's scale, so `width`/`height` are rejected with an
+explanation (the numbers would be ignored) and a coarse `units_per_segment` is shrunk
+until the bar fits inside the page instead of exporting a bar that runs off the sheet.
+`legend` without `layers` mirrors the project instead of coming out empty. Item
+`index` follows scene order (newest first) and therefore shifts as items are added —
+`add_item` returns a `uuid` for that reason, and `update_item` accepts either.
 
 ## One failure vocabulary
 

@@ -1,11 +1,12 @@
 {
   "name": "@local/dsh-qgis-driver",
-  "version": "0.1.56-rc",
+  "version": "0.1.57-rc",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node tests/pure.mjs && node tests/docdrift.mjs && node tests/batch.mjs",
-    "test:live": "node tests/live.mjs"
+    "test:live": "node tests/live.mjs",
+    "test:chaos": "node tests/chaos.mjs"
   },
   "exports": {
     ".": "./index.js",
@@ -14,16 +15,16 @@
     "./icon": "./icon.svg"
   },
   "files": [
-    "index.js",
     "client.js",
     "cordis.patch.yml",
-    "locale/*.json",
     "docs",
     "icon.svg",
-    "scripts",
-    "tests",
+    "index.js",
+    "locale/*.json",
     "node_modules",
-    "skills"
+    "scripts",
+    "skills",
+    "tests"
   ],
   "dsh": {
     "bundle": {

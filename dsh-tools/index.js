@@ -676,7 +676,7 @@ function tidyError(input) {
   const type = m ? m[1] : ''
   const body = m ? m[2].trim() : exc
   const hints = {
-    KeyError: 'object not found — use the matching list action',
+    KeyError: 'no such field or object — list it (action=list / action=fields); a new layer starts with no fields',
     IndexError: 'index out of range — check action=info',
     NameError: 'a name is undefined — typo, or a variable from an earlier call (calls do not share state)',
     AttributeError: 'API differs on QGIS 4 — see DETAIL.md',
