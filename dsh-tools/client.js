@@ -16,12 +16,14 @@ window.__ModuleLoader__.load({
     const TEXT = '#ececf1'
     const SURFACE = '#141417'
     const BORDER = '#2c2c34'
-    const ACCENT = '#8f9dff'
-    const ACCENT_BG = '#8f9dff'
+    // DSH brand blue (design token --dsw-static-deepseek-450, the
+    // 'primary-new-color' in the dark theme). One accent, no lavender.
+    const ACCENT = '#5686fe'
+    const ACCENT_BG = '#5686fe'
 
     const btnStyle = {
       padding: '7px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6,
-      border: 'none', background: ACCENT_BG, color: '#08080a', cursor: 'pointer',
+      border: 'none', background: ACCENT_BG, color: '#ffffff', cursor: 'pointer',
     }
 
     // What the tools may do. Enforced by the bundle on every call (tools.js
@@ -265,7 +267,7 @@ window.__ModuleLoader__.load({
             lineHeight: '16px', cursor: 'pointer', userSelect: 'none', flex: '0 0 auto',
             opacity: busy ? 0.6 : 1,
           },
-        }, '权限 ' + (busy ? '…' : meta.label)),
+        }, '权限' + (busy ? '…' : meta.label)),
         open
           ? h('div', {
               style: {
@@ -291,7 +293,7 @@ window.__ModuleLoader__.load({
                 h('span', { style: { color: s.color, fontWeight: 700, marginRight: 6 } }, s.label),
                 h('span', { style: { color: MUTED } }, s.hint))),
               h('div', { style: { color: '#6f6f7a', marginTop: 4, fontSize: 10.5 } },
-                '切换会重载工具，进行中的工具调用可能需要重试。'),
+                '立刻生效：下一次工具调用就按新范围执行，不需要重载。'),
               err ? h('div', { style: { color: RED, marginTop: 4, fontSize: 10.5 } }, err) : null,
             )
           : null,
