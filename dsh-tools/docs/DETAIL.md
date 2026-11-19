@@ -272,3 +272,7 @@ Two rules keep the tree from drifting back into patchwork:
 - `qgis-plugin/profile_store.py` is the single implementation of the `~/.qgis-live` root and of
   the bundled+user JSON profile layout. `layer_org` and `scale_style` supply profile *content*
   only; anything that needs a registry path imports `profile_store.registry_dir()`.
+- `skills/<name>/SKILL.md` is published by `registerSkillProvider()` in `dsh-tools/index.js`
+  (frontmatter `name`/`description` only). A new document is picked up by dropping the directory
+  in — do not register it a second time anywhere else, and do not assume a skill exists in the
+  catalog without a reload.
