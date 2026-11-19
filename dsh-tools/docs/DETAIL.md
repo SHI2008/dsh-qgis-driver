@@ -44,7 +44,7 @@ one tool keeps the first-turn prompt small — 10 descriptions instead of the
 | `qgis_layout` | `list` / `create` / `info` / `add_item` / `update_item` / `legend_edit` / `align` / `export` / `export_atlas` |
 | `qgis_analysis` | `list` / `help` / `run` (processing algorithms) / `zonal_stats` / `reclassify` |
 | `qgis_map` | `render` / `screenshot` / `set_extent` / `zoom_to_layer` |
-| `qgis_plugin` | `status` / `describe` / `open` / `reload` / `bridge` / `instruction` |
+| `qgis_plugin` | `status` / `lock` / `log` / `restart` |
 
 Image-returning actions (`qgis_map render|screenshot`, `qgis_layout export`)
 write the PNG to a temp file and return its path; open it with `read_image`.
@@ -270,8 +270,8 @@ The user picks the scope in the composer pill (`权限 只读 / 编辑 / 完全`
 
 | scope | allows | blocks |
 | --- | --- | --- |
-| `read` | list / info / fields / query / select / render / screenshot / status / log / lock status / instruction read | everything that changes the project or the disk, and all Python |
-| `write` (default) | the above **plus** layer+layout+style edits, feature add/update, field ops, analysis runs, exports, project save, lock acquire/release | delete, project open/save_as, plugin open/reload/bridge/restart, instruction save/delete, raw PyQGIS |
+| `read` | list / info / fields / query / select / render / screenshot / status / log / lock status | everything that changes the project or the disk, and all Python |
+| `write` (default) | the above **plus** layer+layout+style edits, feature add/update, field ops, analysis runs, exports, project save, lock acquire/release | delete, project open/save_as, plugin restart, raw PyQGIS |
 | `danger` | everything, including the escape hatches above | — |
 
 A refusal names the call, the current scope and how to lift it:
@@ -303,8 +303,6 @@ Two details worth knowing:
 - `export` counts as a write, because it takes a path and writes a file. In `read`
   scope you still get a rendered PNG in the temp dir (`qgis_map action=render`), which
   is enough to *look* at a map without touching the project.
-- `qgis_plugin action=instruction op=save|delete` is `danger`: it rewrites the driver's
-  own instructions, which no agent should do without the user asking for it.
 
 ## Restarting a wedged instance
 
@@ -326,7 +324,7 @@ it in a `finally`:
 
 | Serialised | Not serialised (deliberate) |
 | --- | --- |
-| `qgis_project` open/save/save_as/set_crs, `qgis_layer` add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject, `qgis_feature` add/update/delete/field_*, `qgis_layout` create/add_item/update_item/legend_edit/align, `qgis_plugin instruction` writes | `action=list/*` reads, `qgis_layer export`, `qgis_layout export`, `qgis_map render`, `execute_qgis_sync`, `submit_qgis_async` |
+| `qgis_project` open/save/save_as/set_crs, `qgis_layer` add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject, `qgis_feature` add/update/delete/field_*, `qgis_layout` create/add_item/update_item/legend_edit/align | `action=list/*` reads, `qgis_layer export`, `qgis_layout export`, `qgis_map render`, `execute_qgis_sync`, `submit_qgis_async` |
 
 Reads and exports stay lock-free on purpose: parallel rendering is what the shard API
 is for. The lease belongs to the calling agent (`exec.agent.name`), is re-entrant for

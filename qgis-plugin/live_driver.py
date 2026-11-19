@@ -1,31 +1,21 @@
-"""Driver that controls the QGIS process externally through files (standalone version).
+"""The execution service side of dsh-qgis-driver: QGIS driven over files.
 
-A control-surface-only implementation that works in any plugin/QGIS environment
-without WebEngine. It has no view, so eval/devreload are unsupported (forwarding
-to another plugin that has a view via plugin_id is possible). Instead,
-screenshot renders iface.mapCanvas() to PNG.
-
-Active only when the WEBENGINE_LIVE_DIR environment variable is set.
-The live dir is WEBENGINE_LIVE_DIR/qgis-<pid>/<plugin_id>/.
+Start QGIS with this plugin enabled and it publishes a live dir
+(~/.qgis-live/qgis-<pid>/dsh_qgis_driver) that the DSH bundle finds. There is no
+view, no dock and no menu: everything below is the control surface.
 
 Command format (one JSON object per line):
-  {"id": 1, "type": "pyeval", "code": "iface.activeLayer().name()",
-      "token": "contents of <live_dir>/token"}
-  {"id": 2, "type": "screenshot", "path": "C:/.../shot.png",
-      "token": "..."}  <- map canvas
-  {"id": 3, "type": "status", "token": "..."}
-  {"id": 4, "type": "open_plugin", "plugin_id": "<plugin_id>",
-   "token": "..."}
-  {"id": 5, "type": "reload_plugin", "plugin_id": "<plugin_id>",
-   "token": "..."}
-  {"id": 6, "type": "bridge_call", "plugin_id": "<plugin_id>",
-   "method": "pluginInfo", "args": [], "token": "..."}
-  {"id": 7, "type": "describe_plugins", "token": "..."}
-      <- AI-usable capability catalog of all plugins (bridge + pluginInfo merged)
-  {"id": 8, "type": "devin_run", "prompt": "...",
-   "cwd": "C:/repo", "token": "..."}
-      <- asynchronous start of the Devin CLI (devin -p). Tracked, fetched and
-      aborted with devin_status/devin_result/devin_abort (devin_tasks.py)
+  {"id": 1, "type": "pyeval", "code": "prj.crs().authid()", "token": "...",
+   "timeout": 120}          <- seconds; omit for the 10 s default
+  {"id": 2, "type": "pyeval_group", "tasks": [{"name": "a", "code": "..."}],
+   "max_workers": 4, "token": "..."}
+  {"id": 3, "type": "task_status", "task_id": "...", "token": "..."}
+  {"id": 4, "type": "task_cancel", "task_ids": ["..."], "token": "..."}
+  {"id": 5, "type": "screenshot", "path": "C:/.../shot.png", "token": "..."}
+  {"id": 6, "type": "write_lock", "op": "acquire", "owner": "agent",
+   "ttl": 120, "token": "..."}
+  {"id": 7, "type": "audit", "op": "tail", "limit": 20, "token": "..."}
+  {"id": 8, "type": "status", "token": "..."}
 
 Auth: a session token is generated at startup and written to live_dir/token and
 the registry JSON (both with user-only ACLs). File-based
@@ -72,9 +62,8 @@ _GROUP_FUTURES = {}
 
 # Kinds that use plugin_id as their own command argument, not as a route.
 # These are always handled by this driver itself.
-_LOCAL_TYPES = {"status", "open_plugin", "reload_plugin", "bridge_call",
-                "describe_plugins", "instruction", "pyeval_group", "task_cancel",
-                "write_lock", "audit"}
+_LOCAL_TYPES = {"status", "pyeval", "pyeval_async", "pyeval_group", "task_status",
+                "task_cancel", "screenshot", "write_lock", "audit"}
 
 # Advisory instance-wide write lease. Two agents driving one QGIS instance do not
 # crash each other (everything runs on the main thread), they silently overwrite
@@ -212,7 +201,7 @@ _AUDIT_DEFAULT_MAX_FILES = 14
 
 
 def _audit_base_dir():
-    """Where the audit log lives (same registry dir as connection info and instructions)."""
+    """Where the audit log lives."""
     return registry_dir()
 
 
@@ -382,7 +371,7 @@ def _audit_match(rec, filt):
 
 
 def _audit_recent(n, filt=None):
-    """Return up to n entries from audit-*.jsonl, newest first (for the auditLog bridge)."""
+    """Return up to n entries from audit-*.jsonl, newest first."""
     try:
         names = sorted(
             (x for x in os.listdir(_audit_base_dir())
@@ -408,233 +397,6 @@ def _audit_recent(n, filt=None):
                 if len(out) >= n:
                     return out
     return out
-
-
-def _loaded_plugins():
-    import qgis.utils
-    return qgis.utils.plugins
-
-
-def _plugin_metadata(pid, key):
-    """Read a value from the plugin's metadata.txt (None on failure)."""
-    try:
-        import qgis.utils
-        v = qgis.utils.pluginMetadata(pid, key)
-        return v if v else None
-    except Exception:
-        return None
-
-
-def reload_plugin_now(plugin_id):
-    """Clear the sys.modules cache, reloadPlugin, and reopen open_dialog.
-
-    Shared by the reload_plugin command and the menu hot reload (hot_reload.py).
-    The caller's code frame stays valid after the reload, so
-    plugin_id may be this plugin itself (dsh_qgis_driver).
-    """
-    import sys
-    import qgis.utils
-    for k in [k for k in list(sys.modules)
-              if k == plugin_id or k.startswith(plugin_id + ".")]:
-        sys.modules.pop(k, None)
-    if plugin_id in qgis.utils.plugins:
-        qgis.utils.reloadPlugin(plugin_id)
-    else:
-        qgis.utils.loadPlugin(plugin_id)
-        qgis.utils.startPlugin(plugin_id)
-    p = qgis.utils.plugins.get(plugin_id)
-    opened = False
-    if (p is not None and hasattr(p, "open_dialog")
-            and getattr(p, "open_dialog_on_reload", True)):
-        p.open_dialog()
-        opened = True
-    return {
-        "loaded": plugin_id in qgis.utils.plugins,
-        "opened": opened,
-        "plugins": sorted(qgis.utils.plugins.keys()),
-    }
-
-
-class _GenericBridge:
-    """Generic adapter for plugins without a bridge.
-
-    Third-party plugins outside the repo (mmqgis etc.) cannot have their own
-    bridge.py, so the driver provides a minimal common control surface.
-    Methods return JSON strings like a dedicated bridge.
-
-    - `pluginInfo` / `status` / `actions` / `trigger` / `run` /
-      `openDialog` / `closeDialog`
-    - `run`/`trigger` fire asynchronously through QTimer.singleShot(0, ...), so a
-        command reply is not blocked even when the target opens a modal dialog
-    """
-
-    _DLG_ATTRS = ("dialog", "dlg", "dockwidget", "dock_widget", "dock")
-
-    def __init__(self, plugin_id, plugin):
-        self._pid = plugin_id
-        self._plugin = plugin
-
-    @staticmethod
-    def _ok(payload=None):
-        obj = {"ok": True, "generic": True}
-        if payload:
-            obj.update(payload)
-        return json.dumps(obj, ensure_ascii=False)
-
-    @staticmethod
-    def _err(msg):
-        return json.dumps({"ok": False, "generic": True, "error": str(msg)},
-                          ensure_ascii=False)
-
-    def _find_dialog(self):
-        for a in self._DLG_ATTRS:
-            w = getattr(self._plugin, a, None)
-            if w is not None and hasattr(w, "show"):
-                return w
-        return None
-
-    def _actions(self):
-        from qgis.PyQt.QtWidgets import QAction
-        acts = getattr(self._plugin, "actions", None) or []
-        return [a for a in acts if isinstance(a, QAction)]
-
-    # ---------- Methods (return JSON strings) ----------
-
-    def pluginInfo(self):
-        """Self-description from metadata plus the generic method list."""
-        return self._ok({
-            "id": self._pid,
-            "name": _plugin_metadata(self._pid, "name") or self._pid,
-            "version": _plugin_metadata(self._pid, "version"),
-            "summary": _plugin_metadata(self._pid, "description"),
-            "when_to_use": [
-                "Run this plugin's menu / toolbar actions",
-                "Open or close a plugin's dialogs or docks",
-                "Do minimal control of a plugin that has no dedicated bridge",
-            ],
-            "invoke": {"type": "bridge_call", "plugin_id": self._pid,
-                       "method": "<method>", "args": []},
-            "methods": [
-                {"name": "pluginInfo", "signature": "pluginInfo()",
-                 "description": "Return the metadata-derived self-description"},
-                {"name": "status", "signature": "status()",
-                 "description": "Return state such as dialog presence and action count"},
-                {"name": "actions", "signature": "actions()",
-                 "description": "List the plugin's QActions (index/text/enabled)"},
-                {"name": "trigger", "signature": "trigger(action)",
-                 "description": "Run an action asynchronously (index/text; returns immediately even if a "
-                                "modal dialog opens)"},
-                {"name": "run", "signature": "run()",
-                 "description": "Run plugin.run() asynchronously (returns immediately even if a modal "
-                                "dialog opens)"},
-                {"name": "openDialog", "signature": "openDialog()",
-                 "description": "Show the widget in the dialog/dlg/dockwidget attribute (falls back to "
-                                "async run())"},
-                {"name": "closeDialog", "signature": "closeDialog()",
-                 "description": "Close the widget in the dialog/dlg/dockwidget attribute"},
-            ],
-        })
-
-    def status(self):
-        """Return the plugin state (dialog present, action count, version)."""
-        dlg = self._find_dialog()
-        return self._ok({
-            "id": self._pid,
-            "version": _plugin_metadata(self._pid, "version"),
-            "widget": dlg.__class__.__name__ if dlg is not None else None,
-            "widgetVisible": bool(dlg is not None and dlg.isVisible()),
-            "actions": len(self._actions()),
-            "has_run": callable(getattr(self._plugin, "run", None)),
-        })
-
-    def actions(self):
-        """Return the plugin's QAction list."""
-        out = []
-        for i, a in enumerate(self._actions()):
-            try:
-                out.append({"index": i, "text": a.text(),
-                            "enabled": a.isEnabled(),
-                            "checkable": a.isCheckable()})
-            except Exception:
-                out.append({"index": i, "text": None})
-        return self._ok({"actions": out})
-
-    def trigger(self, action):
-        """Run an action asynchronously (by index/text)."""
-        acts = self._actions()
-        target = None
-        if isinstance(action, bool):
-            return self._err("invalid action selector")
-        if isinstance(action, int):
-            if -len(acts) <= action < len(acts):
-                target = acts[action]
-        else:
-            s = str(action or "")
-            for a in acts:
-                if a.text() == s:
-                    target = a
-                    break
-            if target is None:
-                for a in acts:
-                    if s and s in a.text():
-                        target = a
-                        break
-        if target is None:
-            return self._err(
-                f"action not found: {action} "
-                f"(have: {[a.text() for a in acts]})")
-        QTimer.singleShot(0, target.trigger)
-        return self._ok({"triggered": target.text(), "async": True})
-
-    def run(self):
-        """Run plugin.run() asynchronously."""
-        fn = getattr(self._plugin, "run", None)
-        if not callable(fn):
-            return self._err("plugin has no run()")
-        QTimer.singleShot(0, fn)
-        return self._ok({"started": True, "async": True})
-
-    def openDialog(self):
-        """Show the widget held in the dialog/dlg/dockwidget attribute."""
-        dlg = self._find_dialog()
-        if dlg is not None:
-            dlg.show()
-            try:
-                dlg.raise_()
-                dlg.activateWindow()
-            except Exception:  # nosec B110  # acceptable by design
-                pass
-            return self._ok({"opened": True,
-                             "widget": dlg.__class__.__name__})
-        fn = getattr(self._plugin, "run", None)
-        if callable(fn):
-            QTimer.singleShot(0, fn)
-            return self._ok({"opened": True, "via": "run", "async": True})
-        return self._err("no dialog/dockwidget attribute and no run()")
-
-    def closeDialog(self):
-        """Close the widget held in the dialog/dlg/dockwidget attribute."""
-        dlg = self._find_dialog()
-        if dlg is None:
-            return self._err("no dialog/dockwidget attribute")
-        try:
-            dlg.close()
-        except Exception:
-            dlg.hide()
-        return self._ok({"closed": True,
-                         "widget": dlg.__class__.__name__})
-
-
-def _find_plugin_driver(plugin_id):
-    """Return another plugin's LiveDriver (None if absent)."""
-    p = _loaded_plugins().get(plugin_id)
-    if p is None:
-        return None
-    for attr in ("driver", "_live", "live"):
-        d = getattr(p, attr, None)
-        if d is not None and hasattr(d, "_handle"):
-            return d
-    return None
 
 
 class TaskRegistry:
@@ -909,16 +671,6 @@ class LiveDriver:
     def _dispatch(self, cmd, reply):
         cid = cmd.get("id") or f"auto-{next(_AUTO_IDS)}"
         ctype = cmd.get("type", "eval")
-        pid = cmd.get("plugin_id")
-        # devin_*/copilot_* are always handled by this driver
-        # (never forwarded to other plugins)
-        if ctype.startswith("devin_") or ctype.startswith("copilot_"):
-            self._agent_task(cid, ctype, cmd, reply)
-            return
-        # Commands whose plugin_id points at another plugin are forwarded to that driver.
-        # Results return to this live dir's results.jsonl through the injected reply.
-        if pid and pid != __package__ and ctype not in _LOCAL_TYPES:
-            return self._forward(cid, pid, cmd, reply)
         if ctype == "pyeval":
             self._pyeval(cid, cmd.get("code", ""), reply, cmd.get("timeout"))
             return
@@ -946,133 +698,11 @@ class LiveDriver:
         if ctype == "status":
             reply({"id": cid, "result": self._status()})
             return
-        if ctype == "open_plugin":
-            self._open_plugin(cid, pid, reply)
-            return
-        if ctype == "reload_plugin":
-            self._reload_plugin(cid, pid, reply)
-            return
-        if ctype == "bridge_call":
-            self._bridge_call(cid, cmd, reply)
-            return
-        if ctype == "describe_plugins":
-            self._describe_plugins(cid, reply)
-            return
-        if ctype == "instruction":
-            self._instruction(cid, cmd, reply)
-            return
         reply({
             "id": cid,
-            "error": f"type={ctype} unsupported: dsh_qgis_driver has no WebEngine view. "
-            "pass plugin_id of a WebEngine plugin to route "
-            "(eval/devreload/screenshot), or use "
-            "pyeval/status/open_plugin/reload_plugin/bridge_call/"
-            "describe_plugins/devin_*",
+            "error": f"unknown command type \"{ctype}\" — this plugin only serves "
+            f"{', '.join(sorted(_LOCAL_TYPES))}",
         })
-
-    def _forward(self, cid, pid, cmd, reply):
-        """Forward a command to another plugin's driver and return the result to the caller."""
-        drv = _find_plugin_driver(pid)
-        if drv is None:
-            reply({"id": cid, "error":
-                   f"plugin '{pid}' has no live driver "
-                   f"(loaded: {sorted(_loaded_plugins().keys())})"})
-            return
-        if "reply" not in inspect.signature(drv._handle).parameters:
-            reply({"id": cid, "error":
-                   f"plugin '{pid}' driver does not support reply routing; "
-                   "redeploy+reload it to update live_driver.py"})
-            return
-        fwd = {k: v for k, v in cmd.items() if k != "plugin_id"}
-        # The forwarding driver records the audit, so suppress it at the destination
-        fwd["_audit_off"] = True
-        try:
-            return drv._handle(fwd, reply=reply)
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
-
-    def _instruction(self, cid, cmd, reply):
-        """Instruction (agents/skills) operations. The body of the qgis_instruction tool.
-
-        Pure file I/O with no GUI dependency, but handled through the GUI-thread
-        dispatch like other commands (ai_client is in this plugin).
-        """
-        try:
-            from . import ai_client
-            op = cmd.get("op") or ""
-            kind = cmd.get("kind") or ""
-            if kind not in ("agents", "skills", "prompts"):
-                reply({"id": cid,
-                       "error": "kind must be agents|skills|prompts: "
-                                f"{kind!r}"})
-                return
-            if op == "list":
-                reply({"id": cid, "result":
-                       ai_client.list_instruction_files(kind)})
-            elif op == "read":
-                body = ai_client.load_instruction(
-                    kind, cmd.get("id") or "")
-                if body is None:
-                    reply({"id": cid, "error":
-                           f"{kind} '{cmd.get('id')}' not found"})
-                else:
-                    reply({"id": cid, "result": body})
-            elif op == "save":
-                p = ai_client.save_instruction(
-                    kind, cmd.get("name") or "", cmd.get("text") or "")
-                reply({"id": cid, "result": f"saved: {p}"})
-            elif op == "delete":
-                if ai_client.delete_instruction(
-                        kind, cmd.get("id") or ""):
-                    reply({"id": cid, "result":
-                           f"deleted: {kind}/{cmd.get('id')}"})
-                else:
-                    reply({"id": cid, "error":
-                           f"cannot delete {kind} '{cmd.get('id')}' "
-                           "(missing or bundled)"})
-            else:
-                reply({"id": cid,
-                       "error": f"op must be list|read|save|delete: {op!r}"})
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
-
-    def _agent_task(self, cid, ctype, cmd, reply):
-        """Body of the qgis_devin_*/qgis_copilot_* tools.
-        Async task management for the agent CLIs (devin -p / copilot -p / acp).
-
-        Startup and status checks do not block (Popen/log reads only), so
-        they may be handled through the GUI-thread dispatch like other commands.
-        """
-        from . import devin_tasks
-        try:
-            agent, _, op = ctype.partition("_")  # devin_run→(devin,run)
-            if op == "run":
-                reply({"id": cid, "result": devin_tasks.run(
-                    cmd.get("prompt") or "", cwd=cmd.get("cwd"),
-                    session_id=cmd.get("session_id"),
-                    model=cmd.get("model"),
-                    permission_mode=(cmd.get("permission_mode")
-                                     or "dangerous"),
-                    engine=cmd.get("engine") or "auto",
-                    agent=agent,
-                    live_dir=self.dir)})
-            elif op == "status":
-                reply({"id": cid, "result": devin_tasks.status(
-                    cmd.get("task_id"))})
-            elif op == "result":
-                reply({"id": cid, "result": devin_tasks.result(
-                    cmd.get("task_id") or "",
-                    tail=cmd.get("tail") or 20000)})
-            elif op == "abort":
-                reply({"id": cid, "result": devin_tasks.abort(
-                    cmd.get("task_id") or "")})
-            else:
-                reply({"id": cid, "error":
-                       f"op must be run|status|result|abort: {ctype!r}"})
-        except devin_tasks.TaskError as e:
-            reply({"id": cid, "error": str(e)})
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
 
     def _audit_tail(self, cid, cmd, reply):
         """Return recent audit records (tail | error | slow)."""
@@ -1082,24 +712,7 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _status(self):
-        """Return the state of the driver itself and all plugins (liveness check/list)."""
-        plugs = {}
-        try:
-            for pid, p in _loaded_plugins().items():
-                drv = None
-                for a in ("driver", "_live", "live"):
-                    d = getattr(p, a, None)
-                    if d is not None and hasattr(d, "_handle"):
-                        drv = d
-                        break
-                plugs[pid] = {
-                    "driver": drv is not None,
-                    "view": bool(drv is not None
-                                 and getattr(drv, "view", None) is not None),
-                    "bridge": getattr(p, "bridge", None) is not None,
-                }
-        except Exception:  # nosec B110  # acceptable by design
-            pass
+        """Liveness of this instance: pid, live dir, port, counters."""
         return {
             "pid": os.getpid(),
             "plugin": __package__,
@@ -1107,174 +720,12 @@ class LiveDriver:
             "host": self.http_host,
             "http_port": self.http_port,
             "view": self.view is not None,
-            "plugins": plugs,
             "calls": self.stats.get("calls", 0),
             "errors": self.stats.get("errors", 0),
             "last_error": self.stats.get("last_error"),
         }
 
-    def _open_plugin(self, cid, pid, reply):
-        """Load/start a plugin and open open_dialog if present."""
-        if not pid:
-            reply({"id": cid, "error": "plugin_id required"})
-            return
-        try:
-            import qgis.utils
-            if pid not in qgis.utils.plugins:
-                qgis.utils.loadPlugin(pid)
-                qgis.utils.startPlugin(pid)
-            p = qgis.utils.plugins.get(pid)
-            opened = False
-            if p is not None and hasattr(p, "open_dialog"):
-                p.open_dialog()
-                opened = True
-            reply({"id": cid, "result": {
-                "loaded": pid in qgis.utils.plugins,
-                "opened": opened,
-                "plugins": sorted(qgis.utils.plugins.keys()),
-            }})
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
-
-    def _reload_plugin(self, cid, pid, reply):
-        """Clear the sys.modules cache, reloadPlugin, and reopen the dialog.
-
-        Reloading this plugin (dsh_qgis_driver) itself is allowed: this driver is
-        unloaded and re-created while running, but the caller's code frame stays
-        valid, so the result can be written to results.jsonl after the reload.
-        """
-        if not pid:
-            reply({"id": cid, "error": "plugin_id required"})
-            return
-        try:
-            reply({"id": cid, "result": reload_plugin_now(pid)})
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
-
     @staticmethod
-    def _bridge_args(fn, args):
-        """Normalize bridge_call args into (positional args, kwargs).
-
-        Absorb cases where the model passes kwargs:
-        - args={"k": v, ...}      (a dict, not a list)
-        - args=[{"k": v, ...}]    (a list with a single dict)
-        - args=[pos..., {"k": v}] (trailing dict = kwargs for the remaining params)
-        Only when the trailing dict's keys fit the unbound parameter names is it
-        turned into kwargs; otherwise the dict (a normal dict argument) is passed
-        as a positional argument as before.
-        """
-        if isinstance(args, dict):
-            pos, cand = [], dict(args)
-        else:
-            pos = list(args)
-            cand = pos.pop() if pos and isinstance(pos[-1], dict) else None
-        if not cand:
-            return list(args) if isinstance(args, (list, tuple)) else [], {}
-        try:
-            params = inspect.signature(fn).parameters
-        except (TypeError, ValueError):
-            return args, {}
-        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD
-                        for p in params.values())
-        names = [n for n, p in params.items()
-                 if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                               inspect.Parameter.KEYWORD_ONLY)]
-        bound = set(names[:len(pos)])
-        if has_varkw or (set(cand) <= set(names) and not set(cand) & bound):
-            return pos, cand
-        return args, {}
-
-    def _bridge_call(self, cid, cmd, reply):
-        """Call a method of a plugin's bridge object directly in-process.
-
-        Unlike JS's BridgeClient.callJson it does not go through WebChannel, so
-        bridge methods can be verified even while the renderer is starved.
-        Following the convention that bridge methods return JSON strings, parse and
-        return them structured when possible. plugin_id defaults to the first bridge plugin.
-        """
-        pid = cmd.get("plugin_id")
-        method = cmd.get("method")
-        args = cmd.get("args") or []
-        try:
-            plugins = _loaded_plugins()
-            target = plugins.get(pid) if pid else None
-            if target is None:
-                target = next(
-                    (p for p in plugins.values()
-                     if getattr(p, "bridge", None) is not None), None)
-            if target is None:
-                reply({"id": cid, "error":
-                       f"plugin '{pid}' not loaded "
-                       f"(loaded: {sorted(plugins.keys())})"})
-                return
-            # Plugins without a dedicated bridge get a minimal control surface via the adapter
-            bridge = getattr(target, "bridge", None)
-            if bridge is None:
-                gpid = next((k for k, v in plugins.items() if v is target),
-                            pid)
-                bridge = _GenericBridge(gpid, target)
-            fn = getattr(bridge, method, None) if bridge is not None else None
-            if not callable(fn):
-                reply({"id": cid, "error":
-                       f"no bridge method '{method}'. methods: "
-                       f"{[m for m in dir(bridge) if not m.startswith('_')] if bridge else 'no bridge'}"})
-                return
-            b_args, b_kwargs = self._bridge_args(fn, args)
-            res = fn(*b_args, **b_kwargs)
-            if isinstance(res, str):
-                try:
-                    res = json.loads(res)
-                except Exception:  # nosec B110  # acceptable by design
-                    pass
-            reply({"id": cid, "result": _to_jsonable(res)})
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
-
-    def _describe_plugins(self, cid, reply):
-        """Return a catalog of the plugins available to the AI.
-
-        Enumerates all loaded plugins and, for those with a bridge, calls
-        pluginInfo() to aggregate the self-description (id/name/summary/when_to_use/
-        methods). The entry point through which the AI discovers "which plugin to use
-        when and how".
-        """
-        try:
-            out = []
-            for pid, p in sorted(_loaded_plugins().items()):
-                entry = {"id": pid}
-                bridge = getattr(p, "bridge", None)
-                entry["bridge"] = bridge is not None
-                if bridge is None:
-                    # Carry the metadata-derived self-description through the generic adapter
-                    # so the AI can also discover and operate plugins without a bridge
-                    bridge = _GenericBridge(pid, p)
-                    entry["generic"] = True
-                if bridge is not None:
-                    info = getattr(bridge, "pluginInfo", None)
-                    if callable(info):
-                        try:
-                            res = info()
-                            if isinstance(res, str):
-                                try:
-                                    res = json.loads(res)
-                                except Exception:  # nosec B110  # acceptable by design
-                                    pass
-                            entry["info"] = _to_jsonable(res)
-                        except Exception:
-                            entry["info_error"] = traceback.format_exc()
-                    else:
-                        entry["methods"] = sorted(
-                            m for m in dir(bridge)
-                            if not m.startswith("_")
-                            and callable(getattr(bridge, m)))
-                out.append(entry)
-            reply({"id": cid, "result": {
-                "pid": os.getpid(),
-                "plugins": out,
-            }})
-        except Exception:
-            reply({"id": cid, "error": traceback.format_exc()})
-
     def _screenshot(self, cid, cmd, reply):
         """Save the map canvas (default) or the main window as PNG."""
         path = cmd.get("path") or os.path.join(self.dir, f"shot-{cid}.png")

@@ -157,10 +157,11 @@ await ok('mutating actions take the lease, reads and exports do not', () => {
   assert.equal(isMutating('qgis_layer', 'export'), false)
   assert.equal(isMutating('qgis_map', 'render'), false)
 })
-await ok('the doc-writing instruction action only locks on writes', () => {
-  assert.equal(isMutating('qgis_plugin', 'instruction', { op: 'save' }), true)
-  assert.equal(isMutating('qgis_plugin', 'instruction', { op: 'read' }), false)
-  assert.equal(isMutating('qgis_plugin', 'instruction', { op: 'list' }), false)
+await ok('restart is the only plugin action that changes the instance', () => {
+  assert.equal(isMutating('qgis_plugin', 'restart', {}), false)
+  assert.equal(requiredScope('qgis_plugin', 'restart', {}), 'danger')
+  assert.equal(requiredScope('qgis_plugin', 'status', {}), 'read')
+  assert.equal(requiredScope('qgis_plugin', 'log', {}), 'read')
 })
 await ok('the lease owner falls back to dsh outside an agent', () => {
   assert.equal(lockOwner(undefined), 'dsh')
@@ -275,14 +276,11 @@ await ok('write scope is the default: edits pass, destruction and PyQGIS do not'
   for (const [tool, action, args] of [
     ['qgis_layer', 'style', {}], ['qgis_layer', 'add', {}], ['qgis_layer', 'export', {}],
     ['qgis_layout', 'add_item', {}], ['qgis_analysis', 'run', {}], ['qgis_project', 'save', {}],
-    ['qgis_plugin', 'instruction', { op: 'read' }],
   ]) assert.equal(scopeRefusal('write', tool, action, args), null, `${tool} ${action}`)
   for (const [tool, action, args] of [
     ['qgis_layer', 'remove', {}], ['qgis_feature', 'delete', {}],
     ['qgis_project', 'open', {}], ['qgis_project', 'save_as', {}],
-    ['qgis_plugin', 'restart', {}], ['qgis_plugin', 'bridge', {}],
-    ['qgis_plugin', 'instruction', { op: 'save' }],
-    ['qgis_plugin', 'instruction', { op: 'delete' }],
+    ['qgis_plugin', 'restart', {}],
     ['execute_qgis_sync', '', {}], ['submit_qgis_async', '', {}],
   ]) assert.match(String(scopeRefusal('write', tool, action, args)), /blocked/, `${tool} ${action}`)
 })

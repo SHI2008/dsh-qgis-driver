@@ -5,6 +5,21 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Removed
+- The whole GUI side: `ai_panel.py` (2104 lines), `ai_client.py` (2593),
+  `devin_tasks.py` (840), `mode_switch.py` (385), `bridge.py` (464),
+  `hot_reload.py` (67), `geo_toolbar.py` (32), `i18n_json.py` (128),
+  `connection_info.py` (246), `credential_store.py` (299), plus `docs/`,
+  `prompts/`, `skills/`, `verify/` and `i18n/`. The plugin is now the execution
+  service only (2385 Python lines, down from 11043): no dock, no menu, no
+  settings dialog, no AI panel, no hot reload, no deploy mode, no bridge to
+  other plugins. Enable the plugin to start the service, disable it to stop.
+- `eval`, `devreload`, `open_plugin`, `reload_plugin`, `bridge_call`,
+  `describe_plugins` and `instruction` command types, and the `plugin_id`
+  forwarding on the HTTP routes. `status` no longer enumerates other plugins.
+- The QSettings `enabled` flag that gated startup — stopping the service is now
+  what disabling the plugin has always meant.
+
 ### Added
 - `audit` command and `_audit_read()`: the audit jsonl is readable through the control
   surface (`tail` / `error` / `slow`, `args` truncated to 160 chars), and `status` reports

@@ -10,9 +10,7 @@ with nothing but HTTP POST.
   POST /api/task_cancel  {"task_id": "..."} or {"task_ids": [...]} -> cancel queued
                          shards (running ones only record the request)
   POST /api/pyeval_group {"tasks": [{"name","code"}], "max_workers": 4}
-  POST /api/eval         {"expression": "...", "plugin_id": "<id>"} (forwarded to a
-                         plugin that has a view. Without plugin_id, returns unsupported)
-  POST /api/screenshot   {"path": "...?", "plugin_id": "...", "target": "..."}
+  POST /api/screenshot   {"path": "...?", "target": "..."}
                          -> PNG binary (Content-Type: image/png)
   GET  /api/tools        tool spec JSON (for function-calling AIs to read)
   GET  /api/status       result of the status command
@@ -21,10 +19,6 @@ with nothing but HTTP POST.
 Execution path: HTTP worker thread -> driver.submit() puts it on the in-memory queue ->
 the GUI thread's LiveDriver._poll runs it -> the worker waits and returns the result.
 Only the GUI thread ever touches iface/QgsProject.
-
-With plugin_id, eval/pyeval/screenshot/devreload are forwarded to that plugin's
-LiveDriver (hub route). open_plugin/reload_plugin/bridge_call/status are
-handled by this driver with plugin_id as a command argument.
 
 Binds to 127.0.0.1 on a free port. This surface is local-only by design: the
 client is the DSH bundle running on the same machine. There is no remote
@@ -57,56 +51,26 @@ TOOLS = [
             "Execute arbitrary Python inside the running QGIS process "
             "(GUI thread). Namespace has iface/QgsProject/QgsApplication/"
             "driver. Expressions return their value; statements return "
-            "the `result` variable. With plugin_id, runs in that plugin's "
-            "driver namespace (its `view` is available).",
+            "the `result` variable.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "code": {"type": "string"},
-                "plugin_id": {"type": "string"},
             },
             "required": ["code"],
         },
     },
     {
-        "name": "qgis_eval",
-        "description":
-            "Evaluate a JS expression inside a plugin's QWebEngineView "
-            "(routed to the plugin's live driver via plugin_id).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "expression": {"type": "string"},
-                "plugin_id": {"type": "string"},
-            },
-            "required": ["expression", "plugin_id"],
-        },
-    },
-    {
         "name": "qgis_screenshot",
         "description":
-            "Capture PNG. Default: this driver's map canvas. With plugin_id "
-            "routes to that plugin (its view). target: canvas|mainwindow "
-            "(driver) or view|window|canvas|mainwindow (WebEngine plugin). "
-            "Returns the image.",
+            "Capture PNG of the live map canvas. "
+            "target: canvas|mainwindow. Returns the image.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
-                "plugin_id": {"type": "string"},
                 "target": {"type": "string"},
             },
-        },
-    },
-    {
-        "name": "qgis_devreload",
-        "description":
-            "Re-import a plugin's repo-side bridge/ui (WEBENGINE_DEV_SRC) and "
-            "reload its page. Routed via plugin_id.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"plugin_id": {"type": "string"}},
-            "required": ["plugin_id"],
         },
     },
     {
@@ -115,265 +79,6 @@ TOOLS = [
             "Driver status: pid, http port, loaded plugins and which have "
             "live drivers / views.",
         "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "qgis_open_plugin",
-        "description":
-            "Load+start a QGIS plugin if needed and call its open_dialog().",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"plugin_id": {"type": "string"}},
-            "required": ["plugin_id"],
-        },
-    },
-    {
-        "name": "qgis_reload_plugin",
-        "description":
-            "Hot-reload a QGIS plugin (sys.modules cleanup + reloadPlugin + "
-            "open_dialog). No QGIS restart needed.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {"plugin_id": {"type": "string"}},
-            "required": ["plugin_id"],
-        },
-    },
-    {
-        "name": "qgis_bridge_call",
-        "description":
-            "Call a plugin's bridge method directly in-process (bypasses "
-            "WebChannel, so it works even while the JS renderer is starved). "
-            "JSON-string results are parsed. plugin_id optional.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "plugin_id": {"type": "string"},
-                "method": {"type": "string"},
-                "args": {"type": "array"},
-            },
-            "required": ["method"],
-        },
-    },
-    {
-        "name": "qgis_describe_plugins",
-        "description":
-            "Catalog of all loaded QGIS plugins and their AI-callable "
-            "capabilities. For plugins exposing a `bridge`, aggregates "
-            "each bridge's pluginInfo() (summary / when_to_use / methods "
-            "with signatures and examples). Call this first to discover "
-            "which plugin to use for a task, then invoke it via "
-            "qgis_bridge_call.",
-        "inputSchema": {"type": "object", "properties": {}},
-    },
-    {
-        "name": "qgis_instruction",
-        "description":
-            "Manage AI instruction files on this machine. kind=agents "
-            "(persistent instructions injected into the assistant's "
-            "system prompt), skills (on-demand procedural docs), or "
-            "prompts (canned prompt text for the panel's suggestion "
-            "list). "
-            "op=list|read|save|delete. save writes the user file "
-            "(~/.qgis-live/<kind>/<name>.md); a same-id user file "
-            "shadows the bundled one. delete works on user files only. "
-            "Format: first '# ' line = title, next non-empty line = "
-            "description, rest = body.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "op": {"type": "string",
-                       "enum": ["list", "read", "save", "delete"]},
-                "kind": {"type": "string",
-                         "enum": ["agents", "skills", "prompts"]},
-                "id": {"type": "string",
-                       "description": "Target file name (stem); for read/delete"},
-                "name": {"type": "string",
-                         "description": "File name to save (stem); for save"},
-                "text": {"type": "string",
-                         "description": "File body (Markdown); for save"},
-            },
-            "required": ["op", "kind"],
-        },
-    },
-    {
-        "name": "qgis_devin_run",
-        "description":
-            "Start a Devin CLI agent session as a background task on "
-            "this machine and return a task_id immediately. Devin "
-            "works autonomously in `cwd` (default: user home). Poll "
-            "progress with qgis_devin_status, fetch output with "
-            "qgis_devin_result, stop with qgis_devin_abort. engine: "
-            "'acp' drives `devin acp` over JSON-RPC and shares IDE "
-            "sign-in (no `devin auth login` needed); 'print' runs "
-            "`devin -p` and requires `devin auth login`; 'auto' "
-            "(default) prefers acp when IDE credentials exist. "
-            "session_id resumes a Devin session (acp: session/load, "
-            "print: -r); the new session id appears in "
-            "qgis_devin_status. permission_mode controls how "
-            "permission prompts are auto-answered: 'dangerous' "
-            "(default) auto-approves everything, other modes "
-            "approve once per request. Each run consumes Devin "
-            "credits.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string",
-                           "description": "Task instruction for Devin"},
-                "cwd": {"type": "string",
-                        "description": "Working directory "
-                                       "(default: user home)"},
-                "session_id": {"type": "string",
-                               "description": "Resume this Devin "
-                                              "session id "
-                                              "(acp: session/load, "
-                                              "print: -r)"},
-                "model": {"type": "string",
-                          "description": "Devin model override"},
-                "permission_mode": {
-                    "type": "string",
-                    "enum": ["normal", "accept-edits", "smart",
-                             "dangerous"],
-                    "description": "Permission auto-answer policy "
-                                   "(default: dangerous)"},
-                "engine": {
-                    "type": "string",
-                    "enum": ["auto", "acp", "print"],
-                    "description": "'acp'=IDE-shared auth JSON-RPC, "
-                                   "'print'=`devin -p` (needs "
-                                   "devin auth login), 'auto'=prefer "
-                                   "acp (default)"},
-            },
-            "required": ["prompt"],
-        },
-    },
-    {
-        "name": "qgis_devin_status",
-        "description":
-            "Check a Devin task's state (running/exited/failed), "
-            "elapsed seconds and recent log output. Omit task_id to "
-            "list all Devin tasks of this QGIS process.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-            },
-        },
-    },
-    {
-        "name": "qgis_devin_result",
-        "description":
-            "Fetch a Devin task's captured output (log tail). Call "
-            "after qgis_devin_status shows the task exited. tail = "
-            "max characters returned (default 20000).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "tail": {"type": "integer"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "qgis_devin_abort",
-        "description":
-            "Kill a running Devin task started via qgis_devin_run.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "qgis_copilot_run",
-        "description":
-            "Start a GitHub Copilot CLI agent session as a background "
-            "task on this machine and return a task_id immediately. "
-            "Copilot works autonomously in `cwd` (default: user home). "
-            "Poll progress with qgis_copilot_status, fetch output with "
-            "qgis_copilot_result, stop with qgis_copilot_abort. engine: "
-            "'acp' drives `copilot --acp --stdio` over JSON-RPC; "
-            "'print' runs `copilot -p`; 'auto' (default) prefers acp. "
-            "Both use the CLI's gh sign-in — no API key needed. "
-            "session_id resumes a Copilot session (acp: session/load, "
-            "print: -r). permission_mode 'dangerous' (default) sets "
-            "COPILOT_ALLOW_ALL=true (auto-approve all tools + trust "
-            "cwd); 'accept-edits' passes --allow-all-tools only. Each "
-            "run consumes Copilot premium requests.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "prompt": {"type": "string",
-                           "description": "Task instruction for "
-                                          "Copilot"},
-                "cwd": {"type": "string",
-                        "description": "Working directory "
-                                       "(default: user home)"},
-                "session_id": {"type": "string",
-                               "description": "Resume this Copilot "
-                                              "session id "
-                                              "(acp: session/load, "
-                                              "print: -r)"},
-                "model": {"type": "string",
-                          "description": "Copilot model override "
-                                         "(--model)"},
-                "permission_mode": {
-                    "type": "string",
-                    "enum": ["normal", "accept-edits", "smart",
-                             "dangerous"],
-                    "description": "Permission auto-answer policy "
-                                   "(default: dangerous)"},
-                "engine": {
-                    "type": "string",
-                    "enum": ["auto", "acp", "print"],
-                    "description": "'acp'=`copilot --acp --stdio` "
-                                   "JSON-RPC, 'print'=`copilot -p`, "
-                                   "'auto'=prefer acp (default)"},
-            },
-            "required": ["prompt"],
-        },
-    },
-    {
-        "name": "qgis_copilot_status",
-        "description":
-            "Check a Copilot CLI task's state (running/exited/failed), "
-            "elapsed seconds and recent log output. Omit task_id to "
-            "list all agent tasks of this QGIS process.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-            },
-        },
-    },
-    {
-        "name": "qgis_copilot_result",
-        "description":
-            "Fetch a Copilot CLI task's captured output (log tail). "
-            "Call after qgis_copilot_status shows the task exited. "
-            "tail = max characters returned (default 20000).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-                "tail": {"type": "integer"},
-            },
-            "required": ["task_id"],
-        },
-    },
-    {
-        "name": "qgis_copilot_abort",
-        "description":
-            "Kill a running Copilot CLI task started via "
-            "qgis_copilot_run.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string"},
-            },
-            "required": ["task_id"],
-        },
     },
 ]
 
@@ -505,11 +210,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": f"bad json: {e}"})
             return
         if self.path == "/api/cmd":
-            # dispatch the command JSON as-is (type/plugin_id etc. remain valid)
+            # dispatch the command JSON as-is
             self._api_call(data)
         elif self.path == "/api/pyeval":
             self._api_call({"type": "pyeval", "code": data.get("code", ""),
-                            "plugin_id": data.get("plugin_id"),
                             "timeout": data.get("timeout")})
         elif self.path == "/api/pyeval_async":
             self._api_call({"type": "pyeval_async",
@@ -522,13 +226,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._api_call({"type": "task_cancel",
                             "task_id": data.get("task_id"),
                             "task_ids": data.get("task_ids") or []})
-        elif self.path == "/api/eval":
-            self._api_call({"type": "eval",
-                            "expression": data.get("expression", ""),
-                            "plugin_id": data.get("plugin_id")})
         elif self.path == "/api/screenshot":
-            self._api_shot(data.get("path"), data.get("plugin_id"),
-                           data.get("target"))
+            self._api_shot(data.get("path"), data.get("target"))
         else:
             self._json(404, {"error": "not found"})
 
@@ -537,13 +236,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(403, {"error":
                              f"type '{cmd.get('type')}' not allowed"})
             return
-        # don't send an unset plugin_id (leaving it out keeps "local/default target")
-        if cmd.get("plugin_id") is None:
-            cmd.pop("plugin_id", None)
         rep = self._dispatch(cmd)
         self._json(200 if "error" not in rep else 500, rep)
 
-    def _api_shot(self, path, plugin_id=None, target=None):
+    def _api_shot(self, path, target=None):
         if not self._allowed("screenshot"):
             self._json(403, {"error": "type 'screenshot' not allowed"})
             return
@@ -551,8 +247,6 @@ class _Handler(BaseHTTPRequestHandler):
             path = os.path.join(tempfile.gettempdir(),
                                 f"qgis-shot-{uuid.uuid4().hex[:8]}.png")
         cmd = {"type": "screenshot", "path": path}
-        if plugin_id:
-            cmd["plugin_id"] = plugin_id
         if target:
             cmd["target"] = target
         rep = self._dispatch(cmd)

@@ -18,7 +18,7 @@ round-trip, while hand-written pyeval is one round-trip per step.
 | `qgis_layout` | list / create / info / add_item / update_item / legend_edit / align / export / export_atlas |
 | `qgis_analysis` | list / help / run / zonal_stats / reclassify |
 | `qgis_map` | render / screenshot / set_extent / zoom_to_layer |
-| `qgis_plugin` | status / describe / open / reload / bridge / instruction / lock / log / restart |
+| `qgis_plugin` | status / lock / log / restart |
 | `execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task` | escape hatch for anything not covered; `submit_qgis_async` takes `tasks=[{name,code}] + max_workers` for a bounded worker pool, `check_qgis_task` takes `task_ids=[]` for a whole group (add `cancel=true` to stop it) |
 
 ## Rules

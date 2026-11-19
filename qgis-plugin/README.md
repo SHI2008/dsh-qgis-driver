@@ -1,5 +1,3 @@
-> **Core driver for QGIS Live Harness** — [QGIS Live Harness](https://yamamoto-ryuzo.github.io/qgis_live_harness/) · [Plugin list](https://yamamoto-ryuzo.github.io/qgis_live_harness/plugins.html) · [Documentation](https://github.com/yamamoto-ryuzo/qgis_live_harness/tree/master/qgis-plugin/dsh_qgis_driver/docs) · [Repository](https://github.com/yamamoto-ryuzo/qgis_live_harness)
-
 # dsh-qgis-driver (`dsh_qgis_driver`)
 
 > **Fork notice:** This repository is an independent fork of
@@ -8,46 +6,42 @@
 > from the upstream project, and changes here are not intended to be merged
 > upstream. The original author and GPL-3.0 licensing are preserved.
 
-**📖 Documentation: [docs/index.html](docs/index.html)**
-(installation, usage, and specification details)
+## What it is
 
-## Overview
+A headless execution service inside QGIS: it turns the running process into a
+local control surface that an agent drives. No dock, no menu, no dialog. Enable
+the plugin and it starts; disable it and it stops.
 
-A UI-less, control-only plugin that lets clients — on the **same PC** or a
-**remote machine** — remotely operate a running QGIS process. It exposes QGIS
-internals (`iface`, `QgsProject`, map canvas) as automation primitives
-over file-JSONL and REST (`/api/*`).
+- **One channel, one machine.** A file-JSONL channel plus a `127.0.0.1` REST
+  server, both token-authenticated with a per-session token written to a
+  user-only registry file. There is no remote mode and no stable API key.
+- **Commands:** `pyeval` (arbitrary Python on the GUI thread, optional
+  `timeout`), `pyeval_group` + `task_status` / `task_cancel` (worker pools),
+  `screenshot`, `write_lock` (instance write lease), `audit` (read back the
+  audit log) and `status`.
+- **Two hardening properties the client relies on:** a hard timeout interrupts a
+  runaway `pyeval` instead of freezing QGIS, and a single write lease keeps two
+  agents from silently overwriting each other's edits.
 
-## Features
+`pyeval` executes arbitrary Python inside QGIS — the trust boundary is the local
+user account.
 
-- `pyeval` / `eval` / `screenshot` / `devreload` / `bridge_call` /
-  `describe_plugins` primitives for remote control of all managed plugins
-- Embedded HTTP server (`/api/*` REST)
-- Built-in AI assistant panel (OpenAI-compatible / Anthropic / Gemini /
-  Azure OpenAI / GitHub Copilot / ACP agents) with tool-loop execution
-- Hot reload of managed plugins, GeoSuite shared toolbar (mode badge),
-  layer_org layer-organization service, Deploy Mode switching
+## Install
 
-## Local only
+Drop `dsh_qgis_driver` into your QGIS profile's `python/plugins` directory and
+enable it in *Plugins → Manage and Install Plugins*. The client finds it through
+`~/.qgis-live`.
 
-The HTTP server binds to `127.0.0.1` on a free port. There is no remote mode:
-no bind-address variable, no fixed port, and no API key to share. The only
-client is the DSH bundle on the same machine, and it reads the per-session
-token from the registry file `~/.qgis-live/<pid>-dsh_qgis_driver.json`.
+## Layout
 
-## Links
+| file | role |
+| --- | --- |
+| `__init__.py` | plugin entry: start the driver, publish the registry file |
+| `live_driver.py` | command loop, task registry, write lease, audit log |
+| `http_api.py` | local REST surface over the same command types |
+| `profile_store.py` | shared profile-directory resolution |
+| `layer_org.py`, `scale_style.py` | layer organization / scale styling services |
 
-- Documentation: [docs/index.html](docs/index.html)
-- Changelog: [CHANGELOG.md](CHANGELOG.md)
-- License: GPL-3.0 ([LICENSE](LICENSE))
+## License
 
-## Disclaimer
-
-This software was created and tested on a personal PC.
-No liability is accepted for any damages arising from its use.
-
-<p align="center">
-  <a href="https://giphy.com/explore/free-gif" target="_blank">
-    <img src="https://github.com/yamamoto-ryuzo/QGIS_portable_3x/raw/master/imgs/giphy.gif" width="500" title="avvio QGIS">
-  </a>
-</p>
+GPL-3.0, inherited from the upstream project.

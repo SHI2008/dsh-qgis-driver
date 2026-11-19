@@ -1406,7 +1406,7 @@ result = {'raster': rname, 'table': params.get('TABLE'), 'added': layer.name(), 
 };
 
 // Actions that change what another agent would read back from this instance
-// (project state, layouts, layer styling, docs). Reads and exports stay
+// (project state, layouts, layer styling). Reads and exports stay
 // unlocked on purpose: parallel rendering is the whole point of the shard API.
 // An entry may be a plain action or { action, when(args) } for a sub-op.
 export const MUTATING = {
@@ -1416,8 +1416,6 @@ export const MUTATING = {
   qgis_feature: ['add', 'update', 'delete', 'field_add', 'field_calc',
     'field_delete', 'field_rename'],
   qgis_layout: ['create', 'add_item', 'update_item', 'legend_edit', 'align'],
-  qgis_plugin: [{ action: 'instruction',
-    when: (a) => a.op !== 'read' && a.op !== 'list' }],
 }
 
 export const lockOwner = (exec) => {
@@ -1450,8 +1448,7 @@ export const READ_ONLY_ACTIONS = new Set([
   'qgis_layout:list', 'qgis_layout:info',
   'qgis_analysis:list', 'qgis_analysis:help',
   'qgis_map:render', 'qgis_map:set_extent', 'qgis_map:zoom_to_layer', 'qgis_map:screenshot',
-  'qgis_plugin:status', 'qgis_plugin:describe', 'qgis_plugin:log',
-  'qgis_plugin:lock',
+  'qgis_plugin:status', 'qgis_plugin:log', 'qgis_plugin:lock',
 ])
 
 /** Actions that need the widest scope: destructive, out-of-project, or raw code. */
@@ -1459,7 +1456,7 @@ export const DANGER_ACTIONS = new Set([
   'qgis_project:open', 'qgis_project:save_as',
   'qgis_layer:remove',
   'qgis_feature:delete', 'qgis_feature:field_delete',
-  'qgis_plugin:open', 'qgis_plugin:reload', 'qgis_plugin:bridge', 'qgis_plugin:restart',
+  'qgis_plugin:restart',
   'execute_qgis_sync:*', 'submit_qgis_async:*',
 ])
 
@@ -1473,11 +1470,6 @@ export const WRITE_ACTIONS = new Set([
 export function requiredScope(tool, action, args) {
   const key = `${tool}:${action}`
   if (DANGER_ACTIONS.has(key) || DANGER_ACTIONS.has(`${tool}:*`)) return 'danger'
-  // Reading the bundled docs is a read; writing them edits the driver's own
-  // instructions, which no agent should do without the user saying so.
-  if (tool === 'qgis_plugin' && action === 'instruction') {
-    return (args?.op === 'save' || args?.op === 'delete') ? 'danger' : 'read'
-  }
   if (tool === 'qgis_plugin' && action === 'lock' && args?.op === 'release') return 'write'
   if (tool === 'qgis_plugin' && action === 'lock' && args?.op === 'acquire') return 'write'
   if (READ_ONLY_ACTIONS.has(key)) return 'read'
@@ -2072,21 +2064,14 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `log` reads the instance audit log back (op: tail/error/slow, limit) - failures and slow calls, no guessing. `restart` kills the wedged process and lets the next call start a fresh one (unsaved edits are lost). `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
+    description: 'Session control. `status` reports pid/host/http_port/calls/errors/last_error. `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `log` reads the instance audit log back (op: tail/error/slow, limit). `restart` kills the wedged process and lets the next call start a fresh one (unsaved edits are lost) - that is the only recovery, `reload` cannot re-import headless.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction', 'lock', 'log', 'restart'] },
-        plugin_id: { type: 'string' },
-        method: { type: 'string' },
-        args: { type: 'array', items: {} },
-        op: { type: 'string', description: 'instruction: list/read/save/delete; lock: acquire/release/status; log: tail/error/slow',
-          enum: ['list', 'read', 'save', 'delete', 'acquire', 'release', 'status', 'tail', 'error', 'slow'] },
+        action: { type: 'string', enum: ['status', 'lock', 'log', 'restart'] },
+        op: { type: 'string', description: 'lock: acquire/release/status; log: tail/error/slow',
+          enum: ['acquire', 'release', 'status', 'tail', 'error', 'slow'] },
         limit: { type: 'integer', description: 'log: how many records (default 20, max 200)' },
-        kind: { type: 'string', enum: ['agents', 'skills', 'prompts'] },
-        id: { type: 'string' },
-        name: { type: 'string' },
-        text: { type: 'string' },
       },
       required: ['action'],
     },
@@ -2094,10 +2079,6 @@ export function registerConsolidatedTools(deps) {
     async execute(args, exec) {
       const a = args?.action;
       if (a === 'status') return asText(await runCmd('status', {}, exec?.signal));
-      if (a === 'describe') return asText(await runCmd('describe_plugins', {}, exec?.signal));
-      if (a === 'open') return asText(await runCmd('open_plugin', { plugin_id: args?.plugin_id || 'dsh_qgis_driver' }, exec?.signal));
-      if (a === 'reload') return asText(await runCmd('reload_plugin', { plugin_id: args?.plugin_id || 'dsh_qgis_driver' }, exec?.signal));
-      if (a === 'bridge') return asText(await runCmd('bridge_call', { method: args?.method, plugin_id: args?.plugin_id, args: args?.args || [] }, exec?.signal));
       if (a === 'log') {
         return asText(await runCmd('audit', { op: args?.op || 'tail', limit: args?.limit || 20 }, exec?.signal));
       }
@@ -2109,10 +2090,7 @@ export function registerConsolidatedTools(deps) {
         if (typeof restartInstance !== 'function') throw new Error('restart: this bundle build cannot stop the instance');
         return asText(restartInstance());
       }
-      return asText(await runCmd('instruction', {
-        op: args?.op || 'list', kind: args?.kind || 'skills',
-        id: args?.id, name: args?.name, text: args?.text,
-      }, exec?.signal));
+      return asText(await runCmd('status', {}, exec?.signal));
     },
   });
 }
