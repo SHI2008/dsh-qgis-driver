@@ -1363,10 +1363,10 @@ export function registerConsolidatedTools(deps) {
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',
-    description: 'Run PyQGIS on the QGIS main thread (sync, <3s). Returns last expression or `result`. Prefer the structured qgis_* tools first: they resolve names, validate parameters and return JSON. Reach for raw PyQGIS only for what they do not cover, and load the qgis-driver skill before guessing the QGIS 4 API.',
+    description: 'Run PyQGIS in the open project on the QGIS main thread (sync — keep it under 3s). The code sees `prj` and `P` (your args) and may set `result`; it returns that value as JSON, and a failure as "Type: body (hint)". Prefer the structured qgis_* tools (they resolve names and check parameters); before raw PyQGIS load the qgis-driver skill — QGIS 3 names moved in 4, so a failed call must be rewritten, not retried.',
     parameters: {
       type: 'object',
-      properties: { code: { type: 'string' } },
+      properties: { code: { type: 'string', description: 'PyQGIS source; set `result` (or leave an expression last) to return a value' } },
       required: ['code'],
     },
     output: stringOutput,
@@ -1377,7 +1377,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: 'Run Python on a worker thread (no QGIS objects). Returns task_id; poll with check_qgis_task. Batch: tasks=[{name,code}] runs as one bounded pool of max_workers threads (default 4, max 32) - use it to split a long processing run across cores. Long loops should call dsh_should_stop() and return early so cancel works.',
+    description: 'Start Python on a worker thread and return ids. Single: `code`; group: `tasks=[{name,code}]` on one pool of `max_workers` (default 4, max 32). Shard only I/O and per-file work — pure-Python and numpy/BLAS shards do not get faster. Namespace is plain Python: no `prj`, no QGIS objects. Returns {task_id} or {tasks:[{name,task_id}],count}; then check_qgis_task. Long loops must poll `dsh_should_stop()` so cancel works.',
     parameters: {
       type: 'object',
       properties: {
@@ -1415,7 +1415,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll a task from submit_qgis_async. done/error is evicted after the first read. Batch: task_ids=[...] checks a whole group in one call. cancel=true stops the given tasks instead of polling: shards still queued never start, ones already running only record the request (Python threads cannot be killed) and must finish on their own.',
+    description: 'Collect or stop tasks from submit_qgis_async. `task_id` for one, `task_ids=[...]` for a whole group in one call; a finished task is evicted on first read, so record the result now. `cancel:true` stops instead: queued shards never start, running ones only see `dsh_should_stop()` and finish on their own. Returns per task {task_id,name,status,result|error}, or {cancelled,was,status,reason} per id.',
     parameters: {
       type: 'object',
       properties: {
@@ -1476,8 +1476,35 @@ export function registerConsolidatedTools(deps) {
     'qgis_layout:export_atlas': { key: 'layouts', assign: 'layout', formats: true },
   };
 
-  function batchItems(args, spec) {
-    const raw = args?.[spec.key];
+  // Args an action cannot run without. Checked before the round-trip so a wrong
+  // first call costs a sentence, not a QGIS call plus a Python KeyError. Each
+  // entry is a list of alternatives: every group must have one present key.
+  const REQUIRED_ARGS = {
+    'qgis_project:open': [['path']],
+    'qgis_project:save_as': [['path']],
+    'qgis_project:set_crs': [['crs', 'crs_file']],
+    'qgis_layer:add': [['path', 'paths']],
+    'qgis_layer:export': [['path']],
+    'qgis_layout:create': [['layout_name', 'layout']],
+    'qgis_layout:add_item': [['layout_name', 'layout'], ['kind']],
+    'qgis_layout:update_item': [['layout_name', 'layout'], ['index']],
+    'qgis_layout:export': [['layouts', 'layout_name', 'layout']],
+    'qgis_layout:export_atlas': [['layouts', 'layout_name', 'layout']],
+    'qgis_analysis:run': [['algorithm']],
+  };
+
+  function checkRequired(tool, action, a) {
+    const groups = REQUIRED_ARGS[tool + ':' + action];
+    if (!groups) return;
+    const present = (k) => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '';
+    for (const group of groups) {
+      if (group.some(present)) continue;
+      const names = group.map((k) => `"${k}"`).join(' or ');
+      throw new Error(`${tool} ${action}: missing parameter ${names} — pass it (or the matching batch list); see the tool description`);
+    }
+  }
+
+  function batchItems(args, spec) {    const raw = args?.[spec.key];
     if (!Array.isArray(raw) || raw.length === 0) return null;
     if (spec.perPath) {
       // several layers into one `path` would overwrite each other -> per-layer file
@@ -1543,8 +1570,8 @@ result = {'count': len(_parts_), 'results': _parts_}
     // `layout` and `layout_name` are used interchangeably by different bodies.
     if (a.layout === undefined && a.layout_name !== undefined) a.layout = a.layout_name;
     if (a.layout_name === undefined && a.layout !== undefined) a.layout_name = a.layout;
-    const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;
-    const items = spec ? batchItems(a, spec) : null;
+    if (tool) checkRequired(tool, String(a.action ?? ''), a);
+    const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;    const items = spec ? batchItems(a, spec) : null;
     const payload = items ? batchBody(body, spec) : body;
     if (items) a[spec.key] = items;
     const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(a))) + payload;
@@ -1554,12 +1581,12 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- project
   registerTool({
     name: 'qgis_project',
-    description: 'Project: info/open/save/save_as/set_crs.',
+    description: 'Project state: info/open/save/save_as/set_crs. `open` and `save_as` need `path`; `set_crs` needs `crs` or `crs_file`. `info` is the cheap first call — a fresh headless instance is empty, so check layers/CRS before resolving names elsewhere. Returns JSON.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs'] },
-        path: { type: 'string' },
+        path: { type: 'string', description: 'open: .qgs/.qgz file; save_as: destination' },
         crs: { type: 'string' },
         crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
       },
@@ -1572,15 +1599,15 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description: 'Layers: list/info/fields/add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject/export/export_table. Batch: paths[] for add, layers[] for style/symbol/classify/export.',
+    description: 'Layers: list/info/fields/add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject/export/export_table. One layer: `layer`; batch the same action with `layers[]` (add: `paths[]`) in one call. `export` requires `path` (with layers[] it writes one file per layer). Names come from action=list — an unresolved name is an error, not a silent no-op. inline:true adds the rendered preview.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
-        layer: { type: 'string' },
+        layer: { type: 'string', description: 'single layer name (from action=list)' },
         layers: { type: 'array', items: { type: 'string' }, description: 'style/symbol/classify/export: batch of layer names (one round-trip)' },
         paths: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add: batch [{path,crs_file,name}]' },
-        path: { type: 'string' },
+        path: { type: 'string', description: 'add: one file to load; export: output file (required)' },
         name: { type: 'string' },
         provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
         geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'] },
@@ -1607,7 +1634,7 @@ result = {'count': len(_parts_), 'results': _parts_}
         enabled: { type: 'boolean' },
         target_crs: { type: 'string' },
         output_name: { type: 'string' },
-        format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'] },
+        format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'], description: 'export: defaults to the path extension' },
         inline: { type: 'boolean', description: 'export: also return the rendered map preview inline (costs request size on every later turn)' },
       },
       required: ['action'],
@@ -1620,12 +1647,12 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- feature
   registerTool({
     name: 'qgis_feature',
-    description: 'Features/fields: query/table/select/select_by_location/selected/add/update/delete/field_add/field_calc/field_delete/field_rename. Batch: layers[] for query/select/update/delete, specs[] for field_*.',
+    description: 'Features and fields: query/table/select/select_by_location/selected/add/update/delete/field_add/field_calc/field_delete/field_rename. Batch with `layers[]` (queries, select, update, delete) or `specs[]` (field_*), one round-trip. Writes and deletes need `confirm:true` — they change the project. `field_add` takes `field` + `field_type` (string|integer|double|date|datetime). Keep query output small with `fields` and `limit`.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['query', 'table', 'select', 'select_by_location', 'selected', 'add', 'update', 'delete', 'field_add', 'field_calc', 'field_delete', 'field_rename'] },
-        layer: { type: 'string' },
+        layer: { type: 'string', description: 'single layer name (from qgis_layer list)' },
         layers: { type: 'array', items: { type: 'string' }, description: 'batch of layer names for query/select/select_by_location/update/delete (one round-trip)' },
         expression: { type: 'string' },
         fields: { type: 'array', items: { type: 'string' } },
@@ -1655,16 +1682,16 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description: 'Layouts: list/create/info/add_item/update_item/legend_edit/align/export/export_atlas. Batch: items[] add_item, updates[] update_item, layouts[]+formats[] export.',
+    description: 'Print layouts: list/create/info/add_item/update_item/legend_edit/align/export/export_atlas. Required: `create` → layout_name; `add_item` → kind (map also needs width; height follows the layer aspect); `update_item` → index; `export`/`export_atlas` → layout or layouts[]. Batch: items[], updates[], and layouts[]+formats[] (one call, many files). Export returns per file {format,file_path,image_path,size_bytes}; inline:true also shows the PNG. Page coordinates are mm from the top-left — read them from action=info (A4 = 297x210).',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'create', 'info', 'add_item', 'update_item', 'legend_edit', 'align', 'export', 'export_atlas'] },
-        layout: { type: 'string' },
+        layout: { type: 'string', description: 'layout name (from action=list)' },
         layout_name: { type: 'string' },
         page_width: { type: 'number' },
         page_height: { type: 'number' },
-        index: { type: 'integer' },
+        index: { type: 'integer', description: 'update_item: item index from action=info' },
         remove: { type: 'boolean' },
         kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add_item: batch of item arg objects (one round-trip)' },
@@ -1707,8 +1734,8 @@ result = {'count': len(_parts_), 'results': _parts_}
         unit: { type: 'string' },
         family: { type: 'string' },
         format: { type: 'string', enum: ['png', 'pdf'] },
-        dpi: { type: 'integer' },
-        path: { type: 'string' },
+        dpi: { type: 'integer', description: 'export raster resolution (default 96)' },
+        path: { type: 'string', description: 'export/export_atlas: output file (png: optional)' },
         inline: { type: 'boolean', description: 'export/export_atlas: also return the PNG preview as an inline image the model can see (one attachment per result; costs request size on every later turn)' },
       },
       required: ['action'],
@@ -1721,7 +1748,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description: 'Processing: list/help/run, zonal_stats, reclassify. Batch: runs[] for run.',
+    description: 'Processing toolbox: list/help/run/zonal_stats/reclassify. `run` needs `algorithm` + `params` (`help` prints the exact parameter names); batch with `runs[]`. `zonal_stats` needs `layer` + `raster`; `output` keeps a file, otherwise the result stays in memory. Minutes-long algorithms belong in submit_qgis_async, not here. Returns JSON.',
     parameters: {
       type: 'object',
       properties: {
@@ -1746,7 +1773,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   registerTool({
     name: 'qgis_map',
     deferLoading: true,
-    description: 'Map: render/screenshot/set_extent/zoom_to_layer. render works headless (saves a PNG, inline=true also returns it); screenshot/set_extent/zoom_to_layer drive the live canvas and need a QGIS GUI window.',
+    description: 'Map: render/screenshot/set_extent/zoom_to_layer. `render` works headless — width/height (default 1024x768) to a PNG at `image_path`, and `inline:true` also shows it. `screenshot`, `set_extent` and `zoom_to_layer` drive the live window and stop with "needs a GUI session" in a headless instance. Extent is padded, so a single-point project still renders.',
     parameters: {
       type: 'object',
       properties: {
@@ -1786,7 +1813,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Plugin: status/describe/open/reload/bridge/instruction.',
+    description: 'Plugin and session control: status/describe/open/reload/bridge/instruction. `instruction` reads or writes the bundled docs (kind=agents|skills|prompts, op=list|read|save|delete). In a headless instance `reload` cannot re-import the plugin (qgis.utils.plugins is empty) — restart the process instead. Returns JSON.',
     parameters: {
       type: 'object',
       properties: {

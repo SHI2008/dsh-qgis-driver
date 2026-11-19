@@ -39,9 +39,10 @@ round-trip, while hand-written pyeval is one round-trip per step.
    input, or the preview is too large, the call still succeeds and adds one note saying why the
    image was skipped.
 4. **Errors are one short English line**: `Type: body (hint)`, prefixed with the call that failed
-   (`qgis_layer export: missing required parameter "path"`). Unknown actions and invalid enum
-   values are rejected locally, before QGIS runs, with the valid list or a `did you mean` — read
-   that line and retry, do not switch tools. A timeout means the QGIS instance died — the call
+   (`qgis_layer export: missing required parameter "path"`). Unknown actions, invalid enum
+   values and the parameters an action cannot do without (`path` for export, `kind` for
+   add_item, `index` for update_item) are rejected locally, before QGIS runs — read that line
+   and retry, do not switch tools. A timeout means the QGIS instance died — the call
    already retried on a fresh one; re-run it once before debugging.
 5. **Check what exists** before acting: `qgis_layer action=list`, `qgis_layout action=list`,
    `qgis_project action=info`. Names are case-sensitive; use `id` when names collide.

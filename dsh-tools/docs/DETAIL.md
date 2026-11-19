@@ -215,8 +215,20 @@ back with something a model can correct in one step:
   "geojosn" — did you mean "geojson"?`.
 - A `KeyError` on a parameter the schema declares is reported as `missing required parameter
   "path"` instead of the old `object not found` hint — the call was incomplete, not the project.
+- Parameters an action cannot run without are checked before the round trip
+  (`REQUIRED_ARGS` in `tools.js`): `qgis_layer export` without `path` or `qgis_layout add_item`
+  without `kind` fails locally, so a wrong first call costs a sentence instead of a QGIS call.
 - Every failure that does come from QGIS is prefixed with `tool action:` so one line names the
   call that failed.
+
+### Descriptions carry the calling contract
+
+Descriptions follow the shape the harness uses for `ops_bash`: what runs and whether state
+persists, then the canonical parameter choice, then the exact result shape and the next step,
+then the known traps with the sanctioned fix. Ambiguous parameters get their own description
+(`path` vs `paths`, `layer` vs `layers`, `inline` cost, `confirm` for writes). This is what a
+model reads before its first call, so keep result keys exact (`{format,file_path,image_path,
+size_bytes}`), keep it short, and never promise behaviour the body does not have.
 
 ## Autostart (local)
 
