@@ -927,6 +927,103 @@ function withInlineImages(ctx, def) {
   }
 }
 
+/** Read the frontmatter of a bundled SKILL.md (name/description only). */
+function parseSkillFrontmatter(raw) {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/)
+  const meta = {}
+  if (!match) return { meta, body: raw }
+  for (const line of match[1].split(/\r?\n/)) {
+    const kv = line.match(/^([A-Za-z_][\w-]*):\s*(.*)$/)
+    if (!kv) continue
+    meta[kv[1]] = kv[2].trim().replace(/^["']|["']$/g, '')
+  }
+  return { meta, body: raw.slice(match[0].length) }
+}
+
+/** Every `skills/<name>/SKILL.md` shipped with this bundle, sorted by name. */
+function loadBundledSkills() {
+  let root
+  try {
+    root = fileURLToPath(new URL('./skills/', import.meta.url))
+  } catch (e) {
+    return []
+  }
+  let entries = []
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch (e) {
+    return []
+  }
+  const skills = []
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const file = path.join(root, entry.name, 'SKILL.md')
+    let raw = ''
+    try {
+      raw = fs.readFileSync(file, 'utf8')
+    } catch (e) {
+      continue
+    }
+    const { meta, body } = parseSkillFrontmatter(raw)
+    if (!body.trim()) continue
+    skills.push({
+      name: meta.name || entry.name,
+      description: meta.description || '',
+      file,
+      resourceBase: { kind: 'directory', path: path.dirname(file).replaceAll('\\', '/') },
+      content: body,
+    })
+  }
+  return skills.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Publish the bundle's own skill documents to the harness skill catalog.
+ *
+ * Without this the files under `skills/` ship but are invisible: an agent
+ * would never load `qgis-driver` or `pyqgis-reference` and the knowledge in
+ * them would be dead weight. Soft dependency — a harness without a skill
+ * registry simply keeps its tools.
+ */
+function registerSkillProvider(ctx, disposers) {
+  const registry = typeof ctx.get === 'function' ? ctx.get('skills') : undefined
+  if (!registry || typeof registry.registerProvider !== 'function') return
+  const skills = loadBundledSkills()
+  if (!skills.length) return
+  const byName = new Map(skills.map((skill) => [skill.name, skill]))
+  const invocation = { modelInvocable: true, userInvocable: true }
+  const provider = {
+    name: 'qgis-driver',
+    list: () => Promise.resolve(skills.map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      invocation: { ...invocation },
+      source: 'qgis-driver',
+      provider: 'qgis-driver',
+      rank: 600,
+      locator: skill.file,
+      path: skill.file,
+      resourceBase: skill.resourceBase,
+    }))),
+    async get(candidate) {
+      const skill = byName.get(candidate && candidate.name)
+      if (!skill) throw new Error(`qgis-driver: unknown skill "${candidate && candidate.name}"`)
+      return {
+        name: skill.name,
+        description: skill.description,
+        invocation: { ...invocation },
+        source: 'qgis-driver',
+        provider: 'qgis-driver',
+        resourceBase: skill.resourceBase,
+        path: skill.file,
+        content: skill.content,
+      }
+    },
+  }
+  const dispose = registry.registerProvider(() => provider)
+  if (typeof dispose === 'function') disposers.push(dispose)
+}
+
 export function apply(ctx, config = {}) {
   const disposers = []
   const remote = resolveRemoteTarget(config)
@@ -1187,6 +1284,8 @@ export function apply(ctx, config = {}) {
     stringOutput,
     asText,
   })
+
+  registerSkillProvider(ctx, disposers)
 
   return () => { for (const d of disposers) if (typeof d === 'function') d() }
 }
