@@ -230,6 +230,21 @@ then the known traps with the sanctioned fix. Ambiguous parameters get their own
 model reads before its first call, so keep result keys exact (`{format,file_path,image_path,
 size_bytes}`), keep it short, and never promise behaviour the body does not have.
 
+Because it is billed on every request, the budget is spent deliberately (measured, 2026-11-19):
+
+| text | before | after |
+| --- | --- | --- |
+| ten tool descriptions | 3864 chars | 2539 chars (-34%) |
+| all description strings | 5810 chars | 4194 chars (-28%) |
+
+What was cut is redundancy, not contract: the action list moved out of prose because the schema
+already carries it in `enum` (`ops_bash` does not enumerate its own parameters either), and
+"returns JSON" / "one round-trip" filler is gone. What stayed is what a first call needs —
+the per-action required mapping (`create` -> layout_name, `export` -> path with an extension),
+the exact result keys, the headless boundary, and one trap per tool. The `qgis_layer export`
+trap is the example: with `layers[]` the path is a filename and each layer lands at
+`<stem>_<layer><ext>`, which is not guessable — trimming that line costs a failed call.
+
 ## Autostart (local)
 
 When no live QGIS instance is found and the target is local (not a configured

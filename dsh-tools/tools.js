@@ -1363,7 +1363,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',
-    description: 'Run PyQGIS in the open project on the QGIS main thread (sync — keep it under 3s). The code sees `prj` and `P` (your args) and may set `result`; it returns that value as JSON, and a failure as "Type: body (hint)". Prefer the structured qgis_* tools (they resolve names and check parameters); before raw PyQGIS load the qgis-driver skill — QGIS 3 names moved in 4, so a failed call must be rewritten, not retried.',
+    description: 'Run PyQGIS on the live project (main thread, sync, <3s). Sees `prj`, `P`; set `result` to return. A failure comes back as "Type: body (hint)". Prefer the qgis_* tools; load qgis-driver before raw PyQGIS - QGIS 3 names moved in 4, so rewrite a failed call instead of retrying.',
     parameters: {
       type: 'object',
       properties: { code: { type: 'string', description: 'PyQGIS source; set `result` (or leave an expression last) to return a value' } },
@@ -1377,7 +1377,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: 'Start Python on a worker thread and return ids. Single: `code`; group: `tasks=[{name,code}]` on one pool of `max_workers` (default 4, max 32). Shard only I/O and per-file work — pure-Python and numpy/BLAS shards do not get faster. Namespace is plain Python: no `prj`, no QGIS objects. Returns {task_id} or {tasks:[{name,task_id}],count}; then check_qgis_task. Long loops must poll `dsh_should_stop()` so cancel works.',
+    description: 'Worker-thread Python; returns ids for check_qgis_task. `code` = one task; `tasks=[{name,code}]` + `max_workers` (default 4, max 32) = a group. I/O and per-file work only - not pure Python or numpy/BLAS. No `prj` in a shard; poll `dsh_should_stop()`.',
     parameters: {
       type: 'object',
       properties: {
@@ -1415,7 +1415,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Collect or stop tasks from submit_qgis_async. `task_id` for one, `task_ids=[...]` for a whole group in one call; a finished task is evicted on first read, so record the result now. `cancel:true` stops instead: queued shards never start, running ones only see `dsh_should_stop()` and finish on their own. Returns per task {task_id,name,status,result|error}, or {cancelled,was,status,reason} per id.',
+    description: 'Read or stop background tasks. `task_id` or `task_ids[]`; a finished task is evicted on first read, so record it. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`. Returns {task_id,name,status,result|error} or {cancelled,was,status,reason}.',
     parameters: {
       type: 'object',
       properties: {
@@ -1581,14 +1581,14 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- project
   registerTool({
     name: 'qgis_project',
-    description: 'Project state: info/open/save/save_as/set_crs. `open` and `save_as` need `path`; `set_crs` needs `crs` or `crs_file`. `info` is the cheap first call — a fresh headless instance is empty, so check layers/CRS before resolving names elsewhere. Returns JSON.',
+    description: 'Project state; `info` first - a fresh headless instance is empty. `open`/`save_as` need `path`, `set_crs` needs `crs` or `crs_file`.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs'] },
         path: { type: 'string', description: 'open: .qgs/.qgz file; save_as: destination' },
         crs: { type: 'string' },
-        crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
+        crs_file: { type: 'string', description: 'CRS WKT from a .prj/.wkt file' },
       },
       required: ['action'],
     },
@@ -1599,20 +1599,20 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description: 'Layers: list/info/fields/add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject/export/export_table. One layer: `layer`; batch the same action with `layers[]` (add: `paths[]`) in one call. `export` requires `path` (with layers[] it writes one file per layer). Names come from action=list — an unresolved name is an error, not a silent no-op. inline:true adds the rendered preview.',
+    description: 'Layers: CRS, style, labels, annotate, reproject, export. One: `layer`; many: `layers[]` (add: `paths[]`). `export` needs `path` with a filename extension; with `layers[]` each layer goes to `<stem>_<layer><ext>`, returned as {file_path,format,bytes}. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
         layer: { type: 'string', description: 'single layer name (from action=list)' },
-        layers: { type: 'array', items: { type: 'string' }, description: 'style/symbol/classify/export: batch of layer names (one round-trip)' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'batch: one entry per layer' },
         paths: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add: batch [{path,crs_file,name}]' },
         path: { type: 'string', description: 'add: one file to load; export: output file (required)' },
         name: { type: 'string' },
         provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
         geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'] },
         crs: { type: 'string' },
-        crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
+        crs_file: { type: 'string', description: 'CRS WKT from a .prj/.wkt file' },
         fields: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'create: [{name,type}]' },
         visible: { type: 'boolean' },
         set_project: { type: 'boolean', description: 'also set project CRS' },
@@ -1628,14 +1628,14 @@ result = {'count': len(_parts_), 'results': _parts_}
         classes: { type: 'integer' },
         colors: { type: 'array', items: { type: 'string' }, description: 'palette #rrggbb' },
         size: { type: 'number' },
-        buffer_size: { type: 'number', description: 'label halo (mm)' },
+        buffer_size: { type: 'number', description: 'halo in mm' },
         buffer_color: { type: 'string' },
         placement: { type: 'string', enum: ['around_point', 'over_point', 'line', 'horizontal', 'curved'] },
         enabled: { type: 'boolean' },
         target_crs: { type: 'string' },
         output_name: { type: 'string' },
         format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'], description: 'export: defaults to the path extension' },
-        inline: { type: 'boolean', description: 'export: also return the rendered map preview inline (costs request size on every later turn)' },
+        inline: { type: 'boolean', description: 'export: also return the image inline (costs every later request)' },
       },
       required: ['action'],
     },
@@ -1647,13 +1647,13 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- feature
   registerTool({
     name: 'qgis_feature',
-    description: 'Features and fields: query/table/select/select_by_location/selected/add/update/delete/field_add/field_calc/field_delete/field_rename. Batch with `layers[]` (queries, select, update, delete) or `specs[]` (field_*), one round-trip. Writes and deletes need `confirm:true` — they change the project. `field_add` takes `field` + `field_type` (string|integer|double|date|datetime). Keep query output small with `fields` and `limit`.',
+    description: 'Features and fields. One: `layer`; many: `layers[]`; batch field changes via `specs[]` ({field,field_type,expression,new_name}). Writes and deletes need `confirm:true`. Query: `fields` + `limit` -> {count,features[]}.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['query', 'table', 'select', 'select_by_location', 'selected', 'add', 'update', 'delete', 'field_add', 'field_calc', 'field_delete', 'field_rename'] },
         layer: { type: 'string', description: 'single layer name (from qgis_layer list)' },
-        layers: { type: 'array', items: { type: 'string' }, description: 'batch of layer names for query/select/select_by_location/update/delete (one round-trip)' },
+        layers: { type: 'array', items: { type: 'string' }, description: 'batch: one entry per layer' },
         expression: { type: 'string' },
         fields: { type: 'array', items: { type: 'string' } },
         limit: { type: 'integer' },
@@ -1682,7 +1682,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description: 'Print layouts: list/create/info/add_item/update_item/legend_edit/align/export/export_atlas. Required: `create` → layout_name; `add_item` → kind (map also needs width; height follows the layer aspect); `update_item` → index; `export`/`export_atlas` → layout or layouts[]. Batch: items[], updates[], and layouts[]+formats[] (one call, many files). Export returns per file {format,file_path,image_path,size_bytes}; inline:true also shows the PNG. Page coordinates are mm from the top-left — read them from action=info (A4 = 297x210).',
+    description: 'Print layouts. Required: `create` -> layout_name; `add_item` -> kind (map needs width, height follows the layer aspect); `update_item` -> index; `export`/`export_atlas` -> layout or layouts[] + formats[] (many files, one call). Export returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG. Positions are mm from the top-left (A4 = 297x210, read action=info).',
     parameters: {
       type: 'object',
       properties: {
@@ -1715,7 +1715,7 @@ result = {'count': len(_parts_), 'results': _parts_}
         y: { type: 'number' },
         width: { type: 'number' },
         height: { type: 'number' },
-        fit_layer: { type: 'string', description: 'map extent from this layer' },
+        fit_layer: { type: 'string', description: 'extent from this layer' },
         layers: { type: 'array', items: { type: 'string' } },
         text: { type: 'string' },
         size: { type: 'number' },
@@ -1736,7 +1736,7 @@ result = {'count': len(_parts_), 'results': _parts_}
         format: { type: 'string', enum: ['png', 'pdf'] },
         dpi: { type: 'integer', description: 'export raster resolution (default 96)' },
         path: { type: 'string', description: 'export/export_atlas: output file (png: optional)' },
-        inline: { type: 'boolean', description: 'export/export_atlas: also return the PNG preview as an inline image the model can see (one attachment per result; costs request size on every later turn)' },
+        inline: { type: 'boolean', description: 'export/export_atlas: also return the PNG inline (costs every later request)' },
       },
       required: ['action'],
     },
@@ -1748,7 +1748,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description: 'Processing toolbox: list/help/run/zonal_stats/reclassify. `run` needs `algorithm` + `params` (`help` prints the exact parameter names); batch with `runs[]`. `zonal_stats` needs `layer` + `raster`; `output` keeps a file, otherwise the result stays in memory. Minutes-long algorithms belong in submit_qgis_async, not here. Returns JSON.',
+    description: 'Processing. `run` needs `algorithm` + `params` (`help` lists them); `runs[]` batches. `zonal_stats` needs `layer` + `raster`. `output` keeps a file, else memory. Minutes-long algorithms belong in submit_qgis_async.',
     parameters: {
       type: 'object',
       properties: {
@@ -1773,7 +1773,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   registerTool({
     name: 'qgis_map',
     deferLoading: true,
-    description: 'Map: render/screenshot/set_extent/zoom_to_layer. `render` works headless — width/height (default 1024x768) to a PNG at `image_path`, and `inline:true` also shows it. `screenshot`, `set_extent` and `zoom_to_layer` drive the live window and stop with "needs a GUI session" in a headless instance. Extent is padded, so a single-point project still renders.',
+    description: 'Map canvas. `render` is headless (width/height, default 1024x768) -> `image_path`; inline:true also shows it. `screenshot`/`set_extent`/`zoom_to_layer` need the live window and stop with "needs a GUI session". Extent is padded, so one point still renders.',
     parameters: {
       type: 'object',
       properties: {
@@ -1784,9 +1784,9 @@ result = {'count': len(_parts_), 'results': _parts_}
         xmin: { type: 'number' }, ymin: { type: 'number' },
         xmax: { type: 'number' }, ymax: { type: 'number' },
         crs: { type: 'string' },
-        crs_file: { type: 'string', description: 'read CRS WKT from this .prj/.wkt file' },
+        crs_file: { type: 'string', description: 'CRS WKT from a .prj/.wkt file' },
         layer: { type: 'string' },
-        inline: { type: 'boolean', description: 'screenshot/render: also return the captured image inline so the model can inspect it (costs request size on every later turn)' },
+        inline: { type: 'boolean', description: 'screenshot/render: also return the image inline (costs every later request)' },
       },
       required: ['action'],
     },
@@ -1813,7 +1813,7 @@ result = {'count': len(_parts_), 'results': _parts_}
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Plugin and session control: status/describe/open/reload/bridge/instruction. `instruction` reads or writes the bundled docs (kind=agents|skills|prompts, op=list|read|save|delete). In a headless instance `reload` cannot re-import the plugin (qgis.utils.plugins is empty) — restart the process instead. Returns JSON.',
+    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
     parameters: {
       type: 'object',
       properties: {
