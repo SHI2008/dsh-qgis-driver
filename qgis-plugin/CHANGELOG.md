@@ -6,6 +6,9 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Added
+- `audit` command and `_audit_read()`: the audit jsonl is readable through the control
+  surface (`tail` / `error` / `slow`, `args` truncated to 160 chars), and `status` reports
+  `calls`, `errors` and `last_error` from in-memory counters.
 - Instance write lease (`write_lock` over `/api/cmd`, `WriteGate` in `live_driver`): mutating
   actions reserve the instance and release it in a `finally`, another writer is told who holds it
   and for how long, and the lease expires on its own (`DEFAULT_WRITE_TTL`) so a killed client
@@ -255,7 +258,7 @@ Independent maintenance fork starts from upstream v0.16.2
   (field-match dict / substring string) and
   `auditSettings(enabled, max_bytes, max_files)`.
 
-## [Unreleased]
+## Pre-fork notes (kept for history)
 
 ### Added
 - ai_client.py: added place-name navigation guidance to the Guidelines

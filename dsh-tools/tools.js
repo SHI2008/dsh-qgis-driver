@@ -1874,15 +1874,17 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
+    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `log` reads the instance audit log back (op: tail/error/slow, limit) - failures and slow calls, no guessing. `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction', 'lock'] },
+        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction', 'lock', 'log'] },
         plugin_id: { type: 'string' },
         method: { type: 'string' },
         args: { type: 'array', items: {} },
-        op: { type: 'string', description: 'instruction: list/read/save/delete; lock: acquire/release/status', enum: ['list', 'read', 'save', 'delete', 'acquire', 'release', 'status'] },
+        op: { type: 'string', description: 'instruction: list/read/save/delete; lock: acquire/release/status; log: tail/error/slow',
+          enum: ['list', 'read', 'save', 'delete', 'acquire', 'release', 'status', 'tail', 'error', 'slow'] },
+        limit: { type: 'integer', description: 'log: how many records (default 20, max 200)' },
         kind: { type: 'string', enum: ['agents', 'skills', 'prompts'] },
         id: { type: 'string' },
         name: { type: 'string' },
@@ -1898,6 +1900,9 @@ export function registerConsolidatedTools(deps) {
       if (a === 'open') return asText(await runCmd('open_plugin', { plugin_id: args?.plugin_id || 'dsh_qgis_driver' }, exec?.signal));
       if (a === 'reload') return asText(await runCmd('reload_plugin', { plugin_id: args?.plugin_id || 'dsh_qgis_driver' }, exec?.signal));
       if (a === 'bridge') return asText(await runCmd('bridge_call', { method: args?.method, plugin_id: args?.plugin_id, args: args?.args || [] }, exec?.signal));
+      if (a === 'log') {
+        return asText(await runCmd('audit', { op: args?.op || 'tail', limit: args?.limit || 20 }, exec?.signal));
+      }
       if (a === 'lock') {
         return asText(await runCmd('write_lock', { op: args?.op || 'status', owner: lockOwner(exec), ttl: 120 }, exec?.signal));
       }

@@ -8,6 +8,7 @@
 // Run: ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/pure.mjs
 //   (or plain `node dsh-tools/tests/pure.mjs` where node is installed)
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 import { internals } from '../index.js'
 import {
@@ -15,7 +16,8 @@ import {
 } from '../tools.js'
 
 const {
-  routeToCommand, tidyError, nearestName, guardExecute, asText, parseSkillFrontmatter,
+  routeToCommand, tidyError, describeFailure, nearestName, guardExecute, asText,
+  parseSkillFrontmatter,
 } = internals
 
 let checks = 0
@@ -196,6 +198,46 @@ await ok('skill frontmatter only exposes name and description', () => {
   assert.deepEqual(meta, { name: 'demo', description: 'does a thing' })
   assert.equal(body.trim(), 'body')
   assert.deepEqual(parseSkillFrontmatter('no frontmatter').meta, {})
+})
+
+
+// ---------- versions
+await ok('both version numbers are plain semver and the plugin lost its rc- prefix', () => {
+  const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
+  const pkg = JSON.parse(fs.readFileSync(new URL('../../dsh-tools/package.json', import.meta.url), 'utf8'))
+  const meta = fs.readFileSync(new URL('../../qgis-plugin/metadata.txt', import.meta.url), 'utf8')
+  const plugin = (meta.match(/^version=(.*)$/m) || [])[1] || ''
+  assert.match(pkg.version, SEMVER)
+  assert.match(plugin, SEMVER)
+  assert.doesNotMatch(plugin, /^rc-/, 'QGIS reads this as a string, but a leading rc- reads as "release candidate of nothing"')
+})
+
+// ---------- transport failures
+await ok('every transport failure carries one code and one actionable sentence', () => {
+  const kinds = ['timeout', 'dead', 'unreachable', 'aborted', 'auth', 'network']
+  const messages = new Set()
+  for (const kind of kinds) {
+    const e = describeFailure(kind, { seconds: '15s', grew: false, base: 'http://127.0.0.1:1' })
+    assert.equal(e.code, kind.toUpperCase(), kind)
+    assert.ok(e.message.length > 40, `${kind}: too terse to act on`)
+    messages.add(e.message)
+  }
+  assert.equal(messages.size, kinds.length, 'kinds must not collapse into the same text')
+})
+
+await ok('a timeout says what to do next, and names the other-client case', () => {
+  const quiet = describeFailure('timeout', { seconds: '15s', grew: false })
+  assert.match(quiet.message, /15s/)
+  assert.match(quiet.message, /qgis_plugin action=status/)
+  const busy = describeFailure('timeout', { seconds: '15s', grew: true })
+  assert.match(busy.message, /another client/)
+  assert.equal(quiet.code, 'TIMEOUT')
+})
+
+await ok('a transport failure is never mistaken for a tool bug', () => {
+  const e = describeFailure('network', { base: 'http://127.0.0.1:58056' })
+  assert.match(e.message, /127\.0\.0\.1:58056/)
+  assert.match(e.message, /file channel is the primary path/)
 })
 
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)

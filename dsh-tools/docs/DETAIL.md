@@ -303,6 +303,68 @@ ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/pure.mjs
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/live.mjs
 ```
 
+## One failure vocabulary
+
+A transport failure used to read four different ways depending on where it
+broke — `file channel timeout …`, `file channel: aborted`, `QGIS auth failed`,
+or a raw `fetch failed` — so a model could not tell "retry" from "the instance
+is gone". `describeFailure(kind, detail)` now produces every one of them from a
+single table, and each sentence says what happened *and* what to do next:
+
+| kind | when | the sentence ends with |
+| --- | --- | --- |
+| `timeout` | no reply inside the transport window | `run qgis_plugin action=status; restart QGIS if it keeps saying nothing` |
+| `dead` | the process exited mid-call | `the next call starts a fresh instance, and anything unsaved is gone` |
+| `unreachable` | the command never landed in `commands.jsonl` | `run qgis_plugin action=status` |
+| `aborted` | the call was cancelled | `re-run the tool if you still need the result` |
+| `auth` | 401 from the local port | `restart the QGIS process so it issues a new token` |
+| `network` | the port refused the connection | `the file channel usually still works` |
+
+Each error also carries `code` (`TIMEOUT`, `DEAD`, …), which is what the retry
+ladder keys on: a failed call retries once on the next live registry directory
+only for those three codes. (It used to test a Chinese regex that never matched
+the English message, so the ladder never ran.)
+
+## Reading the audit log back
+
+The plugin has always written `audit-<date>.jsonl` into the registry directory —
+every command, its duration, and the error if any. Nothing read it back, so the
+only way to count failures was to mine the session log after the fact.
+
+`qgis_plugin action=log` returns it:
+
+| op | returns |
+| --- | --- |
+| `tail` (default) | the newest `limit` records |
+| `error` | only failures, newest first |
+| `slow` | the slowest `limit` records |
+
+`limit` defaults to 20 (max 200). `args` is truncated to 160 characters — enough
+to recognise the call, not enough to drown the view. `status` also carries
+`calls`, `errors` and `last_error`, so one call answers "has this been failing?"
+without reading a file.
+
+## Docs that check themselves
+
+Three places describe one surface: the tool definitions in `tools.js`, the action
+table in `skills/qgis-driver/SKILL.md`, and this file. `tests/docdrift.mjs`
+registers the real tools with stub dependencies and fails when the table, the
+required-parameter map or the write-lease map no longer matches the code — the
+first run of it had already gone stale on `qgis_plugin lock`/`log`.
+
+## Version numbers
+
+Two artifacts, two rules, one script:
+
+| artifact | file | rule |
+| --- | --- | --- |
+| bundle | `dsh-tools/package.json` | must be plain semver — pnpm validates the whole profile before touching dependencies, and `rc-0.1.41` crashed it |
+| plugin | `qgis-plugin/metadata.txt` | semver too (QGIS only reads it as a string, but `rc-` in front reads as "release candidate of nothing") |
+
+`node scripts/bump.mjs <bundleVersion> [pluginVersion]` writes the bundle
+version, the plugin version and the installed profile copy in one go, and
+`tests/pure.mjs` asserts both parse as semver.
+
 ## Status badge visibility
 
 The composer-row badge is hidden by default. It appears on its own after the

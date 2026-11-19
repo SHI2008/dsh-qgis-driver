@@ -74,7 +74,7 @@ _GROUP_FUTURES = {}
 # These are always handled by this driver itself.
 _LOCAL_TYPES = {"status", "open_plugin", "reload_plugin", "bridge_call",
                 "describe_plugins", "instruction", "pyeval_group", "task_cancel",
-                "write_lock"}
+                "write_lock", "audit"}
 
 # Advisory instance-wide write lease. Two agents driving one QGIS instance do not
 # crash each other (everything runs on the main thread), they silently overwrite
@@ -241,6 +241,68 @@ def _audit_mask(v, key=None):
     if isinstance(v, (list, tuple)):
         return [_audit_mask(x) for x in v]
     return v
+
+
+def _audit_files():
+    """Audit logs newest first: today's file, then the rotated generations."""
+    base = _audit_base_dir()
+    try:
+        names = [n for n in os.listdir(base) if n.startswith("audit-") and n.endswith(".jsonl")]
+    except OSError:
+        return []
+    paths = [os.path.join(base, n) for n in names]
+    paths.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return paths
+
+
+def _audit_read(op="tail", limit=20):
+    """Read the audit log back so an agent can see what happened instead of guessing.
+
+    op=tail    newest `limit` records
+    op=error   only failures, newest first
+    op=slow    slowest `limit` records
+    """
+    limit = max(1, min(int(limit or 20), 200))
+    paths = _audit_files()
+    if not paths:
+        return {"file": None, "count": 0, "entries": [], "files": 0,
+                "note": "no audit log yet: it is written to the plugin registry dir on the first call"}
+    path = paths[0]
+    records = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    records.append(rec)
+    except OSError as exc:
+        return {"file": path, "count": 0, "entries": [], "files": len(paths),
+                "error": "cannot read the audit log: {0}".format(exc)}
+    if op == "error":
+        records = [r for r in records if not r.get("ok", True)]
+    elif op == "slow":
+        records = sorted(records, key=lambda r: float(r.get("ms") or 0), reverse=True)
+    else:
+        records = records[-limit:]
+    if op in ("error", "slow"):
+        records = records[:limit]
+    keep = ("ts", "type", "method", "ms", "ok", "error", "origin", "id", "args")
+    entries = []
+    for r in records:
+        rec = {k: r[k] for k in keep if k in r}
+        # a whole pyeval payload would drown the log view; the opening chars say
+        # which call it was, and the error stays complete.
+        if isinstance(rec.get("args"), str) and len(rec["args"]) > 160:
+            rec["args"] = rec["args"][:160] + "…"
+        entries.append(rec)
+    return {"file": os.path.basename(path), "count": len(entries),
+            "entries": entries, "files": len(paths)}
 
 
 def _audit_summary(cmd):
@@ -709,6 +771,8 @@ class LiveDriver:
         # execution always happens inside this driver's _poll (GUI thread)
         self._queue = queue.Queue()
         self.tasks = TaskRegistry()
+        # in-memory counters for `status` (the audit jsonl is the durable copy)
+        self.stats = {"calls": 0, "errors": 0, "last_error": None}
         self.gate = WriteGate()
         os.makedirs(live_dir, exist_ok=True)
         try:
@@ -826,7 +890,17 @@ class LiveDriver:
             raise
 
     def _audit(self, cmd, obj, ms):
-        """Record the dispatch result in the audit jsonl (failures do not block the call)."""
+        """Record the dispatch result in the audit jsonl (failures do not block the call).
+
+        The counters live in memory so `status` can say "3 errors so far, last one
+        was X" without re-reading the file.
+        """
+        ok = isinstance(obj, dict) and "error" not in obj
+        self.stats["calls"] = int(self.stats.get("calls") or 0) + 1
+        if not ok:
+            self.stats["errors"] = int(self.stats.get("errors") or 0) + 1
+            err = obj.get("error") if isinstance(obj, dict) else None
+            self.stats["last_error"] = str(err)[:300] if err else None
         try:
             _audit_record(__package__, cmd, obj, ms)
         except Exception:  # nosec B110  # an audit failure must not stop the control surface
@@ -865,6 +939,9 @@ class LiveDriver:
             return
         if ctype == "screenshot":
             self._screenshot(cid, cmd, reply)
+            return
+        if ctype == "audit":
+            self._audit_tail(cid, cmd, reply)
             return
         if ctype == "status":
             reply({"id": cid, "result": self._status()})
@@ -997,6 +1074,13 @@ class LiveDriver:
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
+    def _audit_tail(self, cid, cmd, reply):
+        """Return recent audit records (tail | error | slow)."""
+        try:
+            reply({"id": cid, "result": _audit_read(cmd.get("op") or "tail", cmd.get("limit") or 20)})
+        except Exception:
+            reply({"id": cid, "error": traceback.format_exc()})
+
     def _status(self):
         """Return the state of the driver itself and all plugins (liveness check/list)."""
         plugs = {}
@@ -1024,6 +1108,9 @@ class LiveDriver:
             "http_port": self.http_port,
             "view": self.view is not None,
             "plugins": plugs,
+            "calls": self.stats.get("calls", 0),
+            "errors": self.stats.get("errors", 0),
+            "last_error": self.stats.get("last_error"),
         }
 
     def _open_plugin(self, cid, pid, reply):

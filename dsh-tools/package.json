@@ -1,10 +1,10 @@
 {
   "name": "@local/dsh-qgis-driver",
-  "version": "0.1.49-rc",
+  "version": "0.1.50-rc",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/pure.mjs",
+    "test": "node tests/pure.mjs && node tests/docdrift.mjs",
     "test:live": "node tests/live.mjs"
   },
   "exports": {

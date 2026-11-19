@@ -501,7 +501,7 @@ async function invokeFileOnce(cmd, signal, target) {
   if (!tailIncludes(cmdPath, id, 8192)) {
     fs.appendFileSync(cmdPath, JSON.stringify({ ...cmd, id, token }) + String.fromCharCode(10), 'utf8')
     if (!tailIncludes(cmdPath, id, 8192)) {
-      throw new Error('file channel: command did not reach commands.jsonl (QGIS dead or write denied)')
+      throw describeFailure('unreachable')
     }
   }
   const timeoutMs = Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
@@ -509,14 +509,14 @@ async function invokeFileOnce(cmd, signal, target) {
   const deadline = Date.now() + timeoutMs
   let lastLiveness = Date.now()
   while (Date.now() < deadline) {
-    if (signal?.aborted) throw new Error('file channel: aborted')
+    if (signal?.aborted) throw describeFailure('aborted')
     await delay(FILE_POLL_INTERVAL_MS)
     // Fail fast if the process died mid-command (avoids a full 15s silent wait).
     if (target.pid && Date.now() - lastLiveness >= 1000) {
       lastLiveness = Date.now()
       if (!pidAlive(target.pid)) {
         badLiveDirs.add(liveDir)
-        throw new Error('QGIS instance exited mid-command (auto-retry on a live instance)')
+        throw describeFailure('dead')
       }
     }
     let chunk = ''
@@ -559,11 +559,7 @@ async function invokeFileOnce(cmd, signal, target) {
   }
   badLiveDirs.add(liveDir)
   const grew = (() => { try { return fs.statSync(resPath).size - resultsSizeAtStart } catch { return -1 } })()
-  throw new Error(
-    `file channel timeout ${Math.round(timeoutMs / 1000)}s (id=${id})` +
-    (grew > 0
-      ? ' — results.jsonl grew but no matching reply (another client?)'
-      : ' — QGIS did not read the command (dead process, plugin disabled, or stale live_dir)'))
+  throw describeFailure('timeout', { seconds: `${Math.round(timeoutMs / 1000)}s`, grew: grew > 0 })
 }
 
 /** Turn a Python traceback into one actionable line. */
@@ -645,6 +641,37 @@ function nearestName(value, names) {
   return bestScore <= limit ? best : ''
 }
 
+/**
+ * One failure vocabulary for both channels.
+ *
+ * The same thing (QGIS did not answer) used to read four different ways
+ * depending on where it broke, so a model could not tell "retry" from "the
+ * instance is gone". Every transport failure now carries a code plus a sentence
+ * that says what happened and what to do next.
+ */
+function describeFailure(kind, detail = {}) {
+  const seconds = detail.seconds ? `${detail.seconds}s` : 'the timeout'
+  const text = {
+    timeout: `no reply from QGIS within ${seconds} — the command was written but never answered. `
+      + (detail.grew
+        ? 'results.jsonl grew but no reply carried this id, so another client may be reading the same file. '
+        : 'The process may be dead or the plugin disabled. ')
+      + 'Run qgis_plugin action=status; restart QGIS if it keeps saying nothing.',
+    dead: 'the QGIS process exited while running this call — the next call starts a fresh instance, '
+      + 'and anything unsaved in that project is gone.',
+    unreachable: 'the command never reached commands.jsonl: nothing is reading that registry directory '
+      + '(dead process, plugin disabled, or a stale live_dir). Run qgis_plugin action=status.',
+    aborted: 'the call was cancelled before QGIS replied — nothing ran to completion, so re-run the tool if you still need the result.',
+    auth: 'the instance rejected the session token (Key mismatch). This token belongs to the plugin, '
+      + 'not to a setting you can pass; restart the QGIS process so it issues a new one.',
+    network: `the instance's local port refused the connection${detail.base ? ` (${detail.base})` : ''}. `
+      + 'The file channel is the primary path and usually still works; if it also fails, restart QGIS.',
+  }[kind] || String(detail.message || kind)
+  const error = new Error(text)
+  error.code = String(kind).toUpperCase()
+  return error
+}
+
 /** Rewrite a failure into something a model can act on without guessing. */
 function explainFailure(def, action, error) {
   const raw = error && error.message ? error.message : String(error == null ? '' : error)
@@ -708,7 +735,8 @@ async function callQgis(route, method, body, signal, target) {
     try {
       return await invokeFile(cmd, signal, target)
     } catch (e) {
-      if (!/文件通道超时/.test(String(e && e.message))) throw e
+      const code = e && e.code
+      if (code !== 'TIMEOUT' && code !== 'DEAD' && code !== 'UNREACHABLE') throw e
       // The instance we picked did not answer; try the next live one once.
       let next = null
       try { next = findLocalLiveDir() } catch { next = null }
@@ -716,16 +744,22 @@ async function callQgis(route, method, body, signal, target) {
       throw e
     }
   }
-  const resp = await fetch(`${target.base}${route}`, {
-    method,
-    headers: { Authorization: `Bearer ${target.token}`, 'Content-Type': 'application/json' },
-    signal,
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  })
+  let resp
+  try {
+    resp = await fetch(`${target.base}${route}`, {
+      method,
+      headers: { Authorization: `Bearer ${target.token}`, 'Content-Type': 'application/json' },
+      signal,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+  } catch (e) {
+    if (signal?.aborted) throw describeFailure('aborted')
+    throw describeFailure('network', { base: target.base })
+  }
   const text = await resp.text()
   let data
   try { data = JSON.parse(text) } catch { data = { error: text || `HTTP ${resp.status}` } }
-  if (resp.status === 401) throw new Error('QGIS auth failed: Key/token mismatch')
+  if (resp.status === 401) throw describeFailure('auth')
   if (data.error) {
     throw new Error(tidyError(typeof data.error === 'string' ? data.error : JSON.stringify(data.error)))
   }
@@ -1009,6 +1043,7 @@ function registerSkillProvider(ctx, disposers) {
 export const internals = {
   routeToCommand,
   tidyError,
+  describeFailure,
   editDistance,
   nearestName,
   explainFailure,

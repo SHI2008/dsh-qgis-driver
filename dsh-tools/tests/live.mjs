@@ -128,5 +128,32 @@ if (tasks.length === 2) {
     !!poll.body.result, JSON.stringify(poll.body).slice(0, 200))
 }
 
+
+// ---------- observability: the audit log is readable through the control surface
+const audit = await cmd({ type: 'audit', op: 'tail', limit: 3, token: instance.token })
+const auditResult = audit.body.result || {}
+report('the audit log can be read back',
+  Array.isArray(auditResult.entries) && auditResult.entries.length > 0
+  && typeof auditResult.file === 'string',
+  JSON.stringify(audit.body).slice(0, 240))
+
+const errorsOnly = await cmd({ type: 'audit', op: 'error', limit: 5, token: instance.token })
+const errEntries = (errorsOnly.body.result && errorsOnly.body.result.entries) || []
+report('op=error returns only failures',
+  errEntries.every((e) => e.ok === false),
+  JSON.stringify(errEntries.slice(0, 1)).slice(0, 200))
+
+const slowAudit = await cmd({ type: 'audit', op: 'slow', limit: 3, token: instance.token })
+const slowEntries = (slowAudit.body.result && slowAudit.body.result.entries) || []
+const sorted = slowEntries.every((e, i) => i === 0
+  || Number(slowEntries[i - 1].ms || 0) >= Number(e.ms || 0))
+report('op=slow sorts by duration', sorted, JSON.stringify(slowEntries.map((e) => e.ms)))
+
+const status2 = await cmd({ type: 'status', token: instance.token })
+report('status carries the call counters',
+  Number.isInteger(status2.body.result && status2.body.result.calls)
+  && 'last_error' in (status2.body.result || {}),
+  JSON.stringify(status2.body.result).slice(0, 200))
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0
