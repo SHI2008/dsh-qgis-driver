@@ -24,7 +24,7 @@ registry entry (dead PIDs skipped) and reads that entry's `live_dir` + `token`.
   REST on `127.0.0.1:<port>` with the same registry token.
 
 Timeouts: `QGIS_LIVE_FILE_TIMEOUT_MS` (default 15000 ms) for the transport, and the
-plugin interrupts one main-thread call after `QGIS_LIVE_EVAL_TIMEOUT` (default 10 s).
+plugin interrupts one main-thread call after `QGIS_LIVE_EVAL_TIMEOUT` (default 60 s).
 
 ## Tools
 
@@ -338,24 +338,56 @@ instance for 9s — wait for it, then retry. Reads are never blocked.
 
 Inspect or clear it with `qgis_plugin action=lock op=status|acquire|release`.
 
+## Busy is not dead
+
+Every command runs inside the driver's `QTimer` slot on the QGIS GUI thread, so
+while one long call runs the timer cannot tick: nothing else is read, and from
+the outside "working hard" and "process is hung" looked identical. The client
+called both *dead*, the model restarted a working instance, and the task died —
+the single worst experience this driver had.
+
+Two changes remove that ambiguity:
+
+* **A heartbeat from a worker thread.** `live_driver.py` starts a plain
+  `threading.Thread` that writes `<live_dir>/heartbeat.json` every second with
+  `{pid, ts, busy:{id,type,since}, calls, errors}`. It touches no Qt object, so
+  it keeps ticking while the GUI thread is inside a 40-second Processing run.
+* **A soft timeout in the client.** `invokeFileOnce` waits its 15 s, then keeps
+  waiting as long as the heartbeat is fresher than 5 s, up to
+  `QGIS_LIVE_HARD_TIMEOUT_MS` (default 180 s). The failure vocabulary grew
+  accordingly:
+
+| Kind | Meaning | What the model should do |
+| --- | --- | --- |
+| `BUSY` | the heartbeat names another call that has been running for Ns | wait for that call, retry; **do not restart** |
+| `STALLED` | heartbeat fresh, no command named, GUI thread not ticking | retry once, then `restart` |
+| `TIMEOUT` | the heartbeat stopped | the process is gone; the next call starts a fresh one |
+| `DEAD` | pid disappeared mid-call | the next call starts a fresh one |
+
+Measured: a 25 s `pyeval` (budget 60 s) now returns its value, and a
+`qgis_plugin status` issued 4 s into it waits ~21 s and succeeds instead of
+failing at 15 s with "QGIS did not read the command".
+
 ## Hard timeout on the main-thread call
 
 `execute_qgis_sync` runs on the QGIS main thread: a `while True:` used to freeze the
-whole application, and the caller only saw a transport timeout. The plugin now arms a
+whole application, and the caller only saw a transport timeout. The plugin arms a
 watchdog around the eval and injects `MainThreadTimeout` (a `BaseException`, so
 `except Exception:` in the snippet cannot swallow it) into the main thread:
 
 ```
-pyeval stopped: it ran longer than 10s (hard timeout) and was interrupted, so the QGIS
-instance stays usable. Split the work into submit_qgis_async tasks[] shards; if you
-expect a longer single call, raise QGIS_LIVE_EVAL_TIMEOUT.
+pyeval stopped: it ran longer than 60s (hard timeout) and was interrupted, so the QGIS
+instance stays usable. Split the work into submit_qgis_async tasks[] shards, or import
+the same script and call it through execute_qgis_sync in smaller steps.
 ```
 
-Measured: a runaway loop returns at 10.2 s and the instance keeps serving. The budget
-defaults to 10 s, strictly below the 15 s transport wait, so the caller gets this
-explanation instead of a bare timeout. A call blocked inside a C function (`time.sleep`,
-network, a long GEOS computation) cannot be interrupted mid-call — Python only raises
-the exception at the next bytecode — so it stops when that call returns.
+The budget is 60 s (`QGIS_LIVE_EVAL_TIMEOUT` overrides). It used to be 10 s —
+*below* the transport window — so an ordinary 12-second call was killed and
+reported as a crash. Heavy actions (`qgis_layout export`, `qgis_analysis run`)
+pass a larger per-call budget through the bundle. A call blocked inside a C
+function (`time.sleep`, network, a long GEOS computation) cannot be interrupted
+mid-call — Python only raises at the next bytecode — so it stops when that call
+returns.
 
 ## Regression suite
 

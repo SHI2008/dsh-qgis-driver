@@ -72,11 +72,13 @@ _LOCAL_TYPES = {"status", "pyeval", "pyeval_async", "pyeval_group", "task_status
 # each other's work, which is worse. Readers never take the gate; writers do.
 DEFAULT_WRITE_TTL = 300.0
 
-# Hard timeout for one synchronous pyeval. The tool description asks for <3s, but
-# nothing stopped a `while True:` from freezing the whole instance forever.
-# Keep it below the transport budget (the bundle waits 15s on the file channel),
-# so the caller sees this explanation instead of a bare transport timeout.
-DEFAULT_EVAL_TIMEOUT = 10.0
+# Budget for one synchronous pyeval. The old 10s sat *below* the transport
+# window, so a legitimate 12-second call was reported as "QGIS died" and a
+# heavy Processing run could never finish on this path. 60s covers ordinary
+# project work while still ending a `while True:`; heavy algorithms get more
+# through the bundle's per-action budget, and anything longer belongs in a
+# background shard.
+DEFAULT_EVAL_TIMEOUT = 60.0
 
 
 class MainThreadTimeout(BaseException):
@@ -548,6 +550,55 @@ def _refuse_instance_killer(code):
     )
 
 
+class Heartbeat(threading.Thread):
+    """Publish liveness from a plain thread, so a busy GUI thread still looks alive.
+
+    Every command runs inside the driver's QTimer slot on the GUI thread, so while
+    one long call runs the timer cannot tick: from the outside, "working hard" and
+    "process is hung" looked identical, and the client called both "QGIS died".
+    This thread touches no Qt object, keeps ticking while the GUI thread is blocked,
+    and names the command that is holding it.
+    """
+
+    def __init__(self, live_dir, busy_provider, stats):
+        super().__init__(name="dsh-qgis-heartbeat", daemon=True)
+        self.path = os.path.join(live_dir, "heartbeat.json")
+        # A provider, not the dict itself: `_busy` is rebound per command, so a
+        # captured reference would report the empty dict forever.
+        self._busy_provider = busy_provider
+        self._stats = stats
+        self._stop = threading.Event()
+
+    def run(self):
+        while not self._stop.is_set():
+            self.beat()
+            self._stop.wait(1.0)
+
+    def beat(self):
+        try:
+            busy = dict(self._busy_provider() or {})
+        except Exception:  # nosec B110  # liveness must never raise
+            busy = {}
+        payload = {
+            "pid": os.getpid(),
+            "ts": round(time.time(), 3),
+            "busy": busy or None,
+            "since": busy.get("since") if busy else None,
+            "calls": self._stats.get("calls", 0),
+            "errors": self._stats.get("errors", 0),
+        }
+        tmp = self.path + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, self.path)
+        except Exception:  # nosec B110  # liveness must never break a call
+            pass
+
+    def stop(self):
+        self._stop.set()
+
+
 class LiveDriver:
     def __init__(self, live_dir, iface):
         self.iface = iface
@@ -583,6 +634,9 @@ class LiveDriver:
         # in-memory counters for `status` (the audit jsonl is the durable copy)
         self.stats = {"calls": 0, "errors": 0, "last_error": None}
         self.gate = WriteGate()
+        # command currently running on the GUI thread (read by the heartbeat thread)
+        self._busy = {}
+        self._beat_t0 = time.time()
         os.makedirs(live_dir, exist_ok=True)
         try:
             with open(os.path.join(live_dir, "token"), "w",
@@ -590,6 +644,9 @@ class LiveDriver:
                 f.write(self.token)
         except Exception:  # nosec B110  # acceptable by design
             pass
+
+        self.heartbeat = Heartbeat(live_dir, lambda: self._busy, self.stats)
+        self.heartbeat.start()
 
         self.timer = QTimer()
         self.timer.timeout.connect(self._poll)
@@ -612,6 +669,10 @@ class LiveDriver:
 
     def stop(self):
         self.timer.stop()
+        try:
+            self.heartbeat.stop()
+        except Exception:  # nosec B110  # stopping must not raise
+            pass
         # timer.timeout.connect(bound method) holds a reference to self,
         # so the driver and QTimer linger across reloads; also release the C++ side
         self.timer.deleteLater()
@@ -686,6 +747,11 @@ class LiveDriver:
         if cmd.get("_audit_off"):
             return self._dispatch(cmd, reply)
         t0 = time.monotonic()
+        self._busy = {
+            "id": cmd.get("id"),
+            "type": str(cmd.get("type") or "cmd"),
+            "since": round(time.time(), 3),
+        }
 
         def _audited(obj, _reply=reply):
             self._audit(cmd, obj, (time.monotonic() - t0) * 1000.0)
@@ -697,6 +763,8 @@ class LiveDriver:
                               "error": traceback.format_exc()},
                         (time.monotonic() - t0) * 1000.0)
             raise
+        finally:
+            self._busy = {}
 
     def _audit(self, cmd, obj, ms):
         """Record the dispatch result in the audit jsonl (failures do not block the call).
@@ -759,7 +827,12 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _status(self):
-        """Liveness of this instance: pid, live dir, port, counters."""
+        """Liveness of this instance: pid, live dir, port, counters, current work."""
+        busy = dict(self._busy or {})
+        if busy.get("type") == "status":
+            # the status call itself is the running command: not worth reporting
+            busy = {}
+        now = time.time()
         return {
             "pid": os.getpid(),
             "plugin": __package__,
@@ -770,6 +843,9 @@ class LiveDriver:
             "calls": self.stats.get("calls", 0),
             "errors": self.stats.get("errors", 0),
             "last_error": self.stats.get("last_error"),
+            "busy": busy or None,
+            "busy_s": round(now - busy["since"], 1) if busy.get("since") else 0.0,
+            "uptime_s": round(now - getattr(self, "_beat_t0", now), 1),
         }
 
     @staticmethod

@@ -230,15 +230,31 @@ await ok('both version numbers are plain semver and the plugin lost its rc- pref
 
 // ---------- transport failures
 await ok('every transport failure carries one code and one actionable sentence', () => {
-  const kinds = ['timeout', 'dead', 'unreachable', 'aborted', 'auth', 'network']
+  const kinds = ['timeout', 'dead', 'unreachable', 'aborted', 'auth', 'network', 'busy', 'stalled']
   const messages = new Set()
   for (const kind of kinds) {
-    const e = describeFailure(kind, { seconds: '15s', grew: false, base: 'http://127.0.0.1:1' })
+    const e = describeFailure(kind, { seconds: '15s', grew: false, base: 'http://127.0.0.1:1',
+      waited: 20, busyType: 'pyeval', busyFor: 25 })
     assert.equal(e.code, kind.toUpperCase(), kind)
     assert.ok(e.message.length > 40, `${kind}: too terse to act on`)
     messages.add(e.message)
   }
   assert.equal(messages.size, kinds.length, 'kinds must not collapse into the same text')
+})
+
+await ok('a busy instance is never reported as a dead one', () => {
+  // The GUI thread runs every command, so a long call blocks the queue. Saying
+  // "dead" there is what made the model restart a working instance.
+  const e = describeFailure('busy', { waited: 20, busyType: 'qgis_layout export', busyFor: 21 })
+  assert.equal(e.code, 'BUSY')
+  assert.match(e.message, /not dead/)
+  assert.match(e.message, /qgis_layout export/)
+  assert.match(e.message, /do not restart/)
+  const stalled = describeFailure('stalled', { waited: 9 })
+  assert.equal(stalled.code, 'STALLED')
+  assert.match(stalled.message, /alive/)
+  const timedOut = describeFailure('timeout', { seconds: 15, grew: false })
+  assert.match(timedOut.message, /stopped beating/)
 })
 
 await ok('a timeout says what to do next, and names the other-client case', () => {

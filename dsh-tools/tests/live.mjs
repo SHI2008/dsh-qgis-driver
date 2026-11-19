@@ -83,11 +83,14 @@ report('the holder releases', released.body.result && released.body.result.ok ==
 // A runaway *loop* is the case that used to freeze the instance forever; a call
 // blocked inside a C function (sleep, network) can only be stopped once it
 // returns, so the loop is what this check pins.
-const budget = Number(process.env.QGIS_LIVE_EVAL_TIMEOUT || 10)
+// An explicit budget keeps this check fast: the instance default is 60s so that
+// ordinary project work can finish on the main thread.
+const budget = 6
 const startedAt = Date.now()
 const slow = await cmd({
   type: 'pyeval',
   code: `import time\ndeadline = time.time() + 120\nwhile time.time() < deadline:\n    pass\nresult = 'finished'`,
+  timeout: budget,
   token: instance.token,
 })
 const elapsed = (Date.now() - startedAt) / 1000
@@ -153,6 +156,25 @@ const status2 = await cmd({ type: 'status', token: instance.token })
 report('status carries the call counters',
   Number.isInteger(status2.body.result && status2.body.result.calls)
   && 'last_error' in (status2.body.result || {}),
+  JSON.stringify(status2.body.result).slice(0, 200))
+
+// The heartbeat is written by a worker thread, so it keeps ticking while the
+// GUI thread runs a long call. Without it, "busy" and "dead" were the same
+// observation and every long call looked like a crash.
+const beat = (() => {
+  try {
+    const p = path.join(instance.live_dir, 'heartbeat.json')
+    return { age: Date.now() / 1000 - JSON.parse(fs.readFileSync(p, 'utf8')).ts,
+      raw: JSON.parse(fs.readFileSync(p, 'utf8')) }
+  } catch { return null }
+})()
+report('the instance publishes a fresh heartbeat',
+  Boolean(beat) && beat.age >= 0 && beat.age < 10
+  && beat.raw.pid === instance.pid,
+  beat ? JSON.stringify(beat.raw).slice(0, 200) : 'no heartbeat.json')
+
+report('status says how long it has been up',
+  Number(status2.body.result.uptime_s) >= 0,
   JSON.stringify(status2.body.result).slice(0, 200))
 
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)

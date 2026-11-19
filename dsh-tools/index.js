@@ -498,6 +498,12 @@ async function autostartQgis(auto, requireGui = false) {
 }
 
 const FILE_CHANNEL_TIMEOUT_MS = 15000
+/**
+ * Absolute ceiling for one file-channel call. The soft timeout above only
+ * applies while the instance looks dead; a live instance working through a long
+ * call may take this long before we stop waiting.
+ */
+const HARD_CAP_MS = 180000
 const FILE_POLL_INTERVAL_MS = 50
 
 /** Per-live-dir read cursor for the JSONL results file. */
@@ -602,9 +608,15 @@ async function invokeFileOnce(cmd, signal, target, timeoutMsOverride) {
     }
   }
   const timeoutMs = timeoutMsOverride || Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
+  // The timeout above is a soft one: while the instance keeps beating we keep
+  // waiting, because a long processing run blocks the GUI thread and used to be
+  // reported as "QGIS died". The hard cap still ends a genuinely wedged call.
+  const hardCapMs = Number(process.env.QGIS_LIVE_HARD_TIMEOUT_MS) || HARD_CAP_MS
+  const startedAt = Date.now()
   const resultsSizeAtStart = (() => { try { return fs.statSync(resPath).size } catch { return 0 } })()
-  const deadline = Date.now() + timeoutMs
+  let deadline = startedAt + timeoutMs
   let lastLiveness = Date.now()
+  let beat = null
   while (Date.now() < deadline) {
     if (signal?.aborted) throw describeFailure('aborted')
     await delay(FILE_POLL_INTERVAL_MS)
@@ -614,6 +626,12 @@ async function invokeFileOnce(cmd, signal, target, timeoutMsOverride) {
       if (!pidAlive(target.pid)) {
         badLiveDirs.add(liveDir)
         throw describeFailure('dead')
+      }
+      // Alive and beating: extend the soft deadline instead of declaring death.
+      beat = readHeartbeat(liveDir)
+      if (beat && beat.ageMs < 5000) {
+        const extended = Date.now() + 3000
+        deadline = Math.min(Math.max(deadline, extended), startedAt + hardCapMs)
       }
     }
     let chunk = ''
@@ -656,7 +674,36 @@ async function invokeFileOnce(cmd, signal, target, timeoutMsOverride) {
   }
   badLiveDirs.add(liveDir)
   const grew = (() => { try { return fs.statSync(resPath).size - resultsSizeAtStart } catch { return -1 } })()
-  throw describeFailure('timeout', { seconds: Math.round(timeoutMs / 1000), grew: grew > 0 })
+  const note = readHeartbeat(liveDir)
+  const waited = Math.round((Date.now() - startedAt) / 1000)
+  if (note && note.ageMs < 5000 && note.busy) {
+    // Still working: say what it is doing, not that it is gone.
+    throw describeFailure('busy', {
+      waited,
+      busyType: note.busy.type,
+      busyId: note.busy.id === id ? null : note.busy.id,
+      busyFor: Math.round(Date.now() / 1000 - (note.busy.since || note.ts)),
+    })
+  }
+  if (note && note.ageMs < 5000) {
+    throw describeFailure('stalled', { waited })
+  }
+  throw describeFailure('timeout', { seconds: waited, grew: grew > 0 })
+}
+
+/**
+ * Read the driver's heartbeat. A plain worker thread writes it, so it keeps
+ * ticking while the GUI thread is busy — that is what separates "working on a
+ * long call" from "dead".
+ */
+function readHeartbeat(liveDir) {
+  try {
+    const hb = JSON.parse(fs.readFileSync(path.join(liveDir, 'heartbeat.json'), 'utf8'))
+    if (!hb || typeof hb.ts !== 'number') return null
+    return { ...hb, ageMs: Math.max(0, Date.now() - hb.ts * 1000) }
+  } catch {
+    return null
+  }
 }
 
 /** Turn a Python traceback into one actionable line. */
@@ -749,11 +796,18 @@ function nearestName(value, names) {
 function describeFailure(kind, detail = {}) {
   const seconds = detail.seconds ? `${detail.seconds}s` : 'the timeout'
   const text = {
-    timeout: `no reply from QGIS within ${seconds} — the command was written but never answered. `
+    timeout: `no reply from QGIS within ${seconds} — the command was written but never answered, and the instance stopped beating. `
       + (detail.grew
         ? 'results.jsonl grew but no reply carried this id, so another client may be reading the same file. '
-        : 'The process may be dead or the plugin disabled. ')
-      + 'Run qgis_plugin action=status; restart QGIS if it keeps saying nothing.',
+        : 'The process is probably gone or the plugin is disabled. ')
+      + 'Run qgis_plugin action=status; a dead instance is restarted by the next call.',
+    busy: `QGIS is still working, it is not dead: it has been busy for ${detail.busyFor || detail.waited}s `
+      + `with ${detail.busyType || 'a call'}${detail.busyId ? ` (${detail.busyId})` : ''}, `
+      + `so this call waited ${detail.waited}s and is still queued. `
+      + 'Wait for that call to finish, then retry; do not restart the instance — '
+      + 'that would throw away the work and the project state. Long jobs belong in submit_qgis_async.',
+    stalled: `QGIS is alive but its GUI thread has not ticked for ${detail.waited}s — a Qt call is blocking it, `
+      + 'which is not the same as dead. Retry once; if it repeats, qgis_plugin action=restart is the way out.',
     dead: 'the QGIS process exited while running this call — the next call starts a fresh instance, '
       + 'and anything unsaved in that project is gone.',
     unreachable: 'the command never reached commands.jsonl: nothing is reading that registry directory '
