@@ -1,65 +1,30 @@
 # dsh-qgis-driver
 
-Drive a running QGIS from DeepSeek Harness. This bundle registers three tools that
-call the `dsh_qgis_driver` plugin's REST API — either on the **same machine** (auto
-discovery) or a **remote machine** (host + port + Key).
+Drive a running QGIS from DeepSeek Harness. The bundle finds the newest local
+`dsh_qgis_driver` instance through the plugin's registry entry and talks to it over
+the plugin's JSONL file channel (REST is the fallback). One machine, no address to
+configure.
 
 ## Prerequisites
 
 1. QGIS 4.x with the `dsh_qgis_driver` plugin installed and running.
 2. The plugin's HTTP server is started (Remote Control enabled).
 
-## Connection modes
+## Connection
 
-### Local (default)
+No configuration: the bundle picks the newest `~/.qgis-live/<pid>-dsh_qgis_driver.json`
+registry entry (dead PIDs skipped) and reads that entry's `live_dir` + `token`.
 
-The bundle talks to QGIS through the plugin's **JSONL file channel** — no HTTP port,
-no auth header:
-
-- it picks the newest `~/.qgis-live/<pid>-dsh_qgis_driver.json` registry entry (up to 3
-  candidates, dead PIDs skipped) and reads that entry's `live_dir` + `token`;
 - each call appends one JSON line to `<live_dir>/commands.jsonl` and tails
   `<live_dir>/results.jsonl` from a stored byte offset, matching the reply by `id`;
-- the plugin's `_poll` timer (QGIS main thread) drains the command file, validates the
+- the plugin's poll timer (QGIS main thread) drains the command file, validates the
   token (`hmac.compare_digest`) and appends the reply — the same `_dispatch` as REST,
-  so every tool behaves identically.
+  so every tool behaves identically;
+- if the file channel is unavailable, the bundle falls back to `GET /api/health` and
+  REST on `127.0.0.1:<port>` with the same registry token.
 
-Timeout: `QGIS_LIVE_FILE_TIMEOUT_MS` (default 60000 ms). If the file channel is
-unavailable (no readable `live_dir`), the bundle falls back to probing
-`GET /api/health` and using REST on `127.0.0.1:<port>`. No configuration is needed.
-
-### Remote (cross-machine)
-
-To drive a QGIS on **another machine**, configure the target in the bundle's
-`cordis.patch.yml` `config:` field:
-
-```yaml
-- insert:
-    - id: dsh-qgis-driver
-      name: '@local/dsh-qgis-driver'
-      config:
-        host: 192.168.1.20   # the remote machine's reachable address
-        port: 8000           # QGIS_LIVE_PORT on the remote QGIS
-        key: your-secret     # QGIS_LIVE_API_KEY on the remote QGIS
-```
-
-or set the environment variables `QGIS_LIVE_REMOTE_HOST`, `QGIS_LIVE_REMOTE_PORT`,
-`QGIS_LIVE_REMOTE_KEY` (config in the patch file takes precedence). You can
-also set the same three fields (`host`, `port`, `key`) from the DSH **Settings**
-page — the bundle declares a `Config` schema, so DSH renders a form for them.
-
-On the **remote QGIS side**, set these environment variables before QGIS starts,
-then enable Remote Control:
-
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `QGIS_LIVE_HOST` | Bind address; `0.0.0.0` = all interfaces | `127.0.0.1` |
-| `QGIS_LIVE_PORT` | Fixed TCP port; `0` = auto-assign | `0` |
-| `QGIS_LIVE_API_KEY` | Stable **Key** for remote clients | *(unset)* |
-
-The remote client then authenticates with `Authorization: Bearer <Key>`
-(the "port + Key" form). The per-session token in the registry still works for
-the local machine.
+Timeouts: `QGIS_LIVE_FILE_TIMEOUT_MS` (default 15000 ms) for the transport, and the
+plugin interrupts one main-thread call after `QGIS_LIVE_EVAL_TIMEOUT` (default 10 s).
 
 ## Tools
 
@@ -247,9 +212,9 @@ trap is the example: with `layers[]` the path is a filename and each layer lands
 
 ## Autostart (local)
 
-When no live QGIS instance is found and the target is local (not a configured
-remote `host:port`), the bundle starts QGIS by spawning it directly — no
-`cmd.exe`, no batch wrapper, so quoting/locale differences cannot break it.
+When no live QGIS instance is found, the bundle starts QGIS by spawning it
+directly — no `cmd.exe`, no batch wrapper, so quoting/locale differences cannot
+break it.
 
 **Two modes, headless first:**
 
@@ -280,13 +245,70 @@ config toggle off; point at a non-standard install with `QGIS_ROOT`.
   Use a strong key, keep it private, and prefer a trusted network (or a tunnel),
   because `pyeval` executes arbitrary Python inside QGIS.
 
+## One writer at a time (instance write lease)
+
+Two agents editing one QGIS do not crash each other — they silently overwrite each
+other. One renames a layout while the other exports it, and both report success.
+
+Mutating actions therefore take a lease on the instance before they run, and release
+it in a `finally`:
+
+| Serialised | Not serialised (deliberate) |
+| --- | --- |
+| `qgis_project` open/save/save_as/set_crs, `qgis_layer` add/create/remove/visibility/crs/style/symbol/classify/style_multi/style_rule/labels/annotate/reproject, `qgis_feature` add/update/delete/field_*, `qgis_layout` create/add_item/update_item/legend_edit/align, `qgis_plugin instruction` writes | `action=list/*` reads, `qgis_layer export`, `qgis_layout export`, `qgis_map render`, `execute_qgis_sync`, `submit_qgis_async` |
+
+Reads and exports stay lock-free on purpose: parallel rendering is what the shard API
+is for. The lease belongs to the calling agent (`exec.agent.name`), is re-entrant for
+the same owner, expires after `ttl` (120 s from the tools, 300 s default) so a killed
+agent cannot freeze the instance, and reports the holder:
+
+```
+qgis_project set_crs: another agent ("other-agent") has been writing to this QGIS
+instance for 9s — wait for it, then retry. Reads are never blocked.
+```
+
+Inspect or clear it with `qgis_plugin action=lock op=status|acquire|release`.
+
+## Hard timeout on the main-thread call
+
+`execute_qgis_sync` runs on the QGIS main thread: a `while True:` used to freeze the
+whole application, and the caller only saw a transport timeout. The plugin now arms a
+watchdog around the eval and injects `MainThreadTimeout` (a `BaseException`, so
+`except Exception:` in the snippet cannot swallow it) into the main thread:
+
+```
+pyeval stopped: it ran longer than 10s (hard timeout) and was interrupted, so the QGIS
+instance stays usable. Split the work into submit_qgis_async tasks[] shards; if you
+expect a longer single call, raise QGIS_LIVE_EVAL_TIMEOUT.
+```
+
+Measured: a runaway loop returns at 10.2 s and the instance keeps serving. The budget
+defaults to 10 s, strictly below the 15 s transport wait, so the caller gets this
+explanation instead of a bare timeout. A call blocked inside a C function (`time.sleep`,
+network, a long GEOS computation) cannot be interrupted mid-call — Python only raises
+the exception at the next bytecode — so it stops when that call returns.
+
+## Regression suite
+
+`dsh-tools/tests/` holds the checks that would have caught the regressions this
+session fixed. Both are plain scripts: no framework, exit code 1 on failure.
+
+| Script | Covers | Needs QGIS |
+| --- | --- | --- |
+| `tests/pure.mjs` | endpoint mapping, guards, required-parameter table, batching, lease table, error text, skill frontmatter | no |
+| `tests/live.mjs` | lease acquire/refuse/release, runaway-loop interruption, instance survival, group submit + cancel | yes (skips when no instance) |
+
+```
+ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/pure.mjs
+ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/live.mjs
+```
+
 ## Status badge visibility
 
 The composer-row badge is hidden by default. It appears on its own after the
 first QGIS tool call in the session, or right away when *Settings →
-dsh-qgis-driver → show connection status widget* is enabled. Local calls use the
-plugin's file channel (`commands.jsonl` → `results.jsonl`); remote calls use
-REST with `host:port` + Key.
+dsh-qgis-driver → show connection status widget* is enabled. Calls use the
+plugin's file channel (`commands.jsonl` → `results.jsonl`).
 
 ## Code layout
 

@@ -6,6 +6,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Added
+- Instance write lease (`write_lock` over `/api/cmd`, `WriteGate` in `live_driver`): mutating
+  actions reserve the instance and release it in a `finally`, another writer is told who holds it
+  and for how long, and the lease expires on its own (`DEFAULT_WRITE_TTL`) so a killed client
+  cannot freeze QGIS. Reads and exports never take it — parallel rendering stays possible.
+- Main-thread hard timeout: one `pyeval` is armed with a watchdog and interrupted with
+  `MainThreadTimeout` (a `BaseException`, so `except Exception:` cannot swallow it). A runaway
+  loop now returns in ~10 s and the instance keeps serving; `QGIS_LIVE_EVAL_TIMEOUT` overrides
+  the budget, which defaults below the 15 s transport wait so the caller sees the explanation
+  instead of a bare timeout.
 - Cooperative cancellation for background work: every task namespace now exposes
   `dsh_should_stop()` (and `dsh_task_id`), so a long snippet can bail out on the next iteration
   after `task_cancel` instead of running to the end. `TaskRegistry.stop_requested()` is the single

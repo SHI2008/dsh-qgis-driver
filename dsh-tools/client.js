@@ -2,7 +2,7 @@
 // (1) Registers a QGIS connection-status widget in the composer tool row (right of the model selector)
 //     (OFF by default, Config `dock`; enabled in Settings).
 // (2) Registers a dedicated Settings section (`settings.section`) with an
-//     editable host/port/key/dock form, persisted via the Host's same-origin
+//     editable dock/headless form, persisted via the Host's same-origin
 //     route `/api/dsh-qgis-driver/config` (GET read / POST write).
 window.__ModuleLoader__.load({
   id: '@local/dsh-qgis-driver',
@@ -19,11 +19,6 @@ window.__ModuleLoader__.load({
     const ACCENT = '#8f9dff'
     const ACCENT_BG = '#8f9dff'
 
-    const inputStyle = {
-      width: '100%', boxSizing: 'border-box', padding: '6px 8px', fontSize: 13,
-      background: SURFACE, color: TEXT, border: '1px solid ' + BORDER,
-      borderRadius: 6, outline: 'none',
-    }
     const btnStyle = {
       padding: '7px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6,
       border: 'none', background: ACCENT_BG, color: '#08080a', cursor: 'pointer',
@@ -100,14 +95,12 @@ window.__ModuleLoader__.load({
       })
 
       const channel = status.channel === 'file' ? '文件通道' : (status.channel === 'http' ? 'REST' : '')
-      const place = status.target === 'remote'
-        ? '远程 ' + (status.host || '')
-        : '本地 ' + (status.host || '')
+      const place = '本地 ' + (status.host || '')
 
       let head
       let bodyText
       if (connected) {
-        head = status.target === 'remote' ? '远程 QGIS 已连接' : '本地 QGIS 已连接'
+        head = '本地 QGIS 已连接'
         bodyText = [place, channel].filter(Boolean).join(' · ')
       } else if (busy) {
         head = '正在启动 QGIS…'
@@ -158,13 +151,6 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function Field(label, input) {
-      return h('div', { style: { marginBottom: 12 } },
-        h('div', { style: { fontSize: 12, color: MUTED, marginBottom: 4 } }, label),
-        input,
-      )
-    }
-
     function Switch(props) {
       const on = !!props.checked
       return h('button', {
@@ -188,7 +174,7 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsPanel(props) {
-      const [form, setForm] = React.useState({ host: '', port: 0, key: '', dock: false, headless: true })
+      const [form, setForm] = React.useState({ dock: false, headless: true })
       const [loaded, setLoaded] = React.useState(false)
       const [saving, setSaving] = React.useState(false)
       const [msg, setMsg] = React.useState(null)
@@ -203,9 +189,6 @@ window.__ModuleLoader__.load({
             const c = await r.json()
             if (alive) {
               setForm({
-                host: (c && typeof c.host === 'string') ? c.host : '',
-                port: (c && Number.isInteger(c.port)) ? c.port : 0,
-                key: (c && typeof c.key === 'string') ? c.key : '',
                 dock: !!c?.dock,
                 headless: c?.headless !== false,
               })
@@ -218,7 +201,6 @@ window.__ModuleLoader__.load({
         return () => { alive = false }
       }, [])
 
-      const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
 
       async function save() {
         setSaving(true); setMsg(null); setErr(null)
@@ -227,15 +209,12 @@ window.__ModuleLoader__.load({
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
-              host: form.host,
-              port: Number(form.port) || 0,
-              key: form.key,
               dock: !!form.dock,
               headless: !!form.headless,
             }),
           })
           const b = await r.json().catch(() => ({}))
-          if (r.ok && b.ok !== false) setMsg('已保存。QGIS 连接参数将在下次工具调用时生效。')
+          if (r.ok && b.ok !== false) setMsg('已保存。设置将在下次工具调用时生效。')
           else setErr('保存失败：' + (b && b.error ? b.error : ('HTTP ' + r.status)))
         } catch (e) {
           setErr(e && e.message ? e.message : String(e))
@@ -246,13 +225,7 @@ window.__ModuleLoader__.load({
 
       return h('div', { style: { maxWidth: 520, padding: '8px 0', color: TEXT, fontSize: 13, lineHeight: 1.5 } },
         h('div', { style: { fontSize: 12, color: MUTED, marginBottom: 14 } },
-          'QGIS 连接参数。host 留空 = 使用本地自动发现（本机 QGIS）；填入 host:port + Key = 连接远程 QGIS。'),
-        Field('Host（主机地址，如 192.168.1.10）',
-          h('input', { value: form.host, onChange: set('host'), placeholder: '127.0.0.1', style: inputStyle })),
-        Field('Port（端口，0 = 自动）',
-          h('input', { type: 'number', min: 0, max: 65535, value: form.port, onChange: set('port'), style: inputStyle })),
-        Field('Key（API 密钥，对应 QGIS 端 QGIS_LIVE_API_KEY）',
-          h('input', { type: 'password', value: form.key, onChange: set('key'), placeholder: '（可选）', style: inputStyle })),
+          '连接本机正在运行的 QGIS：通过插件写下的注册表自动发现，不需要填地址或密钥。'),
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 } },
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } },
             h('span', { style: { fontSize: 13 } }, '显示连接状态挂件'),

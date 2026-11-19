@@ -1,8 +1,12 @@
 {
   "name": "@local/dsh-qgis-driver",
-  "version": "0.1.48-rc",
+  "version": "0.1.49-rc",
   "private": true,
   "type": "module",
+  "scripts": {
+    "test": "node tests/pure.mjs",
+    "test:live": "node tests/live.mjs"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -17,6 +21,7 @@
     "docs",
     "icon.svg",
     "scripts",
+    "tests",
     "node_modules",
     "skills"
   ],

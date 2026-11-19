@@ -73,7 +73,121 @@ _GROUP_FUTURES = {}
 # Kinds that use plugin_id as their own command argument, not as a route.
 # These are always handled by this driver itself.
 _LOCAL_TYPES = {"status", "open_plugin", "reload_plugin", "bridge_call",
-                "describe_plugins", "instruction", "pyeval_group", "task_cancel"}
+                "describe_plugins", "instruction", "pyeval_group", "task_cancel",
+                "write_lock"}
+
+# Advisory instance-wide write lease. Two agents driving one QGIS instance do not
+# crash each other (everything runs on the main thread), they silently overwrite
+# each other's work, which is worse. Readers never take the gate; writers do.
+DEFAULT_WRITE_TTL = 300.0
+
+# Hard timeout for one synchronous pyeval. The tool description asks for <3s, but
+# nothing stopped a `while True:` from freezing the whole instance forever.
+# Keep it below the transport budget (the bundle waits 15s on the file channel),
+# so the caller sees this explanation instead of a bare transport timeout.
+DEFAULT_EVAL_TIMEOUT = 10.0
+
+
+class MainThreadTimeout(BaseException):
+    """Raised inside the main thread when a pyeval call overruns its budget.
+
+    Deliberately a BaseException so `except Exception:` in the evaluated snippet
+    does not swallow the interrupt.
+    """
+
+
+def _run_with_deadline(fn, seconds):
+    """Run fn() here, but interrupt it when it overruns *seconds*.
+
+    Python cannot stop a thread from outside, so a timer thread asks CPython to
+    raise MainThreadTimeout in this one (ctypes). This is the only way to keep a
+    runaway snippet from wedging the QGIS main thread for good.
+    """
+    if not seconds or seconds <= 0:
+        return fn()
+    import ctypes
+
+    tid = threading.get_ident()
+
+    def _fire():
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(
+            ctypes.c_ulong(tid), ctypes.py_object(MainThreadTimeout))
+
+    timer = threading.Timer(seconds, _fire)
+    timer.daemon = True
+    timer.start()
+    try:
+        return fn()
+    finally:
+        timer.cancel()
+
+
+def _eval_timeout():
+    """Seconds allowed for one pyeval (QGIS_LIVE_EVAL_TIMEOUT overrides)."""
+    try:
+        value = float(os.environ.get("QGIS_LIVE_EVAL_TIMEOUT", ""))
+        if value > 0:
+            return value
+    except Exception:  # nosec B110  # a bad env value falls back to the default
+        pass
+    return DEFAULT_EVAL_TIMEOUT
+
+
+class WriteGate:
+    """Instance-level advisory write lock (one writer at a time, self-expiring).
+
+    Held by whoever is about to change the project; released when the tool call
+    returns. A lease expires on its own so a crashed agent cannot lock the
+    instance forever.
+    """
+
+    def __init__(self, ttl=DEFAULT_WRITE_TTL):
+        self._lock = threading.Lock()
+        self._owner = None
+        self._since = 0.0
+        self._ttl = float(ttl)
+        self._reason = ""
+
+    def _snapshot(self):
+        return {"held": bool(self._owner), "owner": self._owner,
+                "held_ms": int((time.monotonic() - self._since) * 1000)
+                if self._owner else 0,
+                "ttl_s": int(self._ttl), "reason": self._reason}
+
+    def _drop_if_expired(self):
+        if self._owner and (time.monotonic() - self._since) > self._ttl:
+            self._owner = None
+            self._reason = ""
+
+    def status(self):
+        with self._lock:
+            self._drop_if_expired()
+            return self._snapshot()
+
+    def acquire(self, owner, reason="", ttl=None):
+        with self._lock:
+            self._drop_if_expired()
+            if ttl:
+                try:
+                    self._ttl = max(5.0, float(ttl))
+                except Exception:  # nosec B110  # keep the previous ttl
+                    pass
+            if self._owner and self._owner != owner:
+                return {"ok": False, "busy": True, **self._snapshot()}
+            self._owner = owner or "unknown"
+            self._since = time.monotonic()
+            self._reason = reason or ""
+            return {"ok": True, "busy": False, **self._snapshot()}
+
+    def release(self, owner=None):
+        with self._lock:
+            if self._owner and owner and owner != self._owner:
+                return {"ok": False, "error": f"held by {self._owner}",
+                        **self._snapshot()}
+            was = self._owner
+            self._owner = None
+            self._reason = ""
+            return {"ok": True, "released": was}
 
 
 def _to_jsonable(v):
@@ -595,6 +709,7 @@ class LiveDriver:
         # execution always happens inside this driver's _poll (GUI thread)
         self._queue = queue.Queue()
         self.tasks = TaskRegistry()
+        self.gate = WriteGate()
         os.makedirs(live_dir, exist_ok=True)
         try:
             with open(os.path.join(live_dir, "token"), "w",
@@ -738,6 +853,9 @@ class LiveDriver:
             return
         if ctype == "pyeval_group":
             self._pyeval_group(cid, cmd, reply)
+            return
+        if ctype == "write_lock":
+            self._write_lock(cid, cmd, reply)
             return
         if ctype == "task_status":
             self._task_status(cid, cmd.get("task_id", ""), reply)
@@ -1106,15 +1224,28 @@ class LiveDriver:
         """
         reply = reply or self._reply
         self._ns.pop("result", None)
-        try:
+        budget = _eval_timeout()
+
+        def _run():
             try:
                 code_obj = compile(code, "<pyeval>", "eval")
             except SyntaxError:
                 code_obj = compile(code, "<pyeval>", "exec")
-            res = eval(code_obj, self._ns)  # nosec B307  # arbitrary Python execution is intended
-            if res is None:
-                res = self._ns.pop("result", None)
+            out = eval(code_obj, self._ns)  # nosec B307  # arbitrary Python execution is intended
+            if out is None:
+                out = self._ns.pop("result", None)
+            return out
+
+        try:
+            res = _run_with_deadline(_run, budget)
             reply({"id": cid, "result": _to_jsonable(res)})
+        except MainThreadTimeout:
+            self._ns.pop("result", None)
+            reply({"id": cid, "error":
+                   f"pyeval stopped: it ran longer than {budget:g}s (hard timeout) "
+                   "and was interrupted, so the QGIS instance stays usable. "
+                   "Split the work into submit_qgis_async tasks[] shards; if you "
+                   "expect a longer single call, raise QGIS_LIVE_EVAL_TIMEOUT."})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
@@ -1144,6 +1275,26 @@ class LiveDriver:
         try:
             started = self.submit_pyeval_group(cmd.get("tasks"), cmd.get("max_workers"))
             reply({"id": cid, "result": {"tasks": started, "count": len(started)}})
+        except Exception:
+            reply({"id": cid, "error": traceback.format_exc()})
+
+    def _write_lock(self, cid, cmd, reply):
+        """Acquire/release/inspect the instance write lease (op=acquire|release|status)."""
+        try:
+            op = (cmd.get("op") or "status").strip().lower()
+            owner = cmd.get("owner") or "unknown"
+            if op == "acquire":
+                out = self.gate.acquire(owner, cmd.get("reason") or "",
+                                        cmd.get("ttl"))
+            elif op == "release":
+                out = self.gate.release(owner)
+            elif op == "status":
+                out = {"ok": True, **self.gate.status()}
+            else:
+                reply({"id": cid, "error":
+                       f"unknown write_lock op: {op} (acquire|release|status)"})
+                return
+            reply({"id": cid, "result": out})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 

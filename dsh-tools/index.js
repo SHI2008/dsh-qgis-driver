@@ -1,12 +1,10 @@
 // dsh-qgis-driver — DSH Host bundle.
 // Exposes a running QGIS (dsh_qgis_driver plugin) as DSH tools over its REST API.
 //
-// Two connection modes:
-//   1. Local discovery — newest ~/.qgis-live/<pid>-dsh_qgis_driver.json registry entry,
-//      health-probed for liveness (uses the registry's host + Bearer session token).
-//   2. Remote target — host + port + Key from cordis.patch.yml `config:` or the env
-//      vars QGIS_LIVE_REMOTE_HOST / QGIS_LIVE_REMOTE_PORT / QGIS_LIVE_REMOTE_KEY
-//      (the Key is the remote QGIS's QGIS_LIVE_API_KEY).
+// One connection mode: the newest live instance on this machine, found through its
+// ~/.qgis-live/<pid>-dsh_qgis_driver.json registry entry. Tools talk to it over the
+// plugin's file channel (commands.jsonl/results.jsonl), falling back to its local
+// HTTP port + Bearer session token.
 //
 // Tools: 3 generic PyQGIS tools (execute_qgis_sync / submit_qgis_async /
 // check_qgis_task), 6 read/analysis tools (list_layers / list_layouts /
@@ -31,11 +29,8 @@ import { registerConsolidatedTools } from './tools.js'
 export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
 
-/** Remote connection settings rendered as a form in DSH Settings. */
+/** Settings rendered as a form in DSH Settings (connection is always local). */
 export const Config = z.object({
-  host: z.string().default(''),
-  port: z.number().default(0),
-  key: z.string().default(''),
   dock: z.boolean().default(false),
   headless: z.boolean().default(true),
 })
@@ -49,25 +44,6 @@ const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
  */
 let toolUsed = false
 const HEALTH_TIMEOUT_MS = 2000
-
-/** Resolve the remote target from `config` (cordis.patch.yml) or env vars. */
-function resolveRemoteTarget(config) {
-  const host = config?.host || process.env.QGIS_LIVE_REMOTE_HOST || ''
-  const portRaw = config?.port ?? process.env.QGIS_LIVE_REMOTE_PORT
-  const key = config?.key || process.env.QGIS_LIVE_REMOTE_KEY || ''
-  if (!host && !portRaw) return null
-  if (!host || !portRaw) {
-    throw new Error('remote QGIS: host and port required (QGIS_LIVE_REMOTE_HOST/PORT or config)')
-  }
-  const port = Number(portRaw)
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`remote QGIS: invalid port ${portRaw}`)
-  }
-  if (!key) {
-    throw new Error('remote QGIS: Key required (QGIS_LIVE_REMOTE_KEY or config.key)')
-  }
-  return { base: `http://${host}:${port}`, token: key }
-}
 
 /** Whether a PID is alive (used to skip stale registry files). */
 // Liveness probe. Node maps signal 0 to OpenProcess on Windows, which is safe.
@@ -187,7 +163,7 @@ async function findActiveQgis(startedAt = 0, requireGui = false) {
       continue
     }
   }
-  throw new Error('no active QGIS instance (start QGIS with the plugin enabled, or set QGIS_LIVE_REMOTE_HOST/PORT/KEY)')
+  throw new Error('no active QGIS instance (start QGIS with the dsh_qgis_driver plugin enabled)')
 }
 
 const DEFAULT_AUTOSTART_TIMEOUT_MS = 90000
@@ -460,6 +436,10 @@ function routeToCommand(route, body) {
     return { type: 'pyeval_group', tasks: body?.tasks || [], max_workers: body?.max_workers }
   }
   if (route === '/api/cmd') return { ...(body || {}) }
+  if (route === '/api/write_lock') {
+    return { type: 'write_lock', op: body?.op || 'status', owner: body?.owner,
+      reason: body?.reason, ttl: body?.ttl }
+  }
   if (route === '/api/task_cancel') {
     return { type: 'task_cancel', task_id: body?.task_id, task_ids: body?.task_ids || [] }
   }
@@ -1024,28 +1004,26 @@ function registerSkillProvider(ctx, disposers) {
   if (typeof dispose === 'function') disposers.push(dispose)
 }
 
+// Exported for the regression suite (dsh-tools/tests): these are the pieces that
+// turn a model's arguments into a plugin command, and they are pure.
+export const internals = {
+  routeToCommand,
+  tidyError,
+  editDistance,
+  nearestName,
+  explainFailure,
+  guardExecute,
+  asText,
+  parseSkillFrontmatter,
+  loadBundledSkills,
+}
+
 export function apply(ctx, config = {}) {
   const disposers = []
-  const remote = resolveRemoteTarget(config)
 
-  /** Resolve the connection target (health-checked remote, or local discovery). */
+  /** Resolve the connection target: the local instance (file channel first). */
   async function resolveTarget(opts = {}) {
-    if (remote) {
-      try {
-        const resp = await fetch(`${remote.base}/api/health`, {
-          headers: { Authorization: `Bearer ${remote.token}` },
-          signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-        })
-        if (resp.status === 401) throw new Error('QGIS auth failed: Key mismatch')
-        if (resp.status !== 200) throw new Error(`远程 QGIS 不可用：${remote.base}/api/health → HTTP ${resp.status}`)
-      } catch (e) {
-        if (e instanceof Error && e.message.includes('凭证')) throw e
-        if (e instanceof Error && e.name === 'TimeoutError') throw new Error(`无法连接远程 QGIS：${remote.base}（超时）`)
-        throw new Error(`无法连接远程 QGIS：${remote.base}（${e.message}）`)
-      }
-      return remote
-    }
-    // Local: prefer the plugin's file channel (no port, no auth header).
+    // Prefer the plugin's file channel (no port, no auth header).
     const requireGui = !!(opts && opts.gui)
     const local = findLocalLiveDir(0, requireGui)
     if (local) return local
@@ -1093,28 +1071,8 @@ export function apply(ctx, config = {}) {
       headless: config?.headless !== false,
       gui: null,
       canLaunch: !!resolveAutostart(config),
+      target: 'local',
     }
-    if (remote) {
-      status.target = 'remote'
-      status.channel = 'http'
-      status.host = remote.base.replace(/^http:\/\//, '')
-      try {
-        const resp = await fetch(`${remote.base}/api/health`, {
-          headers: { Authorization: `Bearer ${remote.token}` },
-          signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-        })
-        status.connected = resp.status === 200
-        if (!status.connected) {
-          status.error = resp.status === 401 ? '凭证已失效' : '远程不可达'
-          status.detail = `远程 QGIS ${remote.base} → HTTP ${resp.status}`
-        }
-      } catch (e) {
-        status.error = '远程不可达'
-        status.detail = `远程 QGIS 不可用：${e && e.message ? e.message : e}`
-      }
-      return status
-    }
-    status.target = 'local'
     const local = findLocalLiveDir()
     if (local) {
       status.connected = true
@@ -1164,7 +1122,7 @@ export function apply(ctx, config = {}) {
   // ---- Client GUI: config endpoint (read/write host/port/key/dock from Settings) ----
   // The client's Settings section has no config service, so it reads/writes through
   // this same-origin route. GET returns the current (resolved) config; POST persists
-  // via configEditor.edit (which restarts the plugin so `apply` re-resolves remote).
+  // via configEditor.edit (which restarts the plugin so `apply` re-reads config).
   const configEditor = typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined
   const configEntry = (ctx && ctx.fiber && ctx.fiber.entry) ? ctx.fiber.entry : undefined
   if (connection && connection.fetch && typeof connection.fetch.register === 'function') {
@@ -1175,9 +1133,6 @@ export function apply(ctx, config = {}) {
         requestBody: 'buffered',
         fetch: async (request) => {
           const current = {
-            host: (config && typeof config.host === 'string') ? config.host : '',
-            port: (config && Number.isInteger(config.port)) ? config.port : 0,
-            key: (config && typeof config.key === 'string') ? config.key : '',
             dock: !!config?.dock,
             headless: config?.headless !== false,
           }
@@ -1195,14 +1150,10 @@ export function apply(ctx, config = {}) {
           }
           let body = {}
           try { body = await request.json() } catch { /* keep defaults */ }
-          const host = (typeof body.host === 'string') ? body.host : current.host
-          const rawPort = Number(body.port)
-          const port = (Number.isInteger(rawPort) && rawPort >= 0 && rawPort <= 65535) ? rawPort : current.port
-          const key = (typeof body.key === 'string') ? body.key : current.key
           const dock = (typeof body.dock === 'boolean') ? body.dock : current.dock
           const headless = (typeof body.headless === 'boolean') ? body.headless : current.headless
           try {
-            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), host, port, key, dock, headless }))
+            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless }))
             return new Response(JSON.stringify({ ok: true }), {
               status: 200,
               headers: { 'content-type': 'application/json' },

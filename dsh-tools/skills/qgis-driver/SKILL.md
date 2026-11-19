@@ -54,6 +54,14 @@ round-trip, while hand-written pyeval is one round-trip per step.
    owns project/layout mutation. `check_qgis_task task_ids=[…] cancel=true` stops the queued
    tail of a group (a running shard only records the request). See the `qgis-batch-parallel`
    skill before splitting a run.
+8. **Writes take a lease by themselves.** Mutating actions (`add`, `style`, `set_crs`, layout
+   edits, field changes…) reserve the instance first, so two agents cannot silently overwrite
+   each other; reads and exports never wait. If a call answers `another agent ("x") has been
+   writing…`, wait and retry instead of working around it. `qgis_plugin action=lock op=status`
+   shows the holder.
+9. **One main-thread call is capped at 10 s.** A runaway call is interrupted and the instance
+   stays usable; do not raise `QGIS_LIVE_EVAL_TIMEOUT` to make a slow job fit — split it into
+   `submit_qgis_async` shards instead.
 
 ## Availability
 

@@ -6,6 +6,10 @@ description: "Split a long QGIS processing job across worker shards (submit_qgis
 # Batch and parallel QGIS work
 
 Both channels below share one rule: **reads may run in parallel, writes must be serial**.
+The driver enforces the write half itself: every mutating action takes an instance lease
+(`qgis_plugin action=lock op=status` shows the holder), answers
+`another agent ("x") has been writing…` while someone else holds it, and releases it
+afterwards. Reads and exports never wait — that is where the fan-out pays.
 A QGIS project is single-document state; two shards mutating layers/layouts at once corrupt it.
 
 ## 1. Worker shards — `submit_qgis_async tasks=[…]`

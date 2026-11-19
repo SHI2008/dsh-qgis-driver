@@ -1358,6 +1358,148 @@ prj.addMapLayer(layer)
 result = {'raster': rname, 'table': params.get('TABLE'), 'added': layer.name(), 'path': out_path}`,
 };
 
+// Actions that change what another agent would read back from this instance
+// (project state, layouts, layer styling, docs). Reads and exports stay
+// unlocked on purpose: parallel rendering is the whole point of the shard API.
+// An entry may be a plain action or { action, when(args) } for a sub-op.
+export const MUTATING = {
+  qgis_project: ['open', 'save', 'save_as', 'set_crs'],
+  qgis_layer: ['add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol',
+    'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject'],
+  qgis_feature: ['add', 'update', 'delete', 'field_add', 'field_calc',
+    'field_delete', 'field_rename'],
+  qgis_layout: ['create', 'add_item', 'update_item', 'legend_edit', 'align'],
+  qgis_plugin: [{ action: 'instruction',
+    when: (a) => a.op !== 'read' && a.op !== 'list' }],
+}
+
+export const lockOwner = (exec) => {
+  const agent = exec && exec.agent
+  return (agent && (agent.name || agent.id)) || 'dsh'
+}
+
+export function isMutating(tool, action, args) {
+  const list = MUTATING[tool]
+  if (!list) return false
+  return list.some((entry) => (typeof entry === 'string'
+    ? entry === action
+    : entry.action === action && (!entry.when || entry.when(args))))
+}
+
+// Batch: one tool call = one pyeval round-trip even for N entries.
+// A per-tool `action` spec decides which array key batches and where a string
+// entry is assigned (e.g. layers: ["A","B"] -> P['layer'] = "A" / "B").
+export const BATCH_SPEC = {
+  'qgis_layer:add': { key: 'paths', assign: 'path' },
+  'qgis_layer:export': { key: 'layers', assign: 'layer', perPath: true },
+  'qgis_layer:style': { key: 'layers', assign: 'layer' },
+  'qgis_layer:symbol': { key: 'layers', assign: 'layer' },
+  'qgis_layer:classify': { key: 'layers', assign: 'layer' },
+  'qgis_feature:query': { key: 'layers', assign: 'layer' },
+  'qgis_feature:select': { key: 'layers', assign: 'layer' },
+  'qgis_feature:select_by_location': { key: 'layers', assign: 'layer' },
+  'qgis_feature:update': { key: 'layers', assign: 'layer' },
+  'qgis_feature:delete': { key: 'layers', assign: 'layer' },
+  'qgis_feature:field_add': { key: 'specs' },
+  'qgis_feature:field_calc': { key: 'specs' },
+  'qgis_feature:field_delete': { key: 'specs' },
+  'qgis_feature:field_rename': { key: 'specs' },
+  'qgis_analysis:run': { key: 'runs' },
+  'qgis_layout:add_item': { key: 'items' },
+  'qgis_layout:update_item': { key: 'updates' },
+  'qgis_layout:export': { key: 'layouts', assign: 'layout', formats: true },
+  'qgis_layout:export_atlas': { key: 'layouts', assign: 'layout', formats: true },
+};
+
+// Args an action cannot run without. Checked before the round-trip so a wrong
+// first call costs a sentence, not a QGIS call plus a Python KeyError. Each
+// entry is a list of alternatives: every group must have one present key.
+export const REQUIRED_ARGS = {
+  'qgis_project:open': [['path']],
+  'qgis_project:save_as': [['path']],
+  'qgis_project:set_crs': [['crs', 'crs_file']],
+  'qgis_layer:add': [['path', 'paths']],
+  'qgis_layer:export': [['path']],
+  'qgis_layout:create': [['layout_name', 'layout']],
+  'qgis_layout:add_item': [['layout_name', 'layout'], ['kind']],
+  'qgis_layout:update_item': [['layout_name', 'layout'], ['index']],
+  'qgis_layout:export': [['layouts', 'layout_name', 'layout']],
+  'qgis_layout:export_atlas': [['layouts', 'layout_name', 'layout']],
+  'qgis_analysis:run': [['algorithm']],
+};
+
+export function checkRequired(tool, action, a) {
+  const groups = REQUIRED_ARGS[tool + ':' + action];
+  if (!groups) return;
+  const present = (k) => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '';
+  for (const group of groups) {
+    if (group.some(present)) continue;
+    const names = group.map((k) => `"${k}"`).join(' or ');
+    throw new Error(`${tool} ${action}: missing parameter ${names} — pass it (or the matching batch list); see the tool description`);
+  }
+}
+
+export function batchItems(args, spec) {
+  const raw = args?.[spec.key];
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  if (spec.perPath) {
+    // several layers into one `path` would overwrite each other -> per-layer file
+    const p0 = args?.path;
+    if (p0 && raw.length > 1) {
+      const m = /^(.*?)(\.[^./\\]+)$/.exec(String(p0));
+      const stem = m ? m[1] : String(p0);
+      const ext = m ? m[2] : '';
+      return raw.map((it) => {
+        const name = typeof it === 'string' ? it : it?.layer;
+        const safe = String(name ?? 'layer').replace(/[\\/:*?"<>|]/g, '_');
+        const path = stem + '_' + safe + ext;
+        return typeof it === 'string' ? { layer: it, path } : { ...it, path };
+      });
+    }
+    return raw.slice();
+  }
+  if (!spec.formats) return raw.slice();
+  const fmts = Array.isArray(args?.formats) && args.formats.length ? args.formats : null;
+  if (!fmts) return raw.slice();
+  const out = [];
+  for (const it of raw) {
+    for (const f of fmts) {
+      out.push(typeof it === 'string' ? { [spec.assign]: it, format: f } : { ...it, format: f });
+    }
+  }
+  return out;
+}
+
+export function batchBody(body, spec) {
+  const indented = body
+    .split('\n')
+    .map((line) => (line.length ? '    ' + line : line))
+    .join('\n');
+  let setItem = '    P.update(_it_)';
+  if (spec.assign === 'layout') {
+    setItem = "    if isinstance(_it_, str):\n        P['layout'] = _it_\n        P['layout_name'] = _it_\n    else:\n        P.update(_it_)";
+  } else if (spec.assign) {
+    setItem = "    if isinstance(_it_, str):\n        P['" + spec.assign + "'] = _it_\n    else:\n        P.update(_it_)";
+  }
+  return `
+_items_ = P.get('${spec.key}') or []
+_orig_ = dict(P)
+_parts_ = []
+for _it_ in _items_:
+  P.clear()
+  P.update(_orig_)
+  P.pop('${spec.key}', None)
+${setItem}
+  if P.get('layout') is None and P.get('layout_name') is not None:
+      P['layout'] = P['layout_name']
+  if P.get('layout_name') is None and P.get('layout') is not None:
+      P['layout_name'] = P['layout']
+${indented}
+  _parts_.append(result)
+result = {'count': len(_parts_), 'results': _parts_}
+`;
+}
+
 export function registerConsolidatedTools(deps) {
   const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString } = deps;
   // ---------------- core (synchronous pyeval + async task channel)
@@ -1451,117 +1593,34 @@ export function registerConsolidatedTools(deps) {
     },
   });
 
-  // Batch: one tool call = one pyeval round-trip even for N entries.
-  // A per-tool `action` spec decides which array key batches and where a string
-  // entry is assigned (e.g. layers: ["A","B"] -> P['layer'] = "A" / "B").
-  const BATCH_SPEC = {
-    'qgis_layer:add': { key: 'paths', assign: 'path' },
-    'qgis_layer:export': { key: 'layers', assign: 'layer', perPath: true },
-    'qgis_layer:style': { key: 'layers', assign: 'layer' },
-    'qgis_layer:symbol': { key: 'layers', assign: 'layer' },
-    'qgis_layer:classify': { key: 'layers', assign: 'layer' },
-    'qgis_feature:query': { key: 'layers', assign: 'layer' },
-    'qgis_feature:select': { key: 'layers', assign: 'layer' },
-    'qgis_feature:select_by_location': { key: 'layers', assign: 'layer' },
-    'qgis_feature:update': { key: 'layers', assign: 'layer' },
-    'qgis_feature:delete': { key: 'layers', assign: 'layer' },
-    'qgis_feature:field_add': { key: 'specs' },
-    'qgis_feature:field_calc': { key: 'specs' },
-    'qgis_feature:field_delete': { key: 'specs' },
-    'qgis_feature:field_rename': { key: 'specs' },
-    'qgis_analysis:run': { key: 'runs' },
-    'qgis_layout:add_item': { key: 'items' },
-    'qgis_layout:update_item': { key: 'updates' },
-    'qgis_layout:export': { key: 'layouts', assign: 'layout', formats: true },
-    'qgis_layout:export_atlas': { key: 'layouts', assign: 'layout', formats: true },
-  };
-
-  // Args an action cannot run without. Checked before the round-trip so a wrong
-  // first call costs a sentence, not a QGIS call plus a Python KeyError. Each
-  // entry is a list of alternatives: every group must have one present key.
-  const REQUIRED_ARGS = {
-    'qgis_project:open': [['path']],
-    'qgis_project:save_as': [['path']],
-    'qgis_project:set_crs': [['crs', 'crs_file']],
-    'qgis_layer:add': [['path', 'paths']],
-    'qgis_layer:export': [['path']],
-    'qgis_layout:create': [['layout_name', 'layout']],
-    'qgis_layout:add_item': [['layout_name', 'layout'], ['kind']],
-    'qgis_layout:update_item': [['layout_name', 'layout'], ['index']],
-    'qgis_layout:export': [['layouts', 'layout_name', 'layout']],
-    'qgis_layout:export_atlas': [['layouts', 'layout_name', 'layout']],
-    'qgis_analysis:run': [['algorithm']],
-  };
-
-  function checkRequired(tool, action, a) {
-    const groups = REQUIRED_ARGS[tool + ':' + action];
-    if (!groups) return;
-    const present = (k) => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '';
-    for (const group of groups) {
-      if (group.some(present)) continue;
-      const names = group.map((k) => `"${k}"`).join(' or ');
-      throw new Error(`${tool} ${action}: missing parameter ${names} — pass it (or the matching batch list); see the tool description`);
+  /**
+   * Serialise project-changing calls behind the plugin's instance write lease.
+   *
+   * Why: two agents editing one QGIS do not crash each other, they silently
+   * overwrite each other (one renames a layout while the other exports it).
+   * A lease expires on its own, so a killed agent cannot lock the instance.
+   */
+  async function withWriteLock(tool, action, args, exec, fn) {
+    if (!tool || !isMutating(tool, action, args)) return fn()
+    const owner = lockOwner(exec)
+    let got
+    try {
+      got = await runCmd('write_lock', { op: 'acquire', owner, ttl: 120,
+        reason: `${tool} ${action}` }, exec?.signal)
+    } catch (e) {
+      // An older plugin has no gate; run unlocked instead of failing the call.
+      if (/unknown|not found|unsupported|invalid type/i.test(String(e && e.message))) return fn()
+      throw e
     }
-  }
-
-  function batchItems(args, spec) {    const raw = args?.[spec.key];
-    if (!Array.isArray(raw) || raw.length === 0) return null;
-    if (spec.perPath) {
-      // several layers into one `path` would overwrite each other -> per-layer file
-      const p0 = args?.path;
-      if (p0 && raw.length > 1) {
-        const m = /^(.*?)(\.[^./\\]+)$/.exec(String(p0));
-        const stem = m ? m[1] : String(p0);
-        const ext = m ? m[2] : '';
-        return raw.map((it) => {
-          const name = typeof it === 'string' ? it : it?.layer;
-          const safe = String(name ?? 'layer').replace(/[\\/:*?"<>|]/g, '_');
-          const path = stem + '_' + safe + ext;
-          return typeof it === 'string' ? { layer: it, path } : { ...it, path };
-        });
-      }
-      return raw.slice();
+    if (got && got.ok === false) {
+      const held = Math.round((Number(got.held_ms) || 0) / 1000)
+      throw new Error(`${tool} ${action}: another agent ("${got.owner}") has been writing to this QGIS instance for ${held}s — wait for it, then retry. Reads are never blocked.`)
     }
-    if (!spec.formats) return raw.slice();
-    const fmts = Array.isArray(args?.formats) && args.formats.length ? args.formats : null;
-    if (!fmts) return raw.slice();
-    const out = [];
-    for (const it of raw) {
-      for (const f of fmts) {
-        out.push(typeof it === 'string' ? { [spec.assign]: it, format: f } : { ...it, format: f });
-      }
+    try {
+      return await fn()
+    } finally {
+      try { await runCmd('write_lock', { op: 'release', owner }, exec?.signal) } catch (e) { /* the lease expires on its own */ }
     }
-    return out;
-  }
-
-  function batchBody(body, spec) {
-    const indented = body
-      .split('\n')
-      .map((line) => (line.length ? '    ' + line : line))
-      .join('\n');
-    let setItem = '    P.update(_it_)';
-    if (spec.assign === 'layout') {
-      setItem = "    if isinstance(_it_, str):\n        P['layout'] = _it_\n        P['layout_name'] = _it_\n    else:\n        P.update(_it_)";
-    } else if (spec.assign) {
-      setItem = "    if isinstance(_it_, str):\n        P['" + spec.assign + "'] = _it_\n    else:\n        P.update(_it_)";
-    }
-    return `
-_items_ = P.get('${spec.key}') or []
-_orig_ = dict(P)
-_parts_ = []
-for _it_ in _items_:
-    P.clear()
-    P.update(_orig_)
-    P.pop('${spec.key}', None)
-${setItem}
-    if P.get('layout') is None and P.get('layout_name') is not None:
-        P['layout'] = P['layout_name']
-    if P.get('layout_name') is None and P.get('layout') is not None:
-        P['layout_name'] = P['layout']
-${indented}
-    _parts_.append(result)
-result = {'count': len(_parts_), 'results': _parts_}
-`;
   }
 
   const call = async (body, args, exec, opts, tool) => {
@@ -1575,7 +1634,9 @@ result = {'count': len(_parts_), 'results': _parts_}
     const payload = items ? batchBody(body, spec) : body;
     if (items) a[spec.key] = items;
     const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(a))) + payload;
-    return asText(await run(code, exec?.signal, opts));
+    const action = String(a.action ?? '');
+    return withWriteLock(tool, action, a, exec,
+      async () => asText(await run(code, exec?.signal, opts)));
   };
 
   // ---------------- project
@@ -1813,15 +1874,15 @@ result = {'count': len(_parts_), 'results': _parts_}
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
+    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction'] },
+        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction', 'lock'] },
         plugin_id: { type: 'string' },
         method: { type: 'string' },
         args: { type: 'array', items: {} },
-        op: { type: 'string', enum: ['list', 'read', 'save', 'delete'] },
+        op: { type: 'string', description: 'instruction: list/read/save/delete; lock: acquire/release/status', enum: ['list', 'read', 'save', 'delete', 'acquire', 'release', 'status'] },
         kind: { type: 'string', enum: ['agents', 'skills', 'prompts'] },
         id: { type: 'string' },
         name: { type: 'string' },
@@ -1837,6 +1898,9 @@ result = {'count': len(_parts_), 'results': _parts_}
       if (a === 'open') return asText(await runCmd('open_plugin', { plugin_id: args?.plugin_id || 'dsh_qgis_driver' }, exec?.signal));
       if (a === 'reload') return asText(await runCmd('reload_plugin', { plugin_id: args?.plugin_id || 'dsh_qgis_driver' }, exec?.signal));
       if (a === 'bridge') return asText(await runCmd('bridge_call', { method: args?.method, plugin_id: args?.plugin_id, args: args?.args || [] }, exec?.signal));
+      if (a === 'lock') {
+        return asText(await runCmd('write_lock', { op: args?.op || 'status', owner: lockOwner(exec), ttl: 120 }, exec?.signal));
+      }
       return asText(await runCmd('instruction', {
         op: args?.op || 'list', kind: args?.kind || 'skills',
         id: args?.id, name: args?.name, text: args?.text,
