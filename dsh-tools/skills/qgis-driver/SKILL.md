@@ -62,11 +62,13 @@ round-trip, while hand-written pyeval is one round-trip per step.
    writing…`, wait and retry instead of working around it. `qgis_plugin action=lock op=status`
    shows the holder.
 9. **Your permission scope can be narrower than you think.** The bundle refuses calls the
-   current scope does not allow, with one line saying which scope is active and that the user
-   can widen it in the composer selector (只读 / 编辑 / 完全). `read` = look and render only
-   (no project change, no file written, no Python); `write` (default) = edit, export, analyse;
-   `danger` = also delete, open/save arbitrary projects, and raw PyQGIS. If you are blocked,
-   do not hunt for a workaround — tell the user what you need and why.
+   current scope does not allow, with one line saying which scope is active. `read` = look and
+   render only (no project change, no file written, no Python); `write` (default) = edit,
+   export, analyse; `danger` = also delete, open/save arbitrary projects, and raw PyQGIS.
+   A refused call cannot open a dialog: nothing in this bundle can. Say which call is blocked,
+   ask the user with `ask_user_question` to pick the wider scope in the composer selector
+   (只读 / 编辑 / 完全), and retry — the switch takes effect on your next call, with no reload.
+   Do not hunt for a workaround.
 10. **A wedged instance has one escape hatch.** `qgis_plugin action=restart` kills the process
    and the next call starts a fresh one (unsaved edits are lost, needs `danger`). `reload`
    cannot re-import in a headless process, so reach for `restart` only when calls keep timing

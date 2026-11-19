@@ -1458,7 +1458,9 @@ export function scopeRefusal(scope, tool, action, args) {
     ? 'that action can destroy data or run arbitrary Python'
     : 'that action writes to the project or to disk'
   return `${label} is blocked: ${what}, and the current permission scope is "${have}". ` +
-    `The user can switch to "${need}" in the composer scope selector (or in Settings). ` +
+    'This bundle cannot open a dialog itself. Tell the user which call is blocked and why, ' +
+    `and ask them (ask_user_question) to switch the scope to "${need}" in the composer scope ` +
+    'selector or in Settings; the switch takes effect on your very next call, so retry then. ' +
     'Reads, renders and the audit log are never blocked.'
 }
 
@@ -1607,7 +1609,12 @@ result = {'count': len(_parts_), 'results': _parts_}
 
 export function registerConsolidatedTools(deps) {
   const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance } = deps;
-  const activeScope = () => (SCOPES.includes(scope) ? scope : 'write');
+  // `scope` is a getter in the live bundle (so the pill applies without a reload)
+  // and a plain string in older builds / tests. Accept both.
+  const activeScope = () => {
+    const raw = typeof scope === 'function' ? scope() : scope;
+    return SCOPES.includes(raw) ? raw : 'write';
+  };
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',

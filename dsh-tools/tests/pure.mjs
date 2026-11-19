@@ -18,6 +18,7 @@ import {
 
 const {
   routeToCommand, tidyError, describeFailure, nearestName, guardExecute, asText,
+  currentScope, setLiveScope,
   parseSkillFrontmatter,
 } = internals
 
@@ -297,8 +298,23 @@ await ok('a refusal says how to lift it, and that reads still work', () => {
   assert.match(msg, /qgis_layer style/)
   assert.match(msg, /current permission scope is "read"/)
   assert.match(msg, /composer scope selector/)
+  // The bundle cannot pop a dialog, so the refusal must tell the model to ask.
+  assert.match(msg, /ask_user_question/)
+  assert.match(msg, /very next call/)
   assert.match(msg, /Reads, renders and the audit log are never blocked/)
   assert.throws(() => assertScope('read', 'qgis_layer', 'style', {}), (e) => e.code === 'SCOPE_DENIED')
+})
+
+await ok('the live scope changes without a plugin reload', () => {
+  // The pill writes through the config endpoint, which calls setLiveScope; tools
+  // read currentScope(). If this ever regresses, switching to "read" would keep
+  // letting writes through until the bundle is reloaded.
+  assert.equal(currentScope(), 'write')
+  assert.equal(setLiveScope('read'), 'read')
+  assert.equal(currentScope(), 'read')
+  assert.equal(setLiveScope('DANGER'), 'danger')
+  assert.equal(setLiveScope('nonsense'), 'write')
+  assert.equal(currentScope(), 'write')
 })
 
 await ok('the scope names are the three the config accepts', () => {

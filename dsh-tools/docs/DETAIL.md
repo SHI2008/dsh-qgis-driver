@@ -278,9 +278,25 @@ A refusal names the call, the current scope and how to lift it:
 
 ```
 qgis_layer remove is blocked: that action can destroy data or run arbitrary Python,
-and the current permission scope is "write". The user can switch to "danger" in the
-composer scope selector (or in Settings). Reads, renders and the audit log are never blocked.
+and the current permission scope is "write". This bundle cannot open a dialog itself.
+Tell the user which call is blocked and why, and ask them (ask_user_question) to switch
+the scope to "danger" in the composer scope selector or in Settings; the switch takes
+effect on your very next call, so retry then. Reads, renders and the audit log are never blocked.
 ```
+
+The scope is *live*: `index.js` keeps it in `liveScope`, tools read it through
+`currentScope()`, and the config endpoint calls `setLiveScope()` before it persists
+anything. Switching in the pill therefore changes the very next call — the old
+behaviour captured the scope at registration time, so the change only landed after a
+plugin reload, which is precisely the wrong moment to ask a user for. (A rollback
+restores the previous value if persisting the setting fails.)
+
+The bundle cannot open a dialog — not a native one, not an in-app one — while a tool
+call is running: the client module is a sandboxed React bundle with no Electron
+`dialog` access, and sessions are configured to never ask for approval mid-call. So
+the model's only move is to stop and ask in plain language (the harness gives it
+`ask_user_question` for exactly that), which is why every refusal names the scope the
+user should pick.
 
 Two details worth knowing:
 

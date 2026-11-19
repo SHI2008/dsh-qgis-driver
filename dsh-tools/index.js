@@ -51,6 +51,26 @@ export function effectiveScope(config) {
   return SCOPE_NAMES.includes(stored) ? stored : 'write'
 }
 
+/**
+ * The scope in force *right now*. Tools read this through a getter instead of
+ * capturing config at registration time: turning the pill down to `read` must
+ * take effect on the next call, not after a plugin reload. Reloading is what the
+ * old behaviour effectively demanded, and nobody does that mid-conversation.
+ */
+let liveScope = 'write'
+
+/** Current permission scope (read by every tool and by the status/config endpoints). */
+export function currentScope() {
+  return liveScope
+}
+
+/** Set the live scope; returns the value actually in force. */
+export function setLiveScope(value) {
+  const wanted = String(value || '').trim().toLowerCase()
+  liveScope = SCOPE_NAMES.includes(wanted) ? wanted : 'write'
+  return liveScope
+}
+
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
 
 /**
@@ -1129,11 +1149,16 @@ export const internals = {
   parseSkillFrontmatter,
   loadBundledSkills,
   effectiveScope,
+  currentScope,
+  setLiveScope,
   restartInstance,
 }
 
 export function apply(ctx, config = {}) {
   const disposers = []
+  // Seed the live scope from the stored setting; the config endpoint re-seeds it
+  // whenever the user moves the pill, without waiting for a plugin reload.
+  setLiveScope(effectiveScope(config))
 
   /** Resolve the connection target: the local instance (file channel first). */
   async function resolveTarget(opts = {}) {
@@ -1176,7 +1201,7 @@ export function apply(ctx, config = {}) {
     const status = {
       dock: !!config?.dock,
       reveal: toolUsed,
-      scope: effectiveScope(config),
+      scope: currentScope(),
       connected: false,
       channel: null,
       target: null,
@@ -1250,7 +1275,7 @@ export function apply(ctx, config = {}) {
           const current = {
             dock: !!config?.dock,
             headless: config?.headless !== false,
-            scope: effectiveScope(config),
+            scope: currentScope(),
             scopes: SCOPE_NAMES,
           }
           if (request.method !== 'POST') {
@@ -1280,6 +1305,8 @@ export function apply(ctx, config = {}) {
             }
             scope = wanted
           }
+          const previous = currentScope()
+          setLiveScope(scope)
           try {
             await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless, scope }))
             return new Response(JSON.stringify({ ok: true }), {
@@ -1287,6 +1314,7 @@ export function apply(ctx, config = {}) {
               headers: { 'content-type': 'application/json' },
             })
           } catch (e) {
+            setLiveScope(previous)
             return new Response(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }), {
               status: 400,
               headers: { 'content-type': 'application/json' },
@@ -1361,7 +1389,7 @@ export function apply(ctx, config = {}) {
     callRaw: callQgis,
     resolve: resolveTarget,
     restartInstance,
-    scope: effectiveScope(config),
+    scope: currentScope,
     stringOutput,
     asText,
   })

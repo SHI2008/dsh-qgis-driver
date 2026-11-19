@@ -328,21 +328,23 @@ window.__ModuleLoader__.load({
       }, [])
 
 
-      async function save() {
+      // Every control writes immediately: a settings page that needs a Save
+      // button makes people think the toggle did nothing.
+      async function push(patch) {
+        const next = { dock: !!form.dock, headless: !!form.headless, scope: form.scope, ...patch }
+        setForm(next)
         setSaving(true); setMsg(null); setErr(null)
         try {
           const r = await fetch('/api/dsh-qgis-driver/config', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({
-              dock: !!form.dock,
-              headless: !!form.headless,
-              scope: form.scope,
-            }),
+            body: JSON.stringify(next),
           })
           const b = await r.json().catch(() => ({}))
-          if (r.ok && b.ok !== false) setMsg('已保存。设置将在下次工具调用时生效。')
-          else setErr('保存失败：' + (b && b.error ? b.error : ('HTTP ' + r.status)))
+          if (r.ok && b.ok !== false) setMsg('已生效')
+          else {
+            setErr('保存失败：' + (b && b.error ? b.error : ('HTTP ' + r.status)))
+          }
         } catch (e) {
           setErr(e && e.message ? e.message : String(e))
         } finally {
@@ -358,22 +360,22 @@ window.__ModuleLoader__.load({
             h('span', { style: { fontSize: 13 } }, '显示连接状态挂件'),
             h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
               '在消息输入框右侧显示 QGIS 连接状态徽标，点击可启动 QGIS 或查看通道（默认关闭）。')),
-          Switch({ checked: !!form.dock, onChange: (v) => setForm((f) => ({ ...f, dock: v })) })),
+          Switch({ checked: !!form.dock, onChange: (v) => push({ dock: v }) })),
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 } },
           h('div', { style: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 } },
             h('span', { style: { fontSize: 13 } }, '自动启动使用无头模式'),
             h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
               '自动拉起 QGIS 时不显示窗口；只有需要地图画布的工具（平移/缩放/截图）才启动 GUI。关闭则总是启动 GUI。')),
-          Switch({ checked: !!form.headless, onChange: (v) => setForm((f) => ({ ...f, headless: v })) })),
+          Switch({ checked: !!form.headless, onChange: (v) => push({ headless: v }) })),
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
           h('span', { style: { fontSize: 13 } }, '工具权限范围'),
           h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
-            '默认“编辑”。输入框右侧的权限按钮可以随时切换，这里设置的是默认值。'),
+            '和输入框右侧的权限按钮是同一个设置：改完立刻生效，下一次工具调用就按新范围执行，不需要重载。'),
           h('div', { style: { display: 'flex', gap: 6, marginTop: 2 } },
             SCOPE_META.map((s) => h('button', {
               key: s.id,
               type: 'button',
-              onClick: () => setForm((f) => ({ ...f, scope: s.id })),
+              onClick: () => push({ scope: s.id }),
               style: {
                 flex: '1 1 0', padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
                 fontSize: 12, fontWeight: 600,
@@ -385,9 +387,8 @@ window.__ModuleLoader__.load({
           ),
           h('span', { style: { fontSize: 10.5, color: '#6f6f7a', lineHeight: 1.45 } },
             '只读：不写项目、不写文件、不跑 Python。编辑：改图层/布局/样式、导出、跑分析。完全：还能删除、打开或另存任意项目、执行裸 PyQGIS。')),
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
-          h('button', { onClick: save, disabled: saving, style: { ...btnStyle, opacity: saving ? 0.6 : 1 } },
-            saving ? '保存中…' : '保存'),
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 10, minHeight: 18 } },
+          saving ? h('span', { style: { fontSize: 12, color: MUTED } }, '应用中…') : null,
           msg ? h('span', { style: { fontSize: 12, color: GREEN } }, msg) : null,
           err ? h('span', { style: { fontSize: 12, color: RED } }, err) : null),
       )

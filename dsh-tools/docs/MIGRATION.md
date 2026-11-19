@@ -20,67 +20,11 @@ On the machine that runs QGIS:
    - Linux: `~/.local/share/QGIS/QGIS4/profiles/default/python/plugins/dsh_qgis_driver`
 2. Enable it in **Plugins → Manage and Install Plugins → Installed** (or leave the plugin's auto-start setting on).
 
-### Make it reachable from another machine
+### Keep it local
 
-The plugin reads three environment variables at startup:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `QGIS_LIVE_HOST` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept connections from other machines. |
-| `QGIS_LIVE_PORT` | `0` (auto) | Fixed TCP port to listen on. Pick one, e.g. `8200`. |
-| `QGIS_LIVE_API_KEY` | *(auto-generated per session)* | The stable **Key** remote clients must present. Set it to a fixed secret so it survives restarts. |
-
-Example (Windows, set once before starting QGIS):
-
-```powershell
-setx QGIS_LIVE_HOST 0.0.0.0
-setx QGIS_LIVE_PORT 8200
-setx QGIS_LIVE_API_KEY "change-this-long-random-secret"
-```
-
-> **Security:** with `QGIS_LIVE_HOST=0.0.0.0` the server accepts requests from any host on the network. The Key is the only barrier, and the transport is plain HTTP (no TLS). Only do this on a trusted network/VPN, and use a long random Key. The menu item **Remote Control** shows the current connection info.
-
-After QGIS starts, confirm the server is up:
-
-```bash
-curl -s http://<server-ip>:8200/api/health
-# {"id": ..., "result": {"ok": true, "pid": ..., "plugin": "dsh_qgis_driver"}}
-```
-
-(No token is needed for `/api/health`; all other endpoints require the Key.)
-
----
-
-## 2. Configure the DSH bundle (the client end)
-
-On the machine that runs DeepSeek Harness:
-
-1. Install the bundle folder as a plugin (Plugins → Add plugin → choose local dir `qgis-driver-dsh-tools`), or `plugin_manager install_bundle` with the folder path.
-2. Tell it where the remote QGIS is, using **one** of:
-
-   **Option A — edit `cordis.patch.yml` (persists in the bundle):**
-
-   ```yaml
-   - insert:
-       - id: dsh-qgis-driver
-         name: '@local/dsh-qgis-driver'
-         config:
-           host: 192.168.1.50   # the QGIS machine's IP / hostname
-           port: 8200
-           key: change-this-long-random-secret
-   ```
-
-   **Option B — environment variables on the Harness process:**
-
-   ```text
-   QGIS_LIVE_REMOTE_HOST=192.168.1.50
-   QGIS_LIVE_REMOTE_PORT=8200
-   QGIS_LIVE_REMOTE_KEY=change-this-long-random-secret
-   ```
-
-3. Re-enable the bundle so it picks up the new config (Plugins → toggle it off and back on).
-
-With **no** `host`+`port` configured, the bundle falls back to automatic localhost discovery (`~/.qgis-live/*-dsh_qgis_driver.json`), which is what you want for same-PC use.
+The plugin's HTTP surface listens on `127.0.0.1` only; there is nothing to
+configure for a second machine. The DSH bundle finds the instance through
+`~/.qgis-live` and authenticates with the per-session token written there.
 
 ### Handshake rules
 

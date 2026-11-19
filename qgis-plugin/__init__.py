@@ -72,13 +72,12 @@ class GeoDriverPlugin:
 
     Exposed surfaces:
       - File JSONL (commands.jsonl/results.jsonl) — language-neutral base
-      - HTTP (default 127.0.0.1:<auto port>; set QGIS_LIVE_HOST=0.0.0.0 and
-        QGIS_LIVE_PORT=<port> for cross-machine access) (/api/* = REST)
+      - HTTP (127.0.0.1:<auto port>, loopback only) (/api/* = REST)
       - ~/.qgis-live/<pid>-dsh_qgis_driver.json — connection info + token (discovery)
 
-    Auth: every endpoint except /api/health requires a token (Bearer/X-Api-Key/
-    api-key). The per-session token is in the registry; QGIS_LIVE_API_KEY is a
-    stable extra key for remote clients (use it as the "Key" with host:port).
+    Auth: every endpoint except /api/health requires the per-session token
+    (Bearer/X-Api-Key/api-key), which is written to the registry. There is no
+    remote mode and no stable shared key.
     """
 
     SETTING_ENABLED = "dsh_qgis_driver/enabled"
@@ -266,12 +265,6 @@ class GeoDriverPlugin:
         self._conn_action.triggered.connect(self._open_conn_info)
         self.iface.addPluginToMenu("dsh-qgis-driver", self._conn_action)
 
-        self._settings_action = QAction(
-            QCoreApplication.translate("dsh_qgis_driver", "Settings"),
-            self.iface.mainWindow())
-        self._settings_action.triggered.connect(self._open_settings)
-        self.iface.addPluginToMenu("dsh-qgis-driver", self._settings_action)
-
         self._hot_menu = self._build_hot_menu()
         self.iface.addPluginToMenu("dsh-qgis-driver",
                                    self._hot_menu.menuAction())
@@ -387,17 +380,6 @@ class GeoDriverPlugin:
             self._conn_dlg = show_dialog(self)
         except Exception:
             _log("connection info dialog failed:\n"
-                 + traceback.format_exc())
-
-    def _open_settings(self):
-        """Open the connection settings dialog (host / port / API key)."""
-        try:
-            from .settings_dialog import SettingsDialog
-            dlg = SettingsDialog(self.iface.mainWindow())
-            self._settings_dlg = dlg  # keep a reference against GC
-            dlg.exec()
-        except Exception:
-            _log("settings dialog failed:\n"
                  + traceback.format_exc())
 
     # ---- Deploy mode switch ----
@@ -642,27 +624,18 @@ class GeoDriverPlugin:
                  + traceback.format_exc())
             return
 
-        # Auth: session token mandatory; QGIS_LIVE_API_KEY is an optional extra
-        # stable key. For cross-machine access set QGIS_LIVE_HOST=0.0.0.0 and a
-        # known QGIS_LIVE_PORT, and give the remote client the QGIS_LIVE_API_KEY.
-        # Values come from the Settings dialog (QSettings) or the env vars.
-        from .settings_dialog import get_api_key, get_host, get_port
-        api_keys = {self.driver.token}
-        key = get_api_key() or None
-        if key:
-            api_keys.add(key)
-        host = get_host()
-        is_loopback = host in ("127.0.0.1", "localhost", "::1")
-        port = get_port()
+        # The HTTP surface is loopback-only: the only client is the DSH bundle
+        # on this machine. Auth is the per-session token, nothing else.
+        host = "127.0.0.1"
+        port = 0
         try:
             from .http_api import start_http
             self._http, port = start_http(
-                self.driver, host=host, port=port, api_keys=api_keys,
-                allowed=_http_allowed(), allow_remote=not is_loopback)
+                self.driver, port=0, token=self.driver.token,
+                allowed=_http_allowed())
             self.driver.http_port = port
             self.driver.http_host = host
             _log(f"dsh_qgis_driver HTTP API: http://{host}:{port}/ "
-                 f"remote={'yes' if not is_loopback else 'no'} "
                  f"tools={sorted(_http_allowed()) if _http_allowed() else 'all'}")
         except Exception:
             _log("dsh_qgis_driver HTTP failed:\n"

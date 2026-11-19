@@ -24,6 +24,16 @@ Versions are kept in sync with `version` in `metadata.txt`.
   predicate behind it. Without polling, a running shard still finishes on its own — the flag stays
   advisory, because Python threads cannot be killed.
 
+### Removed
+- Everything that made the control surface reachable from another machine: the bind-address,
+  port and API-key settings (`settings_dialog.py` and its menu entry), the
+  `QGIS_LIVE_HOST` / `QGIS_LIVE_PORT` / `QGIS_LIVE_API_KEY` variables, the extra-token set and
+  the `allow_remote` bypass of the loopback Host/Origin guard. The HTTP surface now binds
+  `127.0.0.1` unconditionally and accepts exactly one credential: the per-session token in the
+  registry file. Remote access was never needed for the DSH bundle (it lives on the same
+  machine), and keeping a dormant 0.0.0.0 path is how an instance ends up exposing a
+  Python-eval endpoint to a LAN by accident.
+
 ### Changed
 - Internal consolidation (no behaviour change): `layer_org` and `scale_style` now share one
   `profile_store.ProfileStore` for the bundled+user JSON profile layout instead of two copies of

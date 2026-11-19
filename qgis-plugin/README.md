@@ -28,26 +28,12 @@ over file-JSONL and REST (`/api/*`).
 - Hot reload of managed plugins, GeoSuite shared toolbar (mode badge),
   layer_org layer-organization service, Deploy Mode switching
 
-## Remote access (cross-machine)
+## Local only
 
-By default the HTTP server binds to `127.0.0.1` (localhost only). To accept
-connections from another machine, set these environment variables before QGIS
-starts (or in the QGIS launch environment), then enable Remote Control:
-
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `QGIS_LIVE_HOST` | Bind address; `0.0.0.0` = all interfaces | `127.0.0.1` |
-| `QGIS_LIVE_PORT` | Fixed TCP port; `0` = auto-assign | `0` |
-| `QGIS_LIVE_API_KEY` | Stable **Key** for remote clients (in addition to the per-session token) | *(unset)* |
-
-A remote client connects to `http://<host>:<port>/api/*` with
-`Authorization: Bearer <QGIS_LIVE_API_KEY>` (the "port + Key" form). When
-`QGIS_LIVE_HOST` is a non-loopback address, the plugin also drops the
-localhost Host/Origin guard. The effective host/port and token are written to
-the registry file `~/.qgis-live/<pid>-dsh_qgis_driver.json`.
-
-> The per-session token (in the registry) still works for the local machine;
-> `QGIS_LIVE_API_KEY` is the stable key to share with the second machine.
+The HTTP server binds to `127.0.0.1` on a free port. There is no remote mode:
+no bind-address variable, no fixed port, and no API key to share. The only
+client is the DSH bundle on the same machine, and it reads the per-session
+token from the registry file `~/.qgis-live/<pid>-dsh_qgis_driver.json`.
 
 ## Links
 
