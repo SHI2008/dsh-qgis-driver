@@ -1,4 +1,4 @@
-# Releasing dsh-qgis-driver (AI Assisted)
+# Releasing dsh-qgis-driver
 
 Two artifacts ship from this repo. Both versions are written by
 `scripts/bump.mjs`, so that is the only place to change them:

@@ -1,4 +1,4 @@
-# Install and move (dsh-qgis-driver, AI Assisted)
+# Install and move (dsh-qgis-driver)
 
 Two ends, one machine. The QGIS plugin is the service; the DSH bundle is the
 client. There is no remote mode, no host/port setting and no shared key.

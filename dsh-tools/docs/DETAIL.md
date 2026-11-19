@@ -1,4 +1,4 @@
-# dsh-qgis-driver (AI Assisted)
+# dsh-qgis-driver
 
 Drive a running QGIS from DeepSeek Harness. The bundle finds the newest local
 `dsh_qgis_driver` instance through the plugin's registry entry and talks to it over
