@@ -18,6 +18,33 @@ What the driver pre-injects into every `execute_qgis_sync` / `submit_qgis_async`
 | `_prj_extent()` | combined extent of all layers (`None` when empty) |
 | `result` | assign it: the last expression or `result` is what the tool returns |
 
+## Reading raster pixels without guessing the dtype
+
+`QgsRasterBlock.data()` hands back raw bytes — decoding them with the wrong dtype is the
+classic way to read `3.4e38` (the float32 "no data" bit pattern). Go through GDAL, or ask
+the provider for its declared type first:
+
+```python
+rl = prj.mapLayersByName('dem')[0]
+prov = rl.dataProvider()
+blk = prov.block(1, rl.extent(), rl.width(), rl.height())
+import numpy as np
+arr = np.frombuffer(blk.data(), dtype=np.float32).reshape(blk.height(), blk.width())
+arr[arr == blk.noDataValue()] = np.nan
+result = {'dtype': str(arr.dtype), 'min': float(np.nanmin(arr)), 'max': float(np.nanmax(arr))}
+```
+
+Safer for anything bigger than a screen: let GDAL read it
+`gdal.Open(path).ReadAsArray()` (float32 by default), or run the arithmetic as a
+Processing algorithm so no array crosses the tool boundary at all.
+
+## Do not shell out to a second QGIS
+
+Writing a `.py` file and running it with the QGIS interpreter starts a **second**
+`QgsApplication`: it fights this instance over the same files, cannot see `prj`, and the
+driver never learns what happened. Everything belongs in `execute_qgis_sync` (main thread,
+short) or `submit_qgis_async tasks[]` (worker threads, pure Python).
+
 Prefer the structured tools (`qgis_layer`, `qgis_feature`, `qgis_layout`, …) — they resolve
 names, validate parameters and return JSON. Use raw PyQGIS for what they do not cover.
 

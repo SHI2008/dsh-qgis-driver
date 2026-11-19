@@ -14,17 +14,12 @@ window.__ModuleLoader__.load({
     const RED = '#f85149'
     const MUTED = '#9a9aa6'
     const TEXT = '#ececf1'
-    const SURFACE = '#141417'
     const BORDER = '#2c2c34'
     // DSH brand blue (design token --dsw-static-deepseek-450, the
     // 'primary-new-color' in the dark theme). One accent, no lavender.
     const ACCENT = '#5686fe'
     const ACCENT_BG = '#5686fe'
 
-    const btnStyle = {
-      padding: '7px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6,
-      border: 'none', background: ACCENT_BG, color: '#ffffff', cursor: 'pointer',
-    }
 
     // What the tools may do. Enforced by the bundle on every call (tools.js
     // `requiredScope`), shown here so the user can loosen or tighten it live.

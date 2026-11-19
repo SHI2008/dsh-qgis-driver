@@ -54,9 +54,11 @@ async function fails(name, fn, pattern) {
 }
 
 // ---------- transport: what the model asked for -> what the plugin receives
-await ok('pyeval endpoint carries the code', () => {
+await ok('pyeval endpoint carries the code and its budget', () => {
   assert.deepEqual(routeToCommand('/api/pyeval', { code: '1 + 1' }),
-    { type: 'pyeval', code: '1 + 1' })
+    { type: 'pyeval', code: '1 + 1', timeout: undefined })
+  assert.deepEqual(routeToCommand('/api/pyeval', { code: 'x', timeout: 120 }),
+    { type: 'pyeval', code: 'x', timeout: 120 })
 })
 await ok('write_lock endpoint keeps op/owner/ttl', () => {
   const got = routeToCommand('/api/write_lock', { op: 'acquire', owner: 'a', ttl: 120 })

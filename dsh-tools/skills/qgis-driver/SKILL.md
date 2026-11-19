@@ -73,9 +73,18 @@ round-trip, while hand-written pyeval is one round-trip per step.
    and the next call starts a fresh one (unsaved edits are lost, needs `danger`). `reload`
    cannot re-import in a headless process, so reach for `restart` only when calls keep timing
    out or the audit log shows the main thread stuck.
-11. **One main-thread call is capped at 10 s.** A runaway call is interrupted and the instance
-   stays usable; do not raise `QGIS_LIVE_EVAL_TIMEOUT` to make a slow job fit — split it into
-   `submit_qgis_async` shards instead.
+11. **One main-thread call is capped at 10 s**, except the three heavy actions
+   (`qgis_layout export` / `export_atlas`, `qgis_analysis run`), which get 120 s — a real
+   A4 export at 200 dpi does not fit in ten seconds. Anything else that overruns is
+   interrupted and the instance stays usable; split it into `submit_qgis_async` shards
+   instead of raising `QGIS_LIVE_EVAL_TIMEOUT`.
+12. **Never write a `.py` file and never start a second QGIS.** The tempting loop — dump a
+    script to temp, run it with `H:\QGIS\apps\Python312\python.exe`, read the output — creates
+    a second `QgsApplication`, fights the live instance over the same data, renders fonts
+    differently, and returns results in a shape nothing else can read. The driver *is* the
+    execution path: `execute_qgis_sync` for main-thread PyQGIS, `submit_qgis_async tasks[]`
+    for background work, `qgis_analysis run` for Processing. If a call is too slow or too big,
+    say so and split it — do not escape the driver.
 
 ## Availability
 

@@ -527,7 +527,7 @@ function tailIncludes(file, needle, maxBytes) {
 
 /** Map a REST route + JSON body onto the plugin's command object. */
 function routeToCommand(route, body) {
-  if (route === '/api/pyeval') return { type: 'pyeval', code: body?.code }
+  if (route === '/api/pyeval') return { type: 'pyeval', code: body?.code, timeout: body?.timeout }
   if (route === '/api/pyeval_async') return { type: 'pyeval_async', code: body?.code }
   if (route === '/api/pyeval_group') {
     return { type: 'pyeval_group', tasks: body?.tasks || [], max_workers: body?.max_workers }
@@ -552,14 +552,14 @@ function routeToCommand(route, body) {
  * Appends one JSON line with a fresh id, then tails the results file from a
  * stored byte offset and resolves the line whose `id` matches.
  */
-function invokeFile(cmd, signal, target) {
-  const run = () => invokeFileOnce(cmd, signal, target)
+function invokeFile(cmd, signal, target, timeoutMs) {
+  const run = () => invokeFileOnce(cmd, signal, target, timeoutMs)
   const p = fileChain.then(run, run)
   fileChain = p.catch(() => {})
   return p
 }
 
-async function invokeFileOnce(cmd, signal, target) {
+async function invokeFileOnce(cmd, signal, target, timeoutMsOverride) {
   const liveDir = target.liveDir
   if (!liveDir) throw new Error('file channel: live_dir missing in registry')
   if (target.pid && !pidAlive(target.pid)) {
@@ -601,7 +601,7 @@ async function invokeFileOnce(cmd, signal, target) {
       throw describeFailure('unreachable')
     }
   }
-  const timeoutMs = Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
+  const timeoutMs = timeoutMsOverride || Number(process.env.QGIS_LIVE_FILE_TIMEOUT_MS) || FILE_CHANNEL_TIMEOUT_MS
   const resultsSizeAtStart = (() => { try { return fs.statSync(resPath).size } catch { return 0 } })()
   const deadline = Date.now() + timeoutMs
   let lastLiveness = Date.now()
@@ -656,7 +656,7 @@ async function invokeFileOnce(cmd, signal, target) {
   }
   badLiveDirs.add(liveDir)
   const grew = (() => { try { return fs.statSync(resPath).size - resultsSizeAtStart } catch { return -1 } })()
-  throw describeFailure('timeout', { seconds: `${Math.round(timeoutMs / 1000)}s`, grew: grew > 0 })
+  throw describeFailure('timeout', { seconds: Math.round(timeoutMs / 1000), grew: grew > 0 })
 }
 
 /** Turn a Python traceback into one actionable line. */
@@ -678,7 +678,7 @@ function tidyError(input) {
   const hints = {
     KeyError: 'object not found — use the matching list action',
     IndexError: 'index out of range — check action=info',
-    NameError: 'missing parameter',
+    NameError: 'a name is undefined — typo, or a variable from an earlier call (calls do not share state)',
     AttributeError: 'API differs on QGIS 4 — see DETAIL.md',
     TypeError: 'argument type mismatch (numbers as numbers, booleans as true/false)',
     ValueError: 'invalid value — check the enum/range',
@@ -826,18 +826,18 @@ function guardExecute(def) {
 }
 
 /** Call one endpoint and unwrap { result } / { error } over the target channel. */
-async function callQgis(route, method, body, signal, target) {
+async function callQgis(route, method, body, signal, target, timeoutMs) {
   if (target && target.channel === 'file') {
     const cmd = routeToCommand(route, body)
     try {
-      return await invokeFile(cmd, signal, target)
+      return await invokeFile(cmd, signal, target, timeoutMs)
     } catch (e) {
       const code = e && e.code
       if (code !== 'TIMEOUT' && code !== 'DEAD' && code !== 'UNREACHABLE') throw e
       // The instance we picked did not answer; try the next live one once.
       let next = null
       try { next = findLocalLiveDir() } catch { next = null }
-      if (next && next.liveDir !== target.liveDir) return invokeFile(cmd, signal, next)
+      if (next && next.liveDir !== target.liveDir) return invokeFile(cmd, signal, next, timeoutMs)
       throw e
     }
   }
@@ -1179,7 +1179,11 @@ export function apply(ctx, config = {}) {
   /** Run one PyQGIS snippet synchronously (main thread) and unwrap its `result`. */
   async function runQgisSync(code, signal, opts) {
     const target = await resolveTarget(opts)
-    return callQgis('/api/pyeval', 'POST', { code }, signal, target)
+    // A heavy action may ask for a longer main-thread budget (layout export, long analysis);
+    // the file channel then has to wait a little longer than that budget, not less.
+    const budget = Number(opts && opts.budget) > 0 ? Number(opts.budget) : undefined
+    const timeoutMs = budget ? budget * 1000 + 8000 : undefined
+    return callQgis('/api/pyeval', 'POST', { code, timeout: budget }, signal, target, timeoutMs)
   }
 
   /** Run a plugin REST command via POST /api/cmd (dispatch type + args as-is). */

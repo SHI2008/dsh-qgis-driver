@@ -123,5 +123,13 @@ ok('the tool table names every tool the bundle registers', () => {
   for (const name of enumerated) assert.ok(documented.has(name), `${name} missing from the table`)
 })
 
+ok('every batch alias a body reads is declared in its schema', () => {
+  const params = (name) => specs.find((s) => s.name === name).parameters.properties
+  // Both aliases exist because the same call used to silently ignore them.
+  assert.ok('extent' in params('qgis_map'), 'qgis_map must accept extent: [xmin,ymin,xmax,ymax]')
+  assert.ok('uuid' in params('qgis_layout'), 'qgis_layout must accept uuid for update_item')
+  assert.ok('uuid' in params('qgis_layout') && /uuid/.test(params('qgis_layout').uuid.description || ''))
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

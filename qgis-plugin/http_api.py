@@ -509,7 +509,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._api_call(data)
         elif self.path == "/api/pyeval":
             self._api_call({"type": "pyeval", "code": data.get("code", ""),
-                            "plugin_id": data.get("plugin_id")})
+                            "plugin_id": data.get("plugin_id"),
+                            "timeout": data.get("timeout")})
         elif self.path == "/api/pyeval_async":
             self._api_call({"type": "pyeval_async",
                             "code": data.get("code", "")})

@@ -920,7 +920,7 @@ class LiveDriver:
         if pid and pid != __package__ and ctype not in _LOCAL_TYPES:
             return self._forward(cid, pid, cmd, reply)
         if ctype == "pyeval":
-            self._pyeval(cid, cmd.get("code", ""), reply)
+            self._pyeval(cid, cmd.get("code", ""), reply, cmd.get("timeout"))
             return
         if ctype == "pyeval_async":
             self._pyeval_async(cid, cmd.get("code", ""), reply)
@@ -1300,7 +1300,7 @@ class LiveDriver:
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
-    def _pyeval(self, cid, code, reply=None):
+    def _pyeval(self, cid, code, reply=None, timeout=None):
         """Run Python inside the QGIS process.
 
         If it compiles as an expression, eval it and return the result. For statements
@@ -1311,7 +1311,15 @@ class LiveDriver:
         """
         reply = reply or self._reply
         self._ns.pop("result", None)
+        # A caller may ask for a longer budget for one heavy call (layout export, long
+        # analysis). Clamped so a bad value can never hang the instance.
         budget = _eval_timeout()
+        try:
+            asked = float(timeout)
+        except (TypeError, ValueError):
+            asked = 0.0
+        if asked > 0:
+            budget = max(1.0, min(asked, 600.0))
 
         def _run():
             try:
@@ -1331,8 +1339,8 @@ class LiveDriver:
             reply({"id": cid, "error":
                    f"pyeval stopped: it ran longer than {budget:g}s (hard timeout) "
                    "and was interrupted, so the QGIS instance stays usable. "
-                   "Split the work into submit_qgis_async tasks[] shards; if you "
-                   "expect a longer single call, raise QGIS_LIVE_EVAL_TIMEOUT."})
+                   "Split the work into submit_qgis_async tasks[] shards, or import the "
+                   "same script and call it through execute_qgis_sync in smaller steps."})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 

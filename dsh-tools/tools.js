@@ -752,8 +752,18 @@ if kind == 'map':
     target = L(fit) if fit else (layers[0] if layers else None)
     if target is not None:
         e = target.extent()
+        if e.width() <= 0 and e.height() <= 0:
+            # A single point has a zero-area extent: pad it or the map renders blank.
+            pad = 0.01 if target.crs().isGeographic() else 100.0
+            e = QgsRectangle(e.xMinimum() - pad, e.yMinimum() - pad,
+                             e.xMaximum() + pad, e.yMaximum() + pad)
         if h is None:
             h = float(w) / (e.width() / e.height())
+        _page = lay.pageCollection().pages()[0].pageSize()
+        _maxh = _page.height() - y - 5
+        if _maxh > 5 and float(h) > _maxh:
+            w = float(w) * _maxh / float(h)
+            h = _maxh
         m.attemptResize(QgsLayoutSize(float(w), float(h), MM()))
         m.setCrs(target.crs())
     else:
@@ -762,11 +772,13 @@ if kind == 'map':
         m.attemptResize(QgsLayoutSize(float(w), float(h), MM()))
     m.setBackgroundEnabled(True)
     m.setBackgroundColor(QColor(P.get('background') or '#ffffff'))
+    if not layers:
+        layers = [l for l in prj.mapLayers().values() if l.isValid()]
     if layers:
         m.setLayers(layers)
         m.setKeepLayerSet(True)
     if target is not None:
-        m.zoomToExtent(target.extent())
+        m.zoomToExtent(e)
     m.invalidateCache()
     item = m
 elif kind == 'legend':
@@ -777,14 +789,17 @@ elif kind == 'legend':
     if base is not None:
         lg.setLinkedMap(base)
     _legend_title = P.get('title') or '图例'
-    lg.setAutoUpdateModel(False)
     lay.addLayoutItem(lg)
     lg.attemptMove(QgsLayoutPoint(x, y, MM()))
-    root = lg.model().rootGroup()
-    for ch in list(root.children()):
-        root.removeChildNode(ch)
-    for lyr in layers:
-        root.addLayer(lyr)
+    if layers:
+        # An explicit list means an explicit legend; otherwise keep the model live so the
+        # legend mirrors the project instead of coming out empty.
+        lg.setAutoUpdateModel(False)
+        root = lg.model().rootGroup()
+        for ch in list(root.children()):
+            root.removeChildNode(ch)
+        for lyr in layers:
+            root.addLayer(lyr)
     fam = P.get('family') or 'Microsoft YaHei'
     lg.setStyleFont(QgsLegendStyle.Style.Title, QFont(fam, 10))
     lg.setStyleFont(QgsLegendStyle.Style.Subgroup, QFont(fam, 8))
@@ -818,6 +833,9 @@ elif kind == 'legend':
     lg.attemptResize(QgsLayoutSize(float(w), float(h), MM()))
     item = lg
 elif kind == 'scalebar':
+    if w is not None or h is not None:
+        raise ValueError('kind=scalebar sizes itself from the linked map map_scale and '
+                         'segments/units_per_segment; width/height are not applied, so drop them')
     sb = QgsLayoutItemScaleBar(lay)
     base = first_map(lay)
     if base is not None:
@@ -964,11 +982,24 @@ if item is not None:
     rect = rect_of(item)
 else:
     rect = [x, y, float(w or sum([float(v) for v in (P.get('widths') or [])])), float(h or 0)]
-result = {'layout': lay.name(), 'kind': kind, 'rect': rect}`,
+_all = [it2 for it2 in lay.items() if isinstance(it2, QgsLayoutItem)]
+result = {'layout': lay.name(), 'kind': kind,
+          'index': _all.index(item) if item is not None and item in _all else None,
+          'uuid': item.uuid() if item is not None else None,
+          'rect': rect}`,
   update_item: `
 lay = LAYOUT(P['layout'])
 items = [it for it in lay.items() if isinstance(it, QgsLayoutItem)]
-i = int(P['index'])
+_uuid = P.get('uuid')
+if _uuid:
+    _hit = [n for n, x in enumerate(items) if x.uuid() == _uuid]
+    if not _hit:
+        raise IndexError('no item with uuid %s - call action=info for the current list' % _uuid)
+    i = _hit[0]
+else:
+    if P.get('index') is None:
+        raise ValueError('update_item needs index (from action=info) or uuid (from add_item)')
+    i = int(P['index'])
 if i < 0 or i >= len(items):
     raise IndexError('item index out of range: %d >= %d' % (i, len(items)))
 it = items[i]
@@ -1176,6 +1207,15 @@ ms.setDestinationCrs(prj.crs())
 _e = _prj_extent()
 if _e is None:
     raise RuntimeError('project has no layer extent to render')
+if None not in (P.get('xmin'), P.get('ymin'), P.get('xmax'), P.get('ymax')):
+    _e = QgsRectangle(float(P['xmin']), float(P['ymin']), float(P['xmax']), float(P['ymax']))
+    _crs = QgsCoordinateReferenceSystem(P['crs']) if P.get('crs') else prj.crs()
+    if _crs.isValid() and _crs != prj.crs():
+        _e = QgsCoordinateTransform(_crs, prj.crs(), prj).transformBoundingBox(_e)
+    if _e.width() <= 0 or _e.height() <= 0:
+        _pad = 0.01 if prj.crs().isGeographic() else 100.0
+        _e = QgsRectangle(_e.xMinimum() - _pad, _e.yMinimum() - _pad,
+                          _e.xMaximum() + _pad, _e.yMaximum() + _pad)
 ms.setExtent(_e)
 ms.setOutputSize(QSize(w, h))
 ms.setBackgroundColor(QColor('white'))
@@ -1304,7 +1344,14 @@ for k, v in (out or {}).items():
     else:
         txt = v if isinstance(v, str) else str(v)
         clean[k] = txt if len(txt) <= 120 else (txt[:100] + '...')
-result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}`,
+_unwritten = [k for k, v in (out or {}).items()
+              if isinstance(v, str) and v and not v.startswith('memory:') and not os.path.exists(v)]
+result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}
+if _unwritten:
+    result['unwritten_outputs'] = _unwritten
+    result['hint'] = ('the algorithm returned success but wrote no file for ' + ', '.join(_unwritten)
+                      + ' - pass the OUTPUT_* paths explicitly, or a memory: sink, and check action=help for '
+                      + 'required options such as EXTENT_OPT/CREATION_OPTIONS')`,
   zonal_stats: `
 rname = P.get('raster')
 rl = None
@@ -1607,6 +1654,9 @@ result = {'count': len(_parts_), 'results': _parts_}
 `;
 }
 
+/** PRELUDE + the call's parameters: every body — and execute_qgis_sync — starts from it. */
+const preludeFor = (params) => PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(params || {})));
+
 export function registerConsolidatedTools(deps) {
   const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance } = deps;
   // `scope` is a getter in the live bundle (so the pill applies without a reload)
@@ -1627,7 +1677,9 @@ export function registerConsolidatedTools(deps) {
     output: stringOutput,
     async execute(args, exec) {
       assertScope(activeScope(), 'execute_qgis_sync', '', args);
-      return asText(await run(String(args?.code ?? ''), exec?.signal));
+      // The docs promise `prj`, `P` and `_prj_extent()`; without the prelude this call
+      // used to fail with `NameError: prj` and push the agent into writing its own .py.
+      return asText(await run(preludeFor({}) + String(args?.code ?? ''), exec?.signal));
     },
   });
 
@@ -1646,6 +1698,15 @@ export function registerConsolidatedTools(deps) {
     output: stringOutput,
     async execute(args, exec) {
       assertScope(activeScope(), 'submit_qgis_async', '', args);
+      const shardSource = [args?.code]
+        .concat(Array.isArray(args?.tasks) ? args.tasks.map((t) => (t && t.code) || '') : [])
+        .filter((c) => typeof c === 'string').join('\n');
+      if (/initQgis\s*\(|QgsApplication\s*\(/.test(shardSource)) {
+        throw new Error('submit_qgis_async runs worker threads inside the live instance: '
+          + 'initQgis()/QgsApplication() there kills the instance and every later call fails with "no QGIS". '
+          + 'QGIS objects belong on the main thread - use execute_qgis_sync or a structured qgis_* tool. '
+          + 'Do not write a .py file and start a second QGIS either: this driver is the only supported path.');
+      }
       const target = await deps.resolve();
       const group = Array.isArray(args?.tasks)
         ? args.tasks.filter((t) => t && typeof t.code === 'string' && t.code.trim())
@@ -1738,22 +1799,40 @@ export function registerConsolidatedTools(deps) {
     }
   }
 
+  // Exporting a real layout at 200+ dpi legitimately takes longer than the 10 s main-thread
+  // default; without a bigger budget the agent escapes to a hand-written .py and a second
+  // QGIS process, which is exactly what we do not want.
+  const HEAVY_ACTIONS = new Set(['qgis_layout:export', 'qgis_layout:export_atlas', 'qgis_analysis:run']);
   const call = async (body, args, exec, opts, tool) => {
     // args may be frozen — work on a shallow copy.
     const a = args ? { ...args } : {};
     // `layout` and `layout_name` are used interchangeably by different bodies.
     if (a.layout === undefined && a.layout_name !== undefined) a.layout = a.layout_name;
     if (a.layout_name === undefined && a.layout !== undefined) a.layout_name = a.layout;
+    // `extent: [xmin, ymin, xmax, ymax]` is the same box as the four numbers.
+    if (Array.isArray(a.extent) && a.extent.length === 4 && a.xmin === undefined) {
+      [a.xmin, a.ymin, a.xmax, a.ymax] = a.extent.map(Number);
+    }
+    // One layout + several formats is a batch too — otherwise the second format is
+    // silently dropped (the single-layout body only reads `format`).
+    if (tool === 'qgis_layout' && a.action === 'export' && !a.layouts && a.layout
+      && Array.isArray(a.formats) && a.formats.length > 1) {
+      a.layouts = [a.layout];
+      delete a.layout;
+      delete a.layout_name;
+    }
     if (tool) checkRequired(tool, String(a.action ?? ''), a);
     const scopeChecked = String(a.action ?? '');
     assertScope(activeScope(), tool, scopeChecked, a);
-    const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;    const items = spec ? batchItems(a, spec) : null;
+    const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;
+    const items = spec ? batchItems(a, spec) : null;
     const payload = items ? batchBody(body, spec) : body;
     if (items) a[spec.key] = items;
-    const code = PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(a))) + payload;
+    const code = preludeFor(a) + payload;
     const action = String(a.action ?? '');
+    const budget = HEAVY_ACTIONS.has(tool + ':' + action) ? 120 : undefined;
     return withWriteLock(tool, action, a, exec,
-      async () => asText(await run(code, exec?.signal, opts)));
+      async () => asText(await run(code, exec?.signal, budget ? { ...(opts || {}), budget } : opts)));
   };
 
   // ---------------- project
@@ -1869,7 +1948,8 @@ export function registerConsolidatedTools(deps) {
         layout_name: { type: 'string' },
         page_width: { type: 'number' },
         page_height: { type: 'number' },
-        index: { type: 'integer', description: 'update_item: item index from action=info' },
+        index: { type: 'integer', description: 'update_item: item index from action=info (add_item returns it)' },
+        uuid: { type: 'string', description: 'update_item: item uuid from add_item or info — alternative to index' },
         remove: { type: 'boolean' },
         kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add_item: batch of item arg objects (one round-trip)' },
@@ -1959,6 +2039,7 @@ export function registerConsolidatedTools(deps) {
         width: { type: 'integer' },
         height: { type: 'integer' },
         target: { type: 'string', enum: ['canvas', 'mainwindow'] },
+        extent: { type: 'array', items: { type: 'number' }, description: '[xmin,ymin,xmax,ymax] — same as the four numbers below, in `crs`' },
         xmin: { type: 'number' }, ymin: { type: 'number' },
         xmax: { type: 'number' }, ymax: { type: 'number' },
         crs: { type: 'string' },
