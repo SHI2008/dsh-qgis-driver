@@ -1,4 +1,4 @@
-# dsh-qgis-driver (`dsh_qgis_driver`)
+# dsh-qgis-driver (`dsh_qgis_driver`) — AI Assisted
 
 > **Attribution.** 本插件的 QGIS 侧（`qgis-plugin/dsh_qgis_driver`）基于原作者
 > [yamamoto-ryuzo](https://github.com/yamamoto-ryuzo) 的

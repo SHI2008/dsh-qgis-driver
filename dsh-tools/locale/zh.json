@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "dsh-qgis-driver 工具",
-    "description": "从 DeepSeek Harness 驱动本机正在运行的 QGIS（dsh_qgis_driver 插件）：在 QGIS 主线程执行代码、提交后台任务并轮询结果；通过插件注册表自动发现实例，无需配置地址或密钥。可在设置中开启输入框下方的 QGIS 连接状态挂件（默认关闭）。",
+    "title": "dsh-qgis-driver（AI Assisted）",
+    "description": "从 DeepSeek Harness 驱动本机正在运行的 QGIS（dsh_qgis_driver 插件）：在主线程执行代码、提交后台任务并轮询结果；实例通过插件注册表自动发现，无需地址或密钥。默认输入框右侧显示连接状态与权限开关，设置里可关闭挂件。\n\nEN: Drive the QGIS running on this machine from DeepSeek Harness - execute code on the QGIS main thread, submit background tasks, poll results, no address or key to configure. AI Assisted.",
     "detail": "docs/DETAIL.md"
   }
 }

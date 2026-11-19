@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "dsh-qgis-driver",
-    "description": "Drive the QGIS running on this machine (dsh_qgis_driver plugin) from DeepSeek Harness: execute code on the QGIS main thread, submit background tasks, and poll results. Instances are discovered through the plugin registry - no address or key to configure. A QGIS connection-status widget below the composer can be enabled in Settings (off by default).",
+    "title": "dsh-qgis-driver (AI Assisted)",
+    "description": "Drive the QGIS running on this machine (dsh_qgis_driver plugin) from DeepSeek Harness: execute code on the QGIS main thread, submit background tasks and poll results. Instances are discovered through the plugin registry - no address or key to configure. The connection badge and the permission switch sit to the right of the composer; the badge can be hidden in Settings.\n\n中文：从 DeepSeek Harness 驱动本机正在运行的 QGIS——在主线程执行代码、提交后台任务并轮询结果，无需配置地址或密钥。AI 辅助。",
     "detail": "docs/DETAIL.md"
   }
 }

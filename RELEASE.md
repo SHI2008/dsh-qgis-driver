@@ -1,11 +1,11 @@
-# Releasing
+# Releasing dsh-qgis-driver (AI Assisted)
 
 Two artifacts ship from this repo. Both versions are written by
 `scripts/bump.mjs`, so that is the only place to change them:
 
 ```bash
-node scripts/bump.mjs 0.1.56-rc 0.18.0   # bundle version, plugin version
-node scripts/pack.mjs                    # writes dist/
+ELECTRON_RUN_AS_NODE=1 "/d/shichencai/HARNESS/DeepSeek Harness.exe" scripts/bump.mjs 0.1.59-rc 0.18.2
+ELECTRON_RUN_AS_NODE=1 "/d/shichencai/HARNESS/DeepSeek Harness.exe" scripts/pack.mjs   # writes dist/
 ```
 
 `node` is not on PATH in the DSH sandbox; use the harness binary:
