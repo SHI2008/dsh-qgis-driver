@@ -21,7 +21,7 @@
 import os from 'node:os'
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import z from 'schemastery'
 import { registerConsolidatedTools } from './tools.js'
@@ -29,11 +29,27 @@ import { registerConsolidatedTools } from './tools.js'
 export const name = 'dsh-qgis-driver'
 export const inject = ['tools']
 
+/** Permission scope names, widest last. `read` never touches the project or the disk. */
+export const SCOPE_NAMES = ['read', 'write', 'danger']
+
 /** Settings rendered as a form in DSH Settings (connection is always local). */
 export const Config = z.object({
   dock: z.boolean().default(false),
   headless: z.boolean().default(true),
+  // schemastery has no enum(); the value is validated by effectiveScope().
+  scope: z.string().default('write'),
 })
+
+/**
+ * The scope the tools actually run under: QGIS_LIVE_SCOPE (tests/CI) wins over the
+ * stored setting. The user flips the setting from the composer or from Settings.
+ */
+export function effectiveScope(config) {
+  const env = String(process.env.QGIS_LIVE_SCOPE || '').trim().toLowerCase()
+  if (SCOPE_NAMES.includes(env)) return env
+  const stored = config && config.scope
+  return SCOPE_NAMES.includes(stored) ? stored : 'write'
+}
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
 
@@ -124,8 +140,60 @@ function findLocalLiveDir(startedAt = 0, requireGui = false) {
   return null
 }
 
-/** Find a live QGIS instance reachable over HTTP (fallback path). */
-async function findActiveQgis(startedAt = 0, requireGui = false) {
+/**
+ * Stop the registered instance and delete its registry file. The next tool call
+ * autostarts a fresh process. This is the escape hatch for a wedged main thread:
+ * a Python thread cannot be killed from inside, but the process can be ended.
+ */
+function restartInstance() {
+  const local = findLocalLiveDir(0, false)
+  let pid = local && local.pid
+  let gui = !!(local && local.gui)
+  let regPath = ''
+  for (const { p } of registryCandidates(0)) {
+    let reg
+    try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
+    if (pid ? reg.pid === pid : !!reg.pid) {
+      pid = reg.pid
+      regPath = p
+      gui = reg.gui === true
+      break
+    }
+  }
+  if (!pid) {
+    throw new Error('restart: no QGIS instance is registered, so there is nothing to stop — the next tool call starts one.')
+  }
+  let stopped = false
+  let note = ''
+  if (process.platform === 'win32') {
+    try {
+      const r = spawnSync('taskkill', ['/PID', String(pid), '/F'], { windowsHide: true, encoding: 'utf8' })
+      stopped = r.status === 0
+      if (!stopped) note = String(`${r.stderr || r.stdout || ''}`.trim()).slice(0, 200)
+    } catch (e) {
+      note = e && e.message ? e.message : String(e)
+    }
+  } else {
+    try {
+      process.kill(pid, 'SIGKILL')
+      stopped = true
+    } catch (e) {
+      note = e && e.message ? e.message : String(e)
+    }
+  }
+  if (regPath) {
+    try { fs.unlinkSync(regPath) } catch { /* the PID check skips it anyway */ }
+  }
+  return {
+    pid,
+    stopped,
+    gui,
+    note: note || undefined,
+    next: 'the next tool call starts a fresh instance (a few seconds); unsaved project edits are lost',
+  }
+}
+
+/** Find a live QGIS instance reachable over HTTP (fallback path). */async function findActiveQgis(startedAt = 0, requireGui = false) {
   for (const { p } of registryCandidates(startedAt)) {
     let reg
     try { reg = JSON.parse(fs.readFileSync(p, 'utf8')) } catch { continue }
@@ -178,6 +246,9 @@ function findQgisRoot() {
     const p = process.env.QGIS_PREFIX_PATH.replace(/[\\/]+$/, '')
     cands.push(path.dirname(path.dirname(p)))
   }
+  // The bundle only knows the Windows layout (apps/Python312/python.exe …). Elsewhere
+  // we discover a running instance instead of guessing install paths.
+  if (process.platform !== 'win32') return cands.find((r) => r && fs.existsSync(r)) || null
   cands.push('H:\\QGIS')
   for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'C:\\Program Files (x86)']) {
     if (!base) continue
@@ -296,6 +367,12 @@ function autostartLogPath(tag) {
 function launchBuiltin(mode) {
   const root = findQgisRoot()
   if (!root) {
+    if (process.platform !== 'win32') {
+      throw new Error(
+        'QGIS not found: the built-in launcher is Windows-only. Start QGIS on this machine with the ' +
+        'dsh_qgis_driver plugin enabled — the driver finds it through ~/.qgis-live — or set ' +
+        'QGIS_LIVE_AUTOSTART_CMD to your own launch command.')
+    }
     throw new Error('QGIS not found: set QGIS_ROOT (or install under H:\\QGIS / Program Files)')
   }
   const env = qgisEnv(root)
@@ -1051,6 +1128,8 @@ export const internals = {
   asText,
   parseSkillFrontmatter,
   loadBundledSkills,
+  effectiveScope,
+  restartInstance,
 }
 
 export function apply(ctx, config = {}) {
@@ -1097,6 +1176,7 @@ export function apply(ctx, config = {}) {
     const status = {
       dock: !!config?.dock,
       reveal: toolUsed,
+      scope: effectiveScope(config),
       connected: false,
       channel: null,
       target: null,
@@ -1170,6 +1250,8 @@ export function apply(ctx, config = {}) {
           const current = {
             dock: !!config?.dock,
             headless: config?.headless !== false,
+            scope: effectiveScope(config),
+            scopes: SCOPE_NAMES,
           }
           if (request.method !== 'POST') {
             return new Response(JSON.stringify(current), {
@@ -1187,8 +1269,19 @@ export function apply(ctx, config = {}) {
           try { body = await request.json() } catch { /* keep defaults */ }
           const dock = (typeof body.dock === 'boolean') ? body.dock : current.dock
           const headless = (typeof body.headless === 'boolean') ? body.headless : current.headless
+          let scope = current.scope
+          if (typeof body.scope === 'string') {
+            const wanted = body.scope.trim().toLowerCase()
+            if (!SCOPE_NAMES.includes(wanted)) {
+              return new Response(JSON.stringify({ ok: false, error: `unknown scope "${body.scope}" (${SCOPE_NAMES.join('|')})` }), {
+                status: 400,
+                headers: { 'content-type': 'application/json' },
+              })
+            }
+            scope = wanted
+          }
           try {
-            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless }))
+            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless, scope }))
             return new Response(JSON.stringify({ ok: true }), {
               status: 200,
               headers: { 'content-type': 'application/json' },
@@ -1267,6 +1360,8 @@ export function apply(ctx, config = {}) {
     runCmd: (type, args, signal) => runQgisCmd(type, args || {}, signal),
     callRaw: callQgis,
     resolve: resolveTarget,
+    restartInstance,
+    scope: effectiveScope(config),
     stringOutput,
     asText,
   })

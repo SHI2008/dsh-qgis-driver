@@ -72,6 +72,18 @@ Repeated operations run in a single `pyeval`: pass an array, get `{count, result
 The single-object form (`kind` / `layer` / `field` / `algorithm`) is unchanged; array and
 single form are mutually exclusive per call.
 
+When an array is present it carries the per-item argument, so the top-level one is no
+longer required: `runs` supplies `algorithm`, `items` supplies `kind`, `updates` supplies
+`index`. Everything else (`path` for `export`, `layout_name` for `add_item`) stays required
+— the array does not replace it.
+
+Each item is executed by a generated function, `def _one_(): … _parts_.append(_one_())`,
+not by inlining the body into the loop. Inlining looked fine in the generated source but
+put the body under whatever `if` came last, which is how `qgis_layer export layers=[…]`
+ended up raising `NameError: name 'result' is not defined` while the single-layer form
+kept working. `tests/batch.mjs` now renders every batch action and parses the result with a
+real interpreter, so the shape cannot regress silently.
+
 ### Parallel shards (`tasks[]`)
 
 `submit_qgis_async` also takes `tasks: [{name, code}]` plus `max_workers` (default 4, cap 32).
@@ -240,10 +252,53 @@ config toggle off; point at a non-standard install with `QGIS_ROOT`.
 
 ## Security
 
-- **Local mode** authenticates with the per-session bearer token from the registry file.
-- **Remote mode** authenticates with the stable `QGIS_LIVE_API_KEY` you configure.
-  Use a strong key, keep it private, and prefer a trusted network (or a tunnel),
-  because `pyeval` executes arbitrary Python inside QGIS.
+- One connection mode: the newest local instance, authenticated with the per-session
+  bearer token from its registry file. The token is readable only by this user
+  (`~/.qgis-live`), and the HTTP port listens on `127.0.0.1`.
+- `pyeval` executes arbitrary Python inside QGIS, and `execute_qgis_sync` /
+  `submit_qgis_async` expose it. That is why both sit behind the `danger` scope (see
+  below) instead of running by default: the guard rail is about blast radius, not
+  about containing a hostile model — a same-user process can always drive QGIS itself.
+- Anything the agent writes lands on this machine where the user points it: exports,
+  saved projects, temp PNG previews under the OS temp dir.
+
+## Permission scope (read / write / danger)
+
+The user picks the scope in the composer pill (`权限 只读 / 编辑 / 完全`) or in Settings;
+`QGIS_LIVE_SCOPE` overrides both for tests. The bundle enforces it on every call, in
+`tools.js` `requiredScope()`, so the refusal happens before QGIS is touched:
+
+| scope | allows | blocks |
+| --- | --- | --- |
+| `read` | list / info / fields / query / select / render / screenshot / status / log / lock status / instruction read | everything that changes the project or the disk, and all Python |
+| `write` (default) | the above **plus** layer+layout+style edits, feature add/update, field ops, analysis runs, exports, project save, lock acquire/release | delete, project open/save_as, plugin open/reload/bridge/restart, instruction save/delete, raw PyQGIS |
+| `danger` | everything, including the escape hatches above | — |
+
+A refusal names the call, the current scope and how to lift it:
+
+```
+qgis_layer remove is blocked: that action can destroy data or run arbitrary Python,
+and the current permission scope is "write". The user can switch to "danger" in the
+composer scope selector (or in Settings). Reads, renders and the audit log are never blocked.
+```
+
+Two details worth knowing:
+
+- `export` counts as a write, because it takes a path and writes a file. In `read`
+  scope you still get a rendered PNG in the temp dir (`qgis_map action=render`), which
+  is enough to *look* at a map without touching the project.
+- `qgis_plugin action=instruction op=save|delete` is `danger`: it rewrites the driver's
+  own instructions, which no agent should do without the user asking for it.
+
+## Restarting a wedged instance
+
+`qgis_plugin action=restart` (needs `danger`) is the only way out of a main thread that
+the 10 s watchdog could not interrupt — a C-level blocking call, for example. It kills
+the registered PID, deletes the registry file, and the next tool call autostarts a fresh
+process. Unsaved project edits are lost; the reply says so.
+
+`reload` is not a substitute: in a headless process `qgis.utils.plugins` is empty, so it
+reports `{"loaded": false}`. Restart the process instead.
 
 ## One writer at a time (instance write lease)
 
@@ -291,15 +346,19 @@ the exception at the next bytecode — so it stops when that call returns.
 ## Regression suite
 
 `dsh-tools/tests/` holds the checks that would have caught the regressions this
-session fixed. Both are plain scripts: no framework, exit code 1 on failure.
+session fixed. All are plain scripts: no framework, exit code 1 on failure.
 
 | Script | Covers | Needs QGIS |
 | --- | --- | --- |
-| `tests/pure.mjs` | endpoint mapping, guards, required-parameter table, batching, lease table, error text, skill frontmatter | no |
-| `tests/live.mjs` | lease acquire/refuse/release, runaway-loop interruption, instance survival, group submit + cancel | yes (skips when no instance) |
+| `tests/pure.mjs` | endpoint mapping, guards, required-parameter table, batching rules, lease table, error text, permission scope, skill frontmatter | no |
+| `tests/docdrift.mjs` | the SKILL.md action table vs the registered schema enums, and the scope tables vs real actions | no |
+| `tests/batch.mjs` | every batch action renders a shim that a real Python interpreter parses | no (skips the parse without one) |
+| `tests/live.mjs` | lease acquire/refuse/release, runaway-loop interruption, instance survival, group submit + cancel, audit log, counters | yes (skips when no instance) |
 
 ```
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/pure.mjs
+ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/docdrift.mjs
+ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/batch.mjs
 ELECTRON_RUN_AS_NODE=1 "…/DeepSeek Harness.exe" dsh-tools/tests/live.mjs
 ```
 
@@ -364,6 +423,20 @@ Two artifacts, two rules, one script:
 `node scripts/bump.mjs <bundleVersion> [pluginVersion]` writes the bundle
 version, the plugin version and the installed profile copy in one go, and
 `tests/pure.mjs` asserts both parse as semver.
+
+## Verified matrix
+
+What has actually been run, as opposed to what might work:
+
+| platform | QGIS | how it runs | status |
+| --- | --- | --- | --- |
+| Windows 10/11 | 4.2.3 | autostart headless (`apps/Python312/python.exe`) or a GUI window | tested, is the development target |
+| Windows 10/11 | 3.44 LTR | same launcher, plugin code | not tested |
+| Linux / macOS | any | plugin running inside QGIS (discovery through `~/.qgis-live`), or `QGIS_LIVE_AUTOSTART_CMD` | not tested; the built-in launcher is Windows-only and says so instead of guessing paths |
+
+`findQgisRoot()` only walks the Windows layout (`H:\QGIS`, `%ProgramFiles%\QGIS*`,
+`apps/Python312/python.exe`). Elsewhere, start QGIS yourself with the plugin enabled and
+the driver finds it; the error text says exactly that.
 
 ## Status badge visibility
 

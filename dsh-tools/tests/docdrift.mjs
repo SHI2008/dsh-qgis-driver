@@ -10,7 +10,10 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
-import { registerConsolidatedTools, REQUIRED_ARGS, MUTATING } from '../tools.js'
+import {
+  registerConsolidatedTools, REQUIRED_ARGS, MUTATING,
+  READ_ONLY_ACTIONS, WRITE_ACTIONS, DANGER_ACTIONS,
+} from '../tools.js'
 
 const skillPath = new URL('../skills/qgis-driver/SKILL.md', import.meta.url)
 const skill = fs.readFileSync(skillPath, 'utf8')
@@ -94,6 +97,22 @@ ok('every write-lease entry names a real action', () => {
     for (const entry of entries) {
       const action = typeof entry === 'string' ? entry : entry.action
       assert.ok(actions.includes(action), `MUTATING mentions unknown action ${tool} ${action}`)
+    }
+  }
+})
+
+ok('every permission-scope entry names a real action', () => {
+  const byTool = new Map(specs.map((s) => [s.name, actionsOf(s)]))
+  for (const set of [READ_ONLY_ACTIONS, WRITE_ACTIONS, DANGER_ACTIONS]) {
+    for (const key of set) {
+      const [tool, action] = key.split(':')
+      if (action === '*') {
+        assert.ok(byTool.has(tool), `scope table mentions unknown tool ${tool}`)
+        continue
+      }
+      const actions = byTool.get(tool)
+      assert.ok(actions, `scope table mentions unknown tool ${tool}`)
+      assert.ok(actions.includes(action), `scope table mentions unknown action ${key}`)
     }
   }
 })

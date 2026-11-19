@@ -18,7 +18,7 @@ round-trip, while hand-written pyeval is one round-trip per step.
 | `qgis_layout` | list / create / info / add_item / update_item / legend_edit / align / export / export_atlas |
 | `qgis_analysis` | list / help / run / zonal_stats / reclassify |
 | `qgis_map` | render / screenshot / set_extent / zoom_to_layer |
-| `qgis_plugin` | status / describe / open / reload / bridge / instruction / lock / log |
+| `qgis_plugin` | status / describe / open / reload / bridge / instruction / lock / log / restart |
 | `execute_qgis_sync` / `submit_qgis_async` / `check_qgis_task` | escape hatch for anything not covered; `submit_qgis_async` takes `tasks=[{name,code}] + max_workers` for a bounded worker pool, `check_qgis_task` takes `task_ids=[]` for a whole group (add `cancel=true` to stop it) |
 
 ## Rules
@@ -61,7 +61,17 @@ round-trip, while hand-written pyeval is one round-trip per step.
    each other; reads and exports never wait. If a call answers `another agent ("x") has been
    writing…`, wait and retry instead of working around it. `qgis_plugin action=lock op=status`
    shows the holder.
-9. **One main-thread call is capped at 10 s.** A runaway call is interrupted and the instance
+9. **Your permission scope can be narrower than you think.** The bundle refuses calls the
+   current scope does not allow, with one line saying which scope is active and that the user
+   can widen it in the composer selector (只读 / 编辑 / 完全). `read` = look and render only
+   (no project change, no file written, no Python); `write` (default) = edit, export, analyse;
+   `danger` = also delete, open/save arbitrary projects, and raw PyQGIS. If you are blocked,
+   do not hunt for a workaround — tell the user what you need and why.
+10. **A wedged instance has one escape hatch.** `qgis_plugin action=restart` kills the process
+   and the next call starts a fresh one (unsaved edits are lost, needs `danger`). `reload`
+   cannot re-import in a headless process, so reach for `restart` only when calls keep timing
+   out or the audit log shows the main thread stuck.
+11. **One main-thread call is capped at 10 s.** A runaway call is interrupted and the instance
    stays usable; do not raise `QGIS_LIVE_EVAL_TIMEOUT` to make a slow job fit — split it into
    `submit_qgis_async` shards instead.
 

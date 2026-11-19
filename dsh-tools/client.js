@@ -24,6 +24,17 @@ window.__ModuleLoader__.load({
       border: 'none', background: ACCENT_BG, color: '#08080a', cursor: 'pointer',
     }
 
+    // What the tools may do. Enforced by the bundle on every call (tools.js
+    // `requiredScope`), shown here so the user can loosen or tighten it live.
+    const SCOPE_META = [
+      { id: 'read', label: '只读', color: GREEN,
+        hint: '查询、渲染、看日志；不改项目、不写文件、不跑 Python。' },
+      { id: 'write', label: '编辑', color: ACCENT,
+        hint: '默认：改图层/布局/样式、导出、跑分析；不删除、不执行裸 PyQGIS。' },
+      { id: 'danger', label: '完全', color: RED,
+        hint: '还包括删除、打开/另存任意项目与裸 PyQGIS。只在你信任当前任务时使用。' },
+    ]
+
     function StatusWidget() {
       const [status, setStatus] = React.useState(null)
       const [open, setOpen] = React.useState(false)
@@ -173,8 +184,122 @@ window.__ModuleLoader__.load({
       }))
     }
 
+    function ScopePill() {
+      const [scope, setScope] = React.useState(null)
+      const [open, setOpen] = React.useState(false)
+      const [busy, setBusy] = React.useState(false)
+      const [err, setErr] = React.useState(null)
+      const wrapRef = React.useRef(null)
+
+      React.useEffect(() => {
+        let alive = true
+        let timer = null
+        async function load() {
+          try {
+            const r = await fetch('/api/dsh-qgis-driver/config')
+            if (r.ok) {
+              const c = await r.json()
+              if (alive && typeof c.scope === 'string') setScope(c.scope)
+            }
+          } catch (e) { /* the connection badge reports failures */ }
+          if (alive) timer = setTimeout(load, 6000)
+        }
+        load()
+        return () => { alive = false; if (timer) clearTimeout(timer) }
+      }, [])
+
+      React.useEffect(() => {
+        if (!open) return
+        function onDown(ev) {
+          const el = wrapRef.current
+          if (el && ev.target instanceof Node && el.contains(ev.target)) return
+          setOpen(false)
+        }
+        function onKey(ev) { if (ev.key === 'Escape') setOpen(false) }
+        document.addEventListener('pointerdown', onDown, true)
+        document.addEventListener('keydown', onKey, true)
+        return () => {
+          document.removeEventListener('pointerdown', onDown, true)
+          document.removeEventListener('keydown', onKey, true)
+        }
+      }, [open])
+
+      async function pick(id) {
+        setOpen(false)
+        if (id === scope) return
+        setBusy(true); setErr(null)
+        try {
+          const r = await fetch('/api/dsh-qgis-driver/config', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ scope: id }),
+          })
+          const b = await r.json().catch(() => ({}))
+          if (r.ok && b.ok !== false) setScope(id)
+          else setErr(b && b.error ? b.error : ('HTTP ' + r.status))
+        } catch (e) {
+          setErr(e && e.message ? e.message : String(e))
+        } finally {
+          setTimeout(() => setBusy(false), 800)
+        }
+      }
+
+      if (!scope) return null
+      const meta = SCOPE_META.find((s) => s.id === scope) || SCOPE_META[1]
+
+      return h('div', {
+        ref: wrapRef,
+        style: {
+          position: 'relative', display: 'inline-flex', alignItems: 'center',
+          flex: '0 0 auto', minWidth: 0, alignSelf: 'center', marginRight: 8,
+        },
+      },
+        h('button', {
+          type: 'button',
+          onClick: () => setOpen((v) => !v),
+          title: '工具权限：' + meta.label + ' — ' + meta.hint,
+          style: {
+            display: 'inline-flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap',
+            background: 'transparent', border: '1px solid ' + BORDER, borderRadius: 999,
+            padding: '0 6px', color: meta.color, fontSize: 11, fontWeight: 600,
+            lineHeight: '16px', cursor: 'pointer', userSelect: 'none', flex: '0 0 auto',
+            opacity: busy ? 0.6 : 1,
+          },
+        }, '权限 ' + (busy ? '…' : meta.label)),
+        open
+          ? h('div', {
+              style: {
+                position: 'absolute', bottom: '100%', right: 0, zIndex: 21,
+                marginBottom: 6, width: 264, boxSizing: 'border-box',
+                padding: '8px', borderRadius: 8,
+                background: '#16161b', border: '1px solid ' + BORDER,
+                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+                textAlign: 'left', whiteSpace: 'normal', fontSize: 11.5, lineHeight: '17px',
+              },
+            },
+              SCOPE_META.map((s) => h('button', {
+                key: s.id,
+                type: 'button',
+                onClick: () => pick(s.id),
+                style: {
+                  display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
+                  background: s.id === scope ? '#1d1d24' : 'transparent',
+                  border: 'none', borderRadius: 6, padding: '6px 8px', marginBottom: 2,
+                  color: TEXT, font: 'inherit',
+                },
+              },
+                h('span', { style: { color: s.color, fontWeight: 700, marginRight: 6 } }, s.label),
+                h('span', { style: { color: MUTED } }, s.hint))),
+              h('div', { style: { color: '#6f6f7a', marginTop: 4, fontSize: 10.5 } },
+                '切换会重载工具，进行中的工具调用可能需要重试。'),
+              err ? h('div', { style: { color: RED, marginTop: 4, fontSize: 10.5 } }, err) : null,
+            )
+          : null,
+      )
+    }
+
     function SettingsPanel(props) {
-      const [form, setForm] = React.useState({ dock: false, headless: true })
+      const [form, setForm] = React.useState({ dock: false, headless: true, scope: 'write' })
       const [loaded, setLoaded] = React.useState(false)
       const [saving, setSaving] = React.useState(false)
       const [msg, setMsg] = React.useState(null)
@@ -191,6 +316,7 @@ window.__ModuleLoader__.load({
               setForm({
                 dock: !!c?.dock,
                 headless: c?.headless !== false,
+                scope: typeof c?.scope === 'string' ? c.scope : 'write',
               })
               setLoaded(true)
             }
@@ -211,6 +337,7 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({
               dock: !!form.dock,
               headless: !!form.headless,
+              scope: form.scope,
             }),
           })
           const b = await r.json().catch(() => ({}))
@@ -238,6 +365,26 @@ window.__ModuleLoader__.load({
             h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
               '自动拉起 QGIS 时不显示窗口；只有需要地图画布的工具（平移/缩放/截图）才启动 GUI。关闭则总是启动 GUI。')),
           Switch({ checked: !!form.headless, onChange: (v) => setForm((f) => ({ ...f, headless: v })) })),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
+          h('span', { style: { fontSize: 13 } }, '工具权限范围'),
+          h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
+            '默认“编辑”。输入框右侧的权限按钮可以随时切换，这里设置的是默认值。'),
+          h('div', { style: { display: 'flex', gap: 6, marginTop: 2 } },
+            SCOPE_META.map((s) => h('button', {
+              key: s.id,
+              type: 'button',
+              onClick: () => setForm((f) => ({ ...f, scope: s.id })),
+              style: {
+                flex: '1 1 0', padding: '6px 8px', borderRadius: 6, cursor: 'pointer',
+                fontSize: 12, fontWeight: 600,
+                border: '1px solid ' + (form.scope === s.id ? s.color : BORDER),
+                background: form.scope === s.id ? '#1d1d24' : 'transparent',
+                color: form.scope === s.id ? s.color : MUTED,
+              },
+            }, s.label)),
+          ),
+          h('span', { style: { fontSize: 10.5, color: '#6f6f7a', lineHeight: 1.45 } },
+            '只读：不写项目、不写文件、不跑 Python。编辑：改图层/布局/样式、导出、跑分析。完全：还能删除、打开或另存任意项目、执行裸 PyQGIS。')),
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
           h('button', { onClick: save, disabled: saving, style: { ...btnStyle, opacity: saving ? 0.6 : 1 } },
             saving ? '保存中…' : '保存'),
@@ -257,6 +404,14 @@ window.__ModuleLoader__.load({
           ),
         )
         if (typeof offDock === 'function') disposers.push(offDock)
+
+        const offScope = ctx.slots.inject('conversation.input.right', () =>
+          ctx.slots.register(
+            { name: 'conversation.input.right', id: 'dsh-qgis-driver-scope', order: 89 },
+            ScopePill,
+          ),
+        )
+        if (typeof offScope === 'function') disposers.push(offScope)
 
         const offSettings = ctx.slots.inject('settings.section', () =>
           ctx.slots.register(

@@ -1386,6 +1386,91 @@ export function isMutating(tool, action, args) {
     : entry.action === action && (!entry.when || entry.when(args))))
 }
 
+// ---- Permission scope -------------------------------------------------------
+// read   looks and renders, never writes: no project change, no file written,
+//        no Python. Export takes a path, so it counts as a write.
+// write  the default: edit the project, export, run algorithms. Destructive and
+//        out-of-project actions stay out of reach.
+// danger everything, including delete, opening/saving arbitrary projects,
+//        plugin instructions, and raw PyQGIS.
+export const SCOPES = ['read', 'write', 'danger']
+
+export const READ_ONLY_ACTIONS = new Set([
+  'qgis_project:info',
+  'qgis_layer:list', 'qgis_layer:info', 'qgis_layer:fields',
+  'qgis_feature:query', 'qgis_feature:select', 'qgis_feature:select_by_location',
+  'qgis_feature:selected', 'qgis_feature:table',
+  'qgis_layout:list', 'qgis_layout:info',
+  'qgis_analysis:list', 'qgis_analysis:help',
+  'qgis_map:render', 'qgis_map:set_extent', 'qgis_map:zoom_to_layer', 'qgis_map:screenshot',
+  'qgis_plugin:status', 'qgis_plugin:describe', 'qgis_plugin:log',
+  'qgis_plugin:lock',
+])
+
+/** Actions that need the widest scope: destructive, out-of-project, or raw code. */
+export const DANGER_ACTIONS = new Set([
+  'qgis_project:open', 'qgis_project:save_as',
+  'qgis_layer:remove',
+  'qgis_feature:delete', 'qgis_feature:field_delete',
+  'qgis_plugin:open', 'qgis_plugin:reload', 'qgis_plugin:bridge', 'qgis_plugin:restart',
+  'execute_qgis_sync:*', 'submit_qgis_async:*',
+])
+
+/** Actions that write files but do not damage the project. */
+export const WRITE_ACTIONS = new Set([
+  'qgis_layer:export', 'qgis_layer:export_table',
+  'qgis_layout:export', 'qgis_layout:export_atlas',
+])
+
+/** What the given call needs: 'read' | 'write' | 'danger'. */
+export function requiredScope(tool, action, args) {
+  const key = `${tool}:${action}`
+  if (DANGER_ACTIONS.has(key) || DANGER_ACTIONS.has(`${tool}:*`)) return 'danger'
+  // Reading the bundled docs is a read; writing them edits the driver's own
+  // instructions, which no agent should do without the user saying so.
+  if (tool === 'qgis_plugin' && action === 'instruction') {
+    return (args?.op === 'save' || args?.op === 'delete') ? 'danger' : 'read'
+  }
+  if (tool === 'qgis_plugin' && action === 'lock' && args?.op === 'release') return 'write'
+  if (tool === 'qgis_plugin' && action === 'lock' && args?.op === 'acquire') return 'write'
+  if (READ_ONLY_ACTIONS.has(key)) return 'read'
+  if (WRITE_ACTIONS.has(key)) return 'write'
+  if (isMutating(tool, action, args)) return 'write'
+  return isUnder(key) ? 'write' : 'read'
+}
+
+function isUnder(key) {
+  // Anything not explicitly listed above still changes something unless it is a
+  // `list`/`info`/`help` read; treating it as a write is the safe default.
+  const [, action = ''] = key.split(':')
+  return !/^(list|info|help|query|table|selected|describe|status|log|render|screenshot)$/.test(action)
+}
+
+const SCOPE_RANK = { read: 0, write: 1, danger: 2 }
+
+/** null when the call is allowed, otherwise the message the model reads. */
+export function scopeRefusal(scope, tool, action, args) {
+  const need = requiredScope(tool, action, args)
+  const have = SCOPES.includes(scope) ? scope : 'write'
+  if (SCOPE_RANK[need] <= SCOPE_RANK[have]) return null
+  const label = action ? `${tool} ${action}` : tool
+  const what = need === 'danger'
+    ? 'that action can destroy data or run arbitrary Python'
+    : 'that action writes to the project or to disk'
+  return `${label} is blocked: ${what}, and the current permission scope is "${have}". ` +
+    `The user can switch to "${need}" in the composer scope selector (or in Settings). ` +
+    'Reads, renders and the audit log are never blocked.'
+}
+
+export function assertScope(scope, tool, action, args) {
+  const message = scopeRefusal(scope, tool, action, args)
+  if (message) {
+    const err = new Error(message)
+    err.code = 'SCOPE_DENIED'
+    throw err
+  }
+}
+
 // Batch: one tool call = one pyeval round-trip even for N entries.
 // A per-tool `action` spec decides which array key batches and where a string
 // entry is assigned (e.g. layers: ["A","B"] -> P['layer'] = "A" / "B").
@@ -1428,12 +1513,25 @@ export const REQUIRED_ARGS = {
   'qgis_analysis:run': [['algorithm']],
 };
 
+// Parameters that a batch list supplies per item, so the top-level argument is
+// optional when the list is present (runs=[{algorithm,…}], items=[{kind,…}]).
+const PER_ITEM_ARGS = {
+  'qgis_analysis:run': ['algorithm'],
+  'qgis_layout:add_item': ['kind'],
+  'qgis_layout:update_item': ['index'],
+};
+
 export function checkRequired(tool, action, a) {
-  const groups = REQUIRED_ARGS[tool + ':' + action];
+  const key = tool + ':' + action;
+  const groups = REQUIRED_ARGS[key];
   if (!groups) return;
+  const spec = BATCH_SPEC[key];
+  const batching = Boolean(spec && Array.isArray(a?.[spec.key]) && a[spec.key].length > 0);
+  const perItem = new Set(batching ? PER_ITEM_ARGS[key] || [] : []);
   const present = (k) => a[k] !== undefined && a[k] !== null && String(a[k]).trim() !== '';
   for (const group of groups) {
     if (group.some(present)) continue;
+    if (group.some((k) => perItem.has(k))) continue;
     const names = group.map((k) => `"${k}"`).join(' or ');
     throw new Error(`${tool} ${action}: missing parameter ${names} — pass it (or the matching batch list); see the tool description`);
   }
@@ -1471,17 +1569,25 @@ export function batchItems(args, spec) {
 }
 
 export function batchBody(body, spec) {
-  const indented = body
+  // The action body becomes a function so it keeps its own indentation no matter
+  // what the loop scaffolding above it looks like. Inlining it directly was the
+  // bug: any statement at the loop's 2-space level followed by the body's 4-space
+  // lines swallowed the body into the previous `if`, or raised IndentationError.
+  const wrapped = body
     .split('\n')
-    .map((line) => (line.length ? '    ' + line : line))
+    .map((line) => (line.length ? '  ' + line : line))
     .join('\n');
-  let setItem = '    P.update(_it_)';
+  let setItem = '  P.update(_it_)';
   if (spec.assign === 'layout') {
-    setItem = "    if isinstance(_it_, str):\n        P['layout'] = _it_\n        P['layout_name'] = _it_\n    else:\n        P.update(_it_)";
+    setItem = "  if isinstance(_it_, str):\n    P['layout'] = _it_\n    P['layout_name'] = _it_\n  else:\n    P.update(_it_)";
   } else if (spec.assign) {
-    setItem = "    if isinstance(_it_, str):\n        P['" + spec.assign + "'] = _it_\n    else:\n        P.update(_it_)";
+    setItem = "  if isinstance(_it_, str):\n    P['" + spec.assign + "'] = _it_\n  else:\n    P.update(_it_)";
   }
   return `
+def _one_():
+${wrapped}
+  return result
+
 _items_ = P.get('${spec.key}') or []
 _orig_ = dict(P)
 _parts_ = []
@@ -1491,17 +1597,17 @@ for _it_ in _items_:
   P.pop('${spec.key}', None)
 ${setItem}
   if P.get('layout') is None and P.get('layout_name') is not None:
-      P['layout'] = P['layout_name']
+    P['layout'] = P['layout_name']
   if P.get('layout_name') is None and P.get('layout') is not None:
-      P['layout_name'] = P['layout']
-${indented}
-  _parts_.append(result)
+    P['layout_name'] = P['layout']
+  _parts_.append(_one_())
 result = {'count': len(_parts_), 'results': _parts_}
 `;
 }
 
 export function registerConsolidatedTools(deps) {
-  const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString } = deps;
+  const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance } = deps;
+  const activeScope = () => (SCOPES.includes(scope) ? scope : 'write');
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',
@@ -1513,6 +1619,7 @@ export function registerConsolidatedTools(deps) {
     },
     output: stringOutput,
     async execute(args, exec) {
+      assertScope(activeScope(), 'execute_qgis_sync', '', args);
       return asText(await run(String(args?.code ?? ''), exec?.signal));
     },
   });
@@ -1531,6 +1638,7 @@ export function registerConsolidatedTools(deps) {
     },
     output: stringOutput,
     async execute(args, exec) {
+      assertScope(activeScope(), 'submit_qgis_async', '', args);
       const target = await deps.resolve();
       const group = Array.isArray(args?.tasks)
         ? args.tasks.filter((t) => t && typeof t.code === 'string' && t.code.trim())
@@ -1630,6 +1738,8 @@ export function registerConsolidatedTools(deps) {
     if (a.layout === undefined && a.layout_name !== undefined) a.layout = a.layout_name;
     if (a.layout_name === undefined && a.layout !== undefined) a.layout_name = a.layout;
     if (tool) checkRequired(tool, String(a.action ?? ''), a);
+    const scopeChecked = String(a.action ?? '');
+    assertScope(activeScope(), tool, scopeChecked, a);
     const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;    const items = spec ? batchItems(a, spec) : null;
     const payload = items ? batchBody(body, spec) : body;
     if (items) a[spec.key] = items;
@@ -1874,11 +1984,11 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `log` reads the instance audit log back (op: tail/error/slow, limit) - failures and slow calls, no guessing. `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
+    description: 'Plugin and session control. `instruction` reads or writes the bundled docs (kind, op). `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `log` reads the instance audit log back (op: tail/error/slow, limit) - failures and slow calls, no guessing. `restart` kills the wedged process and lets the next call start a fresh one (unsaved edits are lost). `reload` cannot re-import headless (qgis.utils.plugins is empty) - restart the process.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction', 'lock', 'log'] },
+        action: { type: 'string', enum: ['status', 'describe', 'open', 'reload', 'bridge', 'instruction', 'lock', 'log', 'restart'] },
         plugin_id: { type: 'string' },
         method: { type: 'string' },
         args: { type: 'array', items: {} },
@@ -1905,6 +2015,11 @@ export function registerConsolidatedTools(deps) {
       }
       if (a === 'lock') {
         return asText(await runCmd('write_lock', { op: args?.op || 'status', owner: lockOwner(exec), ttl: 120 }, exec?.signal));
+      }
+      if (a === 'restart') {
+        assertScope(activeScope(), 'qgis_plugin', 'restart', args);
+        if (typeof restartInstance !== 'function') throw new Error('restart: this bundle build cannot stop the instance');
+        return asText(restartInstance());
       }
       return asText(await runCmd('instruction', {
         op: args?.op || 'list', kind: args?.kind || 'skills',

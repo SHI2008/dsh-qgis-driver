@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import { internals } from '../index.js'
 import {
   MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner,
+  SCOPES, DANGER_ACTIONS, WRITE_ACTIONS, scopeRefusal, assertScope, requiredScope,
 } from '../tools.js'
 
 const {
@@ -133,6 +134,16 @@ await ok('alternatives satisfy one requirement group', () => {
 await ok('an action with no table is never blocked', () => {
   checkRequired('qgis_layer', 'list', {})
 })
+// A batch list carries the per-item argument, so requiring it at the top level
+// would reject the very form the description advertises.
+await ok('a batch list satisfies the per-item requirement', () => {
+  checkRequired('qgis_analysis', 'run', { runs: [{ algorithm: 'native:buffer', params: {} }] })
+  checkRequired('qgis_layout', 'add_item', { layout_name: 'L', items: [{ kind: 'map' }] })
+  checkRequired('qgis_layout', 'update_item', { layout_name: 'L', updates: [{ index: 0 }] })
+  // …but without the list the parameter is still required.
+  assert.throws(() => checkRequired('qgis_analysis', 'run', {}), /missing parameter "algorithm"/)
+  assert.throws(() => checkRequired('qgis_layout', 'add_item', { layout_name: 'L' }), /missing parameter "kind"/)
+})
 
 // ---------- write lease: which actions serialise
 await ok('mutating actions take the lease, reads and exports do not', () => {
@@ -238,6 +249,63 @@ await ok('a transport failure is never mistaken for a tool bug', () => {
   const e = describeFailure('network', { base: 'http://127.0.0.1:58056' })
   assert.match(e.message, /127\.0\.0\.1:58056/)
   assert.match(e.message, /file channel is the primary path/)
+})
+
+// ---- permission scope -------------------------------------------------------
+await ok('read scope allows looking and rendering, blocks writing and Python', () => {
+  assert.equal(scopeRefusal('read', 'qgis_layer', 'list', {}), null)
+  assert.equal(scopeRefusal('read', 'qgis_layer', 'info', {}), null)
+  assert.equal(scopeRefusal('read', 'qgis_feature', 'query', {}), null)
+  assert.equal(scopeRefusal('read', 'qgis_map', 'render', {}), null)
+  assert.equal(scopeRefusal('read', 'qgis_plugin', 'log', { op: 'error' }), null)
+  for (const [tool, action, args] of [
+    ['qgis_layer', 'style', {}], ['qgis_layer', 'export', {}],
+    ['qgis_layout', 'export', {}], ['qgis_feature', 'add', {}],
+    ['qgis_analysis', 'run', {}], ['execute_qgis_sync', '', {}],
+    ['submit_qgis_async', '', {}], ['qgis_layer', 'remove', {}],
+  ]) {
+    assert.match(String(scopeRefusal('read', tool, action, args)), /blocked/, `${tool} ${action}`)
+  }
+})
+
+await ok('write scope is the default: edits pass, destruction and PyQGIS do not', () => {
+  for (const [tool, action, args] of [
+    ['qgis_layer', 'style', {}], ['qgis_layer', 'add', {}], ['qgis_layer', 'export', {}],
+    ['qgis_layout', 'add_item', {}], ['qgis_analysis', 'run', {}], ['qgis_project', 'save', {}],
+    ['qgis_plugin', 'instruction', { op: 'read' }],
+  ]) assert.equal(scopeRefusal('write', tool, action, args), null, `${tool} ${action}`)
+  for (const [tool, action, args] of [
+    ['qgis_layer', 'remove', {}], ['qgis_feature', 'delete', {}],
+    ['qgis_project', 'open', {}], ['qgis_project', 'save_as', {}],
+    ['qgis_plugin', 'restart', {}], ['qgis_plugin', 'bridge', {}],
+    ['qgis_plugin', 'instruction', { op: 'save' }],
+    ['qgis_plugin', 'instruction', { op: 'delete' }],
+    ['execute_qgis_sync', '', {}], ['submit_qgis_async', '', {}],
+  ]) assert.match(String(scopeRefusal('write', tool, action, args)), /blocked/, `${tool} ${action}`)
+})
+
+await ok('danger scope allows everything, including the escape hatches', () => {
+  for (const [tool, action, args] of [
+    ['qgis_layer', 'remove', {}], ['qgis_project', 'open', {}],
+    ['qgis_plugin', 'restart', {}], ['execute_qgis_sync', '', {}],
+    ['submit_qgis_async', '', {}],
+  ]) assert.equal(scopeRefusal('danger', tool, action, args), null, `${tool} ${action}`)
+})
+
+await ok('a refusal says how to lift it, and that reads still work', () => {
+  const msg = String(scopeRefusal('read', 'qgis_layer', 'style', {}))
+  assert.match(msg, /qgis_layer style/)
+  assert.match(msg, /current permission scope is "read"/)
+  assert.match(msg, /composer scope selector/)
+  assert.match(msg, /Reads, renders and the audit log are never blocked/)
+  assert.throws(() => assertScope('read', 'qgis_layer', 'style', {}), (e) => e.code === 'SCOPE_DENIED')
+})
+
+await ok('the scope names are the three the config accepts', () => {
+  assert.deepEqual(SCOPES, ['read', 'write', 'danger'])
+  // A destructive action that nobody classified would fall through to "read".
+  assert.ok(DANGER_ACTIONS.has('qgis_layer:remove'))
+  assert.ok(WRITE_ACTIONS.has('qgis_layer:export'))
 })
 
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
