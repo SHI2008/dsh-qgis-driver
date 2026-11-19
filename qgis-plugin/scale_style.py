@@ -206,7 +206,7 @@ def _symbol_color(symbol):
 class ScaleStyler:
     """Shared service that derives layer line widths from the standard table plus scale.
 
-    Used from bridge and other plugins via plugins['dsh_qgis_driver'].scale_style.
+    Reachable from other plugins via plugins['dsh_qgis_driver'].scale_style.
     Even with a disabled or missing profile it quietly returns an error dict.
     """
 
@@ -222,7 +222,7 @@ class ScaleStyler:
         return _PROFILES.profile(name)
 
     def describe(self, name=None):
-        """Profile summary for bridge display."""
+        """Profile summary used by describe()."""
         prof, path = load_profile(name or self.active_profile_name())
         if prof is None:
             return None
@@ -428,25 +428,14 @@ class ScaleStyler:
             return {"ok": True, "mode": "rules", "dry": True,
                     "category": cat.get("key"), "rules": specs}
 
-        # if geo_legend is loaded, delegate to applyRules (the owner of legend
-        # creation). If not loaded / on failure, fall back to the local code
-        try:
-            import qgis.utils
-            gl = qgis.utils.plugins.get("geo_legend")
-            br = getattr(gl, "bridge", None)
-            if br is not None:
-                res = json.loads(
-                    br.applyRules(layer.id(), specs))
-                if res.get("ok"):
-                    res["delegated"] = "geo_legend.applyRules"
-                    res["category"] = cat.get("key")
-                    return res
-        except Exception:  # nosec B110  # acceptable by design
-            pass
+        # One path only: this plugin builds the rule renderer itself. It used to
+        # hand off to another plugin's bridge when that happened to be loaded,
+        # which meant the same profile produced different legends depending on
+        # what else was installed.
         return self._apply_rules_local(layer, specs, cat)
 
     def _apply_rules_local(self, layer, specs, cat):
-        """Rule renderer construction independent of geo_legend (fallback)."""
+        """Rule renderer construction, independent of any other plugin."""
         from qgis.core import QgsRuleBasedRenderer, QgsWkbTypes
         gt = QgsWkbTypes.geometryType(layer.wkbType())
         sym_cls = {

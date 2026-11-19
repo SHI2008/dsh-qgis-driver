@@ -333,7 +333,7 @@ class LayerOrganizer:
         return self.place_all(items, profile_name=profile_name, dry=dry)
 
     def describe(self, name=None):
-        """Profile summary for bridge display."""
+        """Profile summary used by describe()."""
         prof, path = load_profile(name or self.active_profile_name())
         if prof is None:
             return None
