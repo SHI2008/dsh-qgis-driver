@@ -876,6 +876,22 @@ elif kind == 'scalebar':
         if _up <= 0:
             break
         sb.setUnitsPerSegment(max(_up, 0.001))
+    # Then snap to a readable 1/2/5 step: a bar labelled "4.378215" is useless on a map.
+    _up = sb.unitsPerSegment()
+    if _up > 0:
+        import math as _m
+        _e = _m.floor(_m.log10(_up))
+        for _mul in (5.0, 2.0, 1.0):
+            _cand = _mul * (10.0 ** _e)
+            if _cand <= _up:
+                sb.setUnitsPerSegment(_cand)
+                break
+        else:
+            sb.setUnitsPerSegment(10.0 ** _e)
+    try:
+        sb.setDecimalPlaces(0)
+    except Exception:
+        pass
     item = sb
 elif kind == 'north_arrow':
     na = QgsLayoutItemPicture(lay)
