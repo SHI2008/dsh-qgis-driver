@@ -127,7 +127,7 @@ window.__ModuleLoader__.load({
         ref: wrapRef,
         style: {
           position: 'relative', display: 'inline-flex', alignItems: 'center',
-          flex: '0 0 auto', minWidth: 0, alignSelf: 'center',
+          flex: '0 0 auto', minWidth: 0, alignSelf: 'center', marginRight: 6,
         },
       },
         h('button', {
@@ -400,9 +400,12 @@ window.__ModuleLoader__.load({
       inject: ['slots'],
       apply(ctx) {
         const disposers = []
+        // Connection badge first, permission pill after it: the pill used to
+        // sit left of the badge, which read like the DSH approval control on
+        // the other side of the composer.
         const offDock = ctx.slots.inject('conversation.input.right', () =>
           ctx.slots.register(
-            { name: 'conversation.input.right', id: 'dsh-qgis-driver-dock', order: 90 },
+            { name: 'conversation.input.right', id: 'dsh-qgis-driver-dock', order: 89 },
             StatusWidget,
           ),
         )
@@ -410,7 +413,7 @@ window.__ModuleLoader__.load({
 
         const offScope = ctx.slots.inject('conversation.input.right', () =>
           ctx.slots.register(
-            { name: 'conversation.input.right', id: 'dsh-qgis-driver-scope', order: 89 },
+            { name: 'conversation.input.right', id: 'dsh-qgis-driver-scope', order: 90 },
             ScopePill,
           ),
         )
