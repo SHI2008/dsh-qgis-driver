@@ -37,5 +37,7 @@
         "@deepseek-ai/dsh-client-ui-conversation"
       ]
     }
-  }
+  },
+  "license": "GPL-3.0-or-later",
+  "author": "SHI2008"
 }

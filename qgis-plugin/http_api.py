@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Based on QGIS Live Harness by yamamoto-ryuzo (GPL-3.0); modified.
 """HTTP server built into dsh_qgis_driver. Standard library only.
 
 Serves a plain REST surface on one port, so AI tools/apps can drive QGIS

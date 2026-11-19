@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Based on QGIS Live Harness by yamamoto-ryuzo (GPL-3.0); modified.
 """The execution service side of dsh-qgis-driver: QGIS driven over files.
 
 Start QGIS with this plugin enabled and it publishes a live dir

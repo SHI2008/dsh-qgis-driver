@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Based on QGIS Live Harness by yamamoto-ryuzo (GPL-3.0); modified.
 """dsh_qgis_driver — QGIS as an execution service for DSH.
 
 There is no menu, no dock and no settings dialog. Enable the plugin (or start

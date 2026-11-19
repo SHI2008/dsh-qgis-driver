@@ -1,10 +1,18 @@
 # dsh-qgis-driver (`dsh_qgis_driver`)
 
-> **Fork notice:** This repository is an independent fork of
-> [yamamoto-ryuzo/qgis_live_harness](https://github.com/yamamoto-ryuzo/qgis_live_harness)
-> (`qgis-plugin/dsh_qgis_driver`, upstream v0.16.2). It is maintained separately
-> from the upstream project, and changes here are not intended to be merged
-> upstream. The original author and GPL-3.0 licensing are preserved.
+> **Attribution.** 本插件的 QGIS 侧（`qgis-plugin/dsh_qgis_driver`）基于原作者
+> [yamamoto-ryuzo](https://github.com/yamamoto-ryuzo) 的
+> [QGIS Live Harness](https://github.com/yamamoto-ryuzo/qgis_live_harness) 开发
+> （上游基线 v0.16.2），遵循 GPL-3.0 许可。
+>
+> The QGIS side of this plugin is developed from
+> [QGIS Live Harness](https://github.com/yamamoto-ryuzo/qgis_live_harness) by
+> [yamamoto-ryuzo](https://github.com/yamamoto-ryuzo) (upstream baseline
+> v0.16.2), and is released under the GPL-3.0 license.
+>
+> This repository is maintained independently; changes here are not intended to
+> be merged upstream. Copyright in the original work remains with its author.
+> See `LICENSE` and `NOTICE` at the repository root.
 
 ## What it is
 

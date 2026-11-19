@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Based on QGIS Live Harness by yamamoto-ryuzo (GPL-3.0); modified.
 """Shared JSON profile store (bundled defaults + user overrides).
 
 `layer_org` and `scale_style` both keep named JSON profiles the same way: a

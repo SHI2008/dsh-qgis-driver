@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Based on QGIS Live Harness by yamamoto-ryuzo (GPL-3.0); modified.
 """Scale-linked standard line width service (ScaleStyler).
 
 Unlike CAD, GIS can tie line width to scale:

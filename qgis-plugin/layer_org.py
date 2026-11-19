@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Based on QGIS Live Harness by yamamoto-ryuzo (GPL-3.0); modified.
 """Layer organization service (LayerOrganizer).
 
 Provides cross-plugin "display standardization for added layers".

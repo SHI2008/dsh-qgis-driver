@@ -37,6 +37,12 @@ tarball contains the whole `dsh-tools/` bundle (code, skills, tests, docs).
    `%APPDATA%\QGIS\QGIS4\profiles\default\python\plugins\dsh_qgis_driver`
    if you want the GUI QGIS install to match the repo.
 
+5. Check attribution and licences before publishing:
+   `LICENSE` (GPL-3.0) and `NOTICE` exist at the repo root, every
+   `qgis-plugin/*.py` starts with the SPDX + attribution header,
+   `qgis-plugin/README.md` still carries the bilingual attribution block, and
+   `metadata.txt` credits the upstream project in `about`.
+
 ## What changed in 0.18.0 / 0.1.56-rc
 
 * The QGIS side is a service only: no AI panel, no dock, no settings dialog,

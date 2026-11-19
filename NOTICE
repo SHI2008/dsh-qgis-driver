@@ -1,0 +1,27 @@
+dsh-qgis-driver
+Copyright (C) 2026 SHI2008
+Copyright (C) 2025 yamamoto-ryuzo (QGIS Live Harness, upstream)
+
+本插件的 QGIS 侧（qgis-plugin/dsh_qgis_driver）基于原作者 yamamoto-ryuzo 的
+QGIS Live Harness 开发（上游基线 v0.16.2），遵循 GPL-3.0 许可。
+The QGIS side of this project is a modified version of QGIS Live Harness
+<https://github.com/yamamoto-ryuzo/qgis_live_harness> by yamamoto-ryuzo
+(qgis-plugin/dsh_qgis_driver, upstream baseline v0.16.2), licensed GPL-3.0.
+
+Main changes made in this repository
+------------------------------------
+* Cut the plugin down to a headless execution service: the AI panel, chat
+  client, menu entries, dock and settings dialog are gone (qgis-plugin/ went
+  from 11043 to ~2400 Python lines).
+* Removed remote access entirely: loopback-only HTTP, per-session token, no
+  host/port setting, no shared API key, no third-party plugin bridge.
+* Added a GUI-thread watchdog, a worker-thread heartbeat that distinguishes
+  "busy" from "dead", an instance write lease and a read-back audit log.
+* Rewrote the DSH side (dsh-tools/) as a separate bundle: ten consolidated
+  tools, batch actions, permission scopes (read / write / danger), call-time
+  guards, opt-in inline previews and a regression suite.
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE for the full text.
