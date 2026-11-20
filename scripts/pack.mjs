@@ -19,7 +19,11 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const dist = join(root, 'dist');
 const stage = join(dist, '.stage');
 
-const SKIP_DIRS = new Set(['__pycache__', 'node_modules', '.pytest_cache', '.mypy_cache']);
+const SKIP_DIRS = new Set(['__pycache__', '.pytest_cache', '.mypy_cache']);
+// The bundle imports schemastery at module scope and DSH does not provide it, so
+// the vendored copy in dsh-tools/node_modules has to ship with the tarball. The
+// plugin side has no dependencies, so it never keeps one.
+const KEEP_DIRS = new Set(['node_modules']);
 const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
 // dotfiles are dev config (.flake8, .bandit, .gitignore, ...) - not for users
 const SKIP_DOTFILES = true;
@@ -34,15 +38,16 @@ function readVersion(file, re) {
 const pluginVersion = readVersion(join(root, 'qgis-plugin', 'metadata.txt'), /^version\s*=\s*(\S+)/m);
 const bundleVersion = JSON.parse(readFileSync(join(root, 'dsh-tools', 'package.json'), 'utf8')).version;
 
-function copyTree(src, dst) {
+function copyTree(src, dst, keepDeps = false) {
   mkdirSync(dst, { recursive: true });
   for (const name of readdirSync(src)) {
     const from = join(src, name);
     const to = join(dst, name);
     const st = statSync(from);
     if (st.isDirectory()) {
-      if (SKIP_DIRS.has(name)) continue;
-      copyTree(from, to);
+      const kept = KEEP_DIRS.has(name);
+      if (SKIP_DIRS.has(name) || (kept && !keepDeps)) continue;
+      copyTree(from, to, keepDeps);
       continue;
     }
     if (SKIP_FILES.has(name)) continue;
@@ -76,7 +81,8 @@ function archive(outFile, cwd, entries) {
 rmSync(stage, { recursive: true, force: true });
 mkdirSync(join(stage, 'plugin'), { recursive: true });
 copyTree(join(root, 'qgis-plugin'), join(stage, 'plugin', 'dsh_qgis_driver'));
-copyTree(join(root, 'dsh-tools'), join(stage, 'bundle', 'dsh-tools'));
+
+copyTree(join(root, 'dsh-tools'), join(stage, 'bundle', 'dsh-tools'), true);
 
 // The bundle patch refers to @local/dsh-qgis-driver by name; keep package.json
 // and cordis.patch.yml as they are so a local install behaves like this repo.
