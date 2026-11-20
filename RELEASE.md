@@ -4,14 +4,14 @@ Two artifacts ship from this repo. Both versions are written by
 `scripts/bump.mjs`, so that is the only place to change them:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 "/d/shichencai/HARNESS/DeepSeek Harness.exe" scripts/bump.mjs 0.1.59-rc 0.18.2
-ELECTRON_RUN_AS_NODE=1 "/d/shichencai/HARNESS/DeepSeek Harness.exe" scripts/pack.mjs   # writes dist/
+ELECTRON_RUN_AS_NODE=1 "<DeepSeek Harness.exe>" scripts/bump.mjs 0.1.62-rc 0.18.5
+ELECTRON_RUN_AS_NODE=1 "<DeepSeek Harness.exe>" scripts/pack.mjs   # writes dist/
 ```
 
 `node` is not on PATH in the DSH sandbox; use the harness binary:
 
 ```bash
-ELECTRON_RUN_AS_NODE=1 "/d/shichencai/HARNESS/DeepSeek Harness.exe" scripts/pack.mjs
+ELECTRON_RUN_AS_NODE=1 "<DeepSeek Harness.exe>" scripts/pack.mjs
 ```
 
 ## What gets built
@@ -27,9 +27,9 @@ tarball contains the whole `dsh-tools/` bundle (code, skills, tests, docs).
 
 ## Before packing
 
-1. `ELECTRON_RUN_AS_NODE=1 … dsh-tools/tests/pure.mjs` (39 checks),
+1. `ELECTRON_RUN_AS_NODE=1 … dsh-tools/tests/pure.mjs` (40 checks),
    `… tests/docdrift.mjs` (13), `… tests/batch.mjs` (30) — all green.
-2. `… tests/live.mjs` against a running instance (16 checks; skips with exit 0
+2. `… tests/live.mjs` against a running instance (18 checks; skips with exit 0
    when no instance is up).
 3. Reload the bundle in DSH and run one real workflow (a render plus a layout
    export) so the shipped code is the code that was tested.
