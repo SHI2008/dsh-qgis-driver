@@ -381,6 +381,12 @@ instance stays usable. Split the work into submit_qgis_async tasks[] shards, or 
 the same script and call it through execute_qgis_sync in smaller steps.
 ```
 
+The watchdog is best effort. If the process has run out of threads (a heavy shard run
+can do that), arming the timer fails; the call then runs without a deadline instead of
+failing — losing the budget is better than losing the call. `tests/chaos.mjs` pins
+that, and the normal path still fires (`a call runs even when the watchdog thread
+cannot start`).
+
 The budget is 60 s (`QGIS_LIVE_EVAL_TIMEOUT` overrides). It used to be 10 s —
 *below* the transport window — so an ordinary 12-second call was killed and
 reported as a crash. Heavy actions (`qgis_layout export`, `qgis_analysis run`)

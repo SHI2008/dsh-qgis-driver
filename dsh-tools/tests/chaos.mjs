@@ -116,6 +116,30 @@ ok(/IndexError|list index out of range/i.test(missingError),
   'a missing object is an IndexError, not NameError: prj', missingError.slice(-120))
 ok(await pid() === startPid, 'the instance keeps its pid after a normal error')
 
+// 7. A watchdog that cannot be armed must not fail the call. Thread creation
+//    fails after a heavy shard run, and losing the deadline beats losing the
+//    tool call.
+const noThread = await cmd({
+  type: 'pyeval',
+  code: [
+    'import threading',
+    'from dsh_qgis_driver import live_driver as ld',
+    'real_timer = threading.Timer',
+    'class _Boom(real_timer):',
+    '    def start(self):',
+    '        raise RuntimeError("can\'t start new thread")',
+    'threading.Timer = _Boom',
+    'try:',
+    '    result = ld._run_with_deadline(lambda: "ran-without-timer", 5.0)',
+    'finally:',
+    '    threading.Timer = real_timer',
+  ].join('\n'),
+})
+const noThreadValue = noThread.data && noThread.data.result
+ok(noThreadValue === 'ran-without-timer',
+  'a call runs even when the watchdog thread cannot start', JSON.stringify(noThread.data).slice(0, 160))
+ok(await pid() === startPid, 'the instance keeps its pid after an unarmed watchdog')
+
 process.stdout.write(`1..${n}\n`)
 if (failures) {
   process.stdout.write(`# ${failures} check(s) failed\n`)

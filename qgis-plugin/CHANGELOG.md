@@ -5,6 +5,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Fixed
+- A `pyeval` call no longer fails when its watchdog cannot be armed: if the process
+  has run out of threads, `_run_with_deadline()` runs the snippet without a deadline
+  instead of raising `RuntimeError: can't start new thread`.
+
 ### Removed
 - The whole GUI side: `ai_panel.py` (2104 lines), `ai_client.py` (2593),
   `devin_tasks.py` (840), `mode_switch.py` (385), `bridge.py` (464),

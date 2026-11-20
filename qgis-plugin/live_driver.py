@@ -110,7 +110,13 @@ def _run_with_deadline(fn, seconds):
 
     timer = threading.Timer(seconds, _fire)
     timer.daemon = True
-    timer.start()
+    try:
+        timer.start()
+    except Exception:  # nosec B110  # no thread to borrow: run without the budget
+        # Thread creation fails once a heavy shard run has exhausted the
+        # process. The call itself is fine, so losing the deadline beats
+        # failing the tool over a watchdog we could not arm.
+        return fn()
     try:
         return fn()
     finally:
