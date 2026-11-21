@@ -91,6 +91,14 @@ round-trip, while hand-written pyeval is one round-trip per step.
     `initQgis()`/`QgsApplication(...)` is refused with an explanation, because it would kill the
     instance for every later call.
 
+## Before saying an algorithm is missing
+
+`qgis_analysis list` is capped (default 200). It always returns `providers` with a count per
+provider plus `total` and `truncated`, so check those before concluding something is not
+installed: `list provider=native` (350 on the reference install), `provider=grass` (307),
+`provider=gdal`, `provider=qgis`, `provider=pdal`. A provider missing from `providers` really
+is not loaded — QGIS 4 ships no SAGA provider at all (install SAGA Next Gen, or use GRASS).
+
 ## Availability
 
 All ten tools are registered globally: every agent — including subagents — can call them,

@@ -42,7 +42,7 @@ one tool keeps the first-turn prompt small — 10 descriptions instead of the
 | `qgis_layer` | `list` / `info` / `fields` / `add` / `create` / `remove` / `visibility` / `crs` / `style` / `symbol` / `classify` / `style_multi` / `style_rule` / `labels` / `annotate` / `reproject` / `export` / `export_table` |
 | `qgis_feature` | `query` / `table` / `select` / `select_by_location` / `selected` / `add` / `update` / `delete` / `field_add` / `field_calc` / `field_delete` / `field_rename` |
 | `qgis_layout` | `list` / `create` / `info` / `add_item` / `update_item` / `legend_edit` / `align` / `export` / `export_atlas` |
-| `qgis_analysis` | `list` / `help` / `run` (processing algorithms) / `zonal_stats` / `reclassify` |
+| `qgis_analysis` | `list` (filter by `provider`; returns `total`/`truncated`/`providers`) / `help` / `run` / `zonal_stats` / `reclassify` |
 | `qgis_map` | `render` / `screenshot` / `set_extent` / `zoom_to_layer` |
 | `qgis_plugin` | `status` / `lock` / `log` / `restart` |
 
@@ -54,7 +54,16 @@ load on demand — they stay callable but do not cost prompt space up front.
 
 Where a layer name is ambiguous, pass the layer id instead: `qgis_layer list`
 
-### Batch (one round-trip for N items)
+#### A capped list hides providers
+
+`list` used to stop at 200 entries in provider order: on the reference install that was `gdal`
+(59) plus the first 140 of `grass` (307) and **no `native` at all**, so an agent hunting
+`native:zonalstatistics` concluded native was absent, and reported GRASS as unconfigured. It now
+returns `providers` (id -> count), `total` and `truncated`, and takes `provider` + `limit`. An
+unknown provider is an error that lists the real ones — which is also the honest answer to "is
+SAGA installed" (no: QGIS 4 ships no SAGA provider, so `saga` never appears).
+
+## Batch (one round-trip for N items)
 
 Repeated operations run in a single `pyeval`: pass an array, get `{count, results: [...]}`.
 

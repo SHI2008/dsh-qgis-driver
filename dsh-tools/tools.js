@@ -1312,6 +1312,8 @@ result = {'target': target, 'size_bytes': os.path.getsize(path),
 const ANALYSIS_BODY = {
   list: `
 kw = (P.get('keyword') or '').lower()
+want = (P.get('provider') or '').lower()
+limit = max(1, min(int(P.get('limit') or 200), 1000))
 reg = QgsApplication.processingRegistry()
 if reg.algorithms() == [] or True:
     from qgis.analysis import QgsNativeAlgorithms
@@ -1319,14 +1321,24 @@ if reg.algorithms() == [] or True:
         reg.addProvider(QgsNativeAlgorithms())
     except Exception:
         pass
-algs = []
+providers = {}
 for a in reg.algorithms():
+    pid = a.provider().id()
+    providers[pid] = providers.get(pid, 0) + 1
+if want and want not in providers:
+    raise ValueError('unknown provider "' + want + '" - one of ' + ', '.join(sorted(providers)))
+algs = []
+total = 0
+for a in reg.algorithms():
+    if want and a.provider().id() != want:
+        continue
     if kw and kw not in a.id().lower() and kw not in a.displayName().lower():
         continue
-    algs.append({'id': a.id(), 'name': a.displayName()})
-    if len(algs) >= 200:
-        break
-result = {'count': len(algs), 'algorithms': algs}`,
+    total += 1
+    if len(algs) < limit:
+        algs.append({'id': a.id(), 'name': a.displayName()})
+result = {'count': len(algs), 'total': total, 'truncated': total > len(algs),
+          'providers': providers, 'algorithms': algs}`,
   help: `
 reg = QgsApplication.processingRegistry()
 alg = reg.algorithmById(P['algorithm'])
@@ -2042,12 +2054,14 @@ export function registerConsolidatedTools(deps) {
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description: 'Processing. `run` needs `algorithm` + `params` (`help` lists them); `runs[]` batches. `zonal_stats` needs `layer` + `raster`. `output` keeps a file, else memory. Minutes-long algorithms belong in submit_qgis_async.',
+    description: 'Processing. `list` returns every provider with its algorithm count (the list itself is capped - check `truncated`/`total`, filter by `provider`). `run` needs `algorithm` + `params` (`help` lists them); `runs[]` batches. `zonal_stats` needs `layer` + `raster`. `output` keeps a file, else memory. Minutes-long algorithms belong in submit_qgis_async.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'help', 'run', 'zonal_stats', 'reclassify'] },
-        keyword: { type: 'string' },
+        keyword: { type: 'string', description: 'list: substring of the id or display name' },
+        provider: { type: 'string', description: 'list: native|grass|gdal|qgis|pdal (see providers in the result)' },
+        limit: { type: 'integer', description: 'list: max algorithms to return (default 200, max 1000)' },
         algorithm: { type: 'string' },
         params: { type: 'object', additionalProperties: true, description: 'algorithm params (see action=help)' },
         raster: { type: 'string' },
