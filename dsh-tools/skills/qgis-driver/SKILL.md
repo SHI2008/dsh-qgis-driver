@@ -99,6 +99,26 @@ installed: `list provider=native` (350 on the reference install), `provider=gras
 `provider=gdal`, `provider=qgis`, `provider=pdal`. A provider missing from `providers` really
 is not loaded — QGIS 4 ships no SAGA provider at all (install SAGA Next Gen, or use GRASS).
 
+## SAGA is not in QGIS 4: map the job, don't hunt the provider
+
+QGIS 4 dropped the SAGA provider. The installer still ships `apps/saga/saga_cmd.exe`, but no provider
+drives it, and the QGIS 4.2 plugin repository carries no SAGA plugin at all — so `saga:*` will never
+appear in `list`, no matter how you search. The reference install exposes 772 algorithms through the
+providers that do exist (`3d` 1, `gdal` 59, `grass` 307, `native` 350, `pdal` 24, `qgis` 31).
+
+Translate the job instead of the tool name (each id below was verified with `list` on the reference
+install; re-check on the target machine with `list keyword=<word>`):
+
+- Fill sinks / depressions: `native:fillsinkswangliu`, `grass:r.fill.dir`, `grass:r.fill.stats`
+  (holes rather than sinks: `native:fillnodata`, `gdal:fillnodata`).
+- Flow direction, flow accumulation, channel network, basins: `grass:r.watershed` — one call returns
+  `accumulation`, `drainage`, `basin` and `stream` together.
+- Slope / aspect / curvature: `native:slope`, `gdal:slope`, `grass:r.slope.aspect`.
+- Interpolation: `qgis:idwinterpolation`, `qgis:tininterpolation`. Kriging is the one genuine gap —
+  nothing in `3d`/`gdal`/`grass`/`native`/`qgis` provides it, so say so instead of substituting a
+  different method and calling it kriging.
+- Raster algebra and reclassification: `gdal:rastercalculator`, `native:reclassifybytable`.
+
 ## Calling GRASS / GDAL / native algorithms
 
 `qgis_analysis action=help algorithm=<id>` is the authority for the *installed* version: it
