@@ -838,6 +838,14 @@ class LiveDriver:
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 
+    def _font_count(self):
+        """0 families means labels would render as boxes; useful when a report says so."""
+        try:
+            from qgis.PyQt.QtGui import QFontDatabase
+            return len(QFontDatabase.families())
+        except Exception:
+            return -1
+
     def _status(self):
         """Liveness of this instance: pid, live dir, port, counters, current work."""
         busy = dict(self._busy or {})
@@ -858,6 +866,7 @@ class LiveDriver:
             "busy": busy or None,
             "busy_s": round(now - busy["since"], 1) if busy.get("since") else 0.0,
             "uptime_s": round(now - getattr(self, "_beat_t0", now), 1),
+            "fonts": self._font_count(),
         }
 
     @staticmethod

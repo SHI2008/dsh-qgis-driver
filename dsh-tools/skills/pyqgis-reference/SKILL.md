@@ -45,6 +45,13 @@ Writing a `.py` file and running it with the QGIS interpreter starts a **second*
 driver never learns what happened. Everything belongs in `execute_qgis_sync` (main thread,
 short) or `submit_qgis_async tasks[]` (worker threads, pure Python).
 
+Such a process also loses the fonts. Measured on this machine, exporting the same label three
+ways: `QT_QPA_PLATFORM=offscreen` → **0 font families** and every glyph, digits included, comes
+out as a black box while `exportToImage()` still returns 0; adding `QT_QPA_FONTDIR=C:\Windows\Fonts`
+→ 265 families; the GUI platform the real QGIS uses → 387. So "the text exported as boxes" is
+diagnostic of a self-started process, not of the driver. The driver refuses an export when the
+font database is empty rather than handing back an image full of boxes.
+
 Prefer the structured tools (`qgis_layer`, `qgis_feature`, `qgis_layout`, …) — they resolve
 names, validate parameters and return JSON. Use raw PyQGIS for what they do not cover.
 

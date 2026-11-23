@@ -19,7 +19,7 @@ from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
     QgsTextFormat, QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLegendStyle,
     QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer, QgsRendererRange, QgsRuleBasedRenderer,
     QgsRendererCategory, QgsRectangle, QgsMapSettings, QgsMapRendererCustomPainterJob, QgsPointXY, Qgis)
-from qgis.PyQt.QtGui import QColor, QFont, QImage, QPainter
+from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
 from qgis.PyQt.QtCore import QSize, Qt
 prj = QgsProject.instance()
 P = json.loads(__PARAMS__)
@@ -50,7 +50,21 @@ try:
     os.makedirs(_OUT, exist_ok=True)
 except Exception:
     pass
+def _font_count():
+    # 0 means the Qt font database is empty: every glyph draws as a box, and the
+    # exporter still reports success, so the artifact looks fine until you open it.
+    try:
+        return len(QFontDatabase.families())
+    except Exception:
+        return -1
+
+
 def _publish(src, ext):
+    if _font_count() == 0:
+        raise RuntimeError('this QGIS process loaded no fonts (QFontDatabase has 0 families),'
+                           ' so every label would come out as a black box. QGIS runs on the GUI'
+                           ' platform here; a second QGIS started with QT_QPA_PLATFORM=offscreen'
+                           ' has no fonts - set QT_QPA_FONTDIR instead, or render through this driver.')
     name = 'qgis_%d_%s.%s' % (int(time.time() * 1000), secrets.token_hex(4), ext)
     dst = os.path.join(_OUT, name)
     shutil.copyfile(src, dst)

@@ -84,7 +84,9 @@ round-trip, while hand-written pyeval is one round-trip per step.
 12. **Never write a `.py` file and never start a second QGIS.** The tempting loop — dump a
     script to temp, run it with the QGIS-bundled `python.exe`, read the output — creates
     a second `QgsApplication`, fights the live instance over the same data, renders fonts
-    differently, and returns results in a shape nothing else can read. The driver *is* the
+    differently (with `QT_QPA_PLATFORM=offscreen` it has zero fonts, so every label exports
+    as a black box while the exporter reports success), and returns results in a shape
+    nothing else can read. The driver *is* the
     execution path: `execute_qgis_sync` for main-thread PyQGIS, `submit_qgis_async tasks[]`
     for background work, `qgis_analysis run` for Processing. If a call is too slow or too big,
     say so and split it — do not escape the driver. This is enforced: a snippet that calls

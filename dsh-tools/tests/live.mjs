@@ -177,5 +177,11 @@ report('status says how long it has been up',
   Number(status2.body.result.uptime_s) >= 0,
   JSON.stringify(status2.body.result).slice(0, 200))
 
+// A font database of 0 means every label in an exported image is a box, and Qt
+// still reports the export as successful - the driver refuses the export instead.
+report('the instance reports a non-empty font database',
+  Number(status2.body.result.fonts) > 0,
+  'fonts: ' + status2.body.result.fonts)
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0
