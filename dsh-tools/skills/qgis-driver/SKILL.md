@@ -99,6 +99,30 @@ installed: `list provider=native` (350 on the reference install), `provider=gras
 `provider=gdal`, `provider=qgis`, `provider=pdal`. A provider missing from `providers` really
 is not loaded — QGIS 4 ships no SAGA provider at all (install SAGA Next Gen, or use GRASS).
 
+## Calling GRASS / GDAL / native algorithms
+
+`qgis_analysis action=help algorithm=<id>` is the authority for the *installed* version: it
+returns every parameter name, whether it is optional, and — for enums — the accepted
+`options`, plus `default`, `min`/`max` where the algorithm declares them. Read it before the
+first run of an unfamiliar algorithm; do not recall GRASS/GDAL parameter names from memory
+(`r.watershed` spells them `elevation`, `threshold`, `-s`, `accumulation`; `gdal:rastercalculator`
+uses `INPUT_A`, `BAND_A`, `FORMULA`, `EXTENT_OPT`, `RTYPE`).
+
+What help cannot tell you, and how to handle it:
+
+- **GRASS region.** GRASS algorithms run on an explicit region. Leave `GRASS_REGION_PARAMETER`
+  empty to inherit the input extent, but pass `GRASS_REGION_CELLSIZE_PARAMETER` when you need a
+  specific cell size — "leave 0 for default" silently keeps the source resolution.
+- **Output sinks.** Every `rasterDestination`/`vectorDestination`/`sink` must be filled, or the
+  algorithm runs and writes nothing. Use `memory:<name>` for intermediate results (they come back
+  as `added_layers`) or an absolute path for deliverables. `run` already reports
+  `unwritten_outputs` when a declared sink came back empty — read it instead of assuming success.
+- **`EXTENT_OPT` / `RTYPE` on GDAL.** These are enums with numeric or named options; the wrong
+  value does not raise, it just produces an empty or wrongly typed raster. Check the `options`
+  list from `help`.
+- **Resampling and nodata** are parameter-level (`RESAMPLING`, `NO_DATA`, `NODATA`), not global
+  settings; passing them on the wrong algorithm is silently ignored.
+
 ## Availability
 
 All ten tools are registered globally: every agent — including subagents — can call them,

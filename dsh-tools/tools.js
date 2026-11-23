@@ -1346,8 +1346,39 @@ if alg is None:
     raise ValueError('algorithm not found: ' + P['algorithm'])
 params = []
 for p in alg.parameterDefinitions():
-    params.append({'name': p.name(), 'type': p.type(), 'optional': bool(p.flags() & 8),
-                   'description': p.description()})
+    row = {'name': p.name(), 'type': p.type(), 'optional': bool(p.flags() & 8),
+           'description': p.description()}
+    # Enum parameters are useless without their options: GRASS/GDAL expect the
+    # option name or index, and guessing it is what fails a first run.
+    try:
+        opts = list(p.options() or [])
+        if opts:
+            row['options'] = opts
+    except Exception:
+        pass
+    try:
+        if p.allowMultiple():
+            row['multiple'] = True
+    except Exception:
+        pass
+    try:
+        d = p.defaultValue()
+        if d is not None and d != '':
+            row['default'] = d
+            # An enum's default is an index; name the option so nobody counts.
+            if row.get('options') and isinstance(d, int) and 0 <= d < len(row['options']):
+                row['default_option'] = row['options'][d]
+    except Exception:
+        pass
+    try:
+        lo, hi = p.minimum(), p.maximum()
+        if lo > -1e308:
+            row['min'] = lo
+        if hi < 1e308:
+            row['max'] = hi
+    except Exception:
+        pass
+    params.append(row)
 result = {'id': alg.id(), 'name': alg.displayName(), 'parameters': params}`,
   run: `
 from qgis import processing
@@ -2054,7 +2085,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description: 'Processing. `list` returns every provider with its algorithm count (the list itself is capped - check `truncated`/`total`, filter by `provider`). `run` needs `algorithm` + `params` (`help` lists them); `runs[]` batches. `zonal_stats` needs `layer` + `raster`. `output` keeps a file, else memory. Minutes-long algorithms belong in submit_qgis_async.',
+    description: 'Processing. `list` returns every provider with its algorithm count (the list itself is capped - check `truncated`/`total`, filter by `provider`). `run` needs `algorithm` + `params` (`help` lists them, with enum options and defaults); `runs[]` batches. `zonal_stats` needs `layer` + `raster`. `output` keeps a file, else memory. Minutes-long algorithms belong in submit_qgis_async.',
     parameters: {
       type: 'object',
       properties: {
