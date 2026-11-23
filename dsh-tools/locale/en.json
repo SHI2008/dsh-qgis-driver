@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "dsh-qgis-driver",
-    "description": "从 DeepSeek Harness 驱动本机正在运行的 QGIS：在主线程执行代码、提交后台任务并轮询结果；实例通过插件注册表自动发现，无需地址或密钥。默认输入框右侧显示连接状态与权限开关，设置里可关闭挂件。\n该插件由AI辅助生成\n\nDrive the QGIS running on this machine from DeepSeek Harness - execute code on the QGIS main thread, submit background tasks, poll results, no address or key to configure.\nAI Assisted.",
+    "description": "从 DeepSeek Harness 驱动本机正在运行的 QGIS：在主线程执行代码、提交后台任务并轮询结果；实例通过插件注册表自动发现，无需地址或密钥。默认输入框右侧显示连接状态与权限开关，设置里可关闭挂件。\n该插件由AI辅助生成\n\n该插件建议与 QGIS 插件 dsh_qgis_driver 组合使用：本插件提供工具端，QGIS 侧需先安装该插件。\n\nDrive the QGIS running on this machine from DeepSeek Harness - execute code on the QGIS main thread, submit background tasks, poll results, no address or key to configure.\nAI Assisted.\n\nUse it with the QGIS plugin dsh_qgis_driver: this bundle supplies the tools, and that plugin runs the service inside QGIS.",
     "detail": "docs/DETAIL.md"
   }
 }
