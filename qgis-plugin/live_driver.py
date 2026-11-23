@@ -51,7 +51,11 @@ from qgis.PyQt.QtCore import QTimer
 
 from .profile_store import registry_dir
 
-POLL_MS = 200
+# How often the GUI-thread timer drains the command queue (commands.jsonl and
+# the in-process queue). This is the floor under every call's latency: at 200 ms
+# an idle driver still made callers wait ~200 ms, so it runs at 50 ms. The tick
+# only reads a queue and stats a file, so the extra wake-ups are cheap.
+POLL_MS = 50
 
 # Auto-numbering for commands without an id (HTTP /api/* etc.). In the target eval
 # cid is the key matched against JS reports, so leaving it None drops all results

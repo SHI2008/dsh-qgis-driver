@@ -5,6 +5,12 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Changed
+- The command queue is drained every 50 ms instead of 200 ms (`POLL_MS`).
+  Same work per tick, but it removes the fixed ~200 ms floor under every
+  call: measured per-call latency fell from 207 ms to 65 ms median on the
+  file channel (HTTP path 209 ms -> 63 ms).
+
 ### Fixed
 - A `pyeval` call no longer fails when its watchdog cannot be armed: if the process
   has run out of threads, `_run_with_deadline()` runs the snippet without a deadline
