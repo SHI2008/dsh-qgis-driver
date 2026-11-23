@@ -19,6 +19,7 @@ import {
 const {
   routeToCommand, tidyError, describeFailure, nearestName, guardExecute, asText,
   currentScope, setLiveScope,
+  currentQgisRoot, setLiveQgisRoot,
   parseSkillFrontmatter,
 } = internals
 
@@ -320,6 +321,27 @@ await ok('a refusal says how to lift it, and that reads still work', () => {
   assert.match(msg, /very next call/)
   assert.match(msg, /Reads, renders and the audit log are never blocked/)
   assert.throws(() => assertScope('read', 'qgis_layer', 'style', {}), (e) => e.code === 'SCOPE_DENIED')
+})
+
+await ok('the install root is discovered and the setting wins', () => {
+  // A manual root must be a real QGIS install (apps/Python312/python.exe); a bogus
+  // one is rejected by the config endpoint, and discovery still finds a real one.
+  assert.equal(internals.isQgisRoot('C:\\definitely-not-qgis'), false)
+  const found = internals.findQgisRoot()
+  if (found) {
+    assert.equal(internals.isQgisRoot(found), true)
+    assert.equal(internals.findQgisRoot(found), found)
+  }
+})
+
+await ok('the live install root applies without a plugin reload', () => {
+  // Saving the path in Settings calls setLiveQgisRoot; the launcher reads
+  // currentQgisRoot(). Trimming and de-quoting happen in one place.
+  assert.equal(currentQgisRoot(), '')
+  assert.equal(setLiveQgisRoot('  "H:\\QGIS" '), 'H:\\QGIS')
+  assert.equal(currentQgisRoot(), 'H:\\QGIS')
+  assert.equal(setLiveQgisRoot(''), '')
+  assert.equal(currentQgisRoot(), '')
 })
 
 await ok('the live scope changes without a plugin reload', () => {

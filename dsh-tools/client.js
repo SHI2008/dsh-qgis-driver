@@ -296,7 +296,9 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsPanel(props) {
-      const [form, setForm] = React.useState({ dock: false, headless: true, scope: 'write' })
+      const [form, setForm] = React.useState({ dock: false, headless: true, scope: 'write', qgisRoot: '' })
+      const [detectedRoot, setDetectedRoot] = React.useState(null)
+      const [rootDraft, setRootDraft] = React.useState('')
       const [loaded, setLoaded] = React.useState(false)
       const [saving, setSaving] = React.useState(false)
       const [msg, setMsg] = React.useState(null)
@@ -314,7 +316,10 @@ window.__ModuleLoader__.load({
                 dock: !!c?.dock,
                 headless: c?.headless !== false,
                 scope: typeof c?.scope === 'string' ? c.scope : 'write',
+                qgisRoot: typeof c?.qgisRoot === 'string' ? c.qgisRoot : '',
               })
+              setRootDraft(typeof c?.qgisRoot === 'string' ? c.qgisRoot : '')
+              setDetectedRoot(typeof c?.detectedRoot === 'string' ? c.detectedRoot : null)
               setLoaded(true)
             }
           } catch (e) {
@@ -328,7 +333,13 @@ window.__ModuleLoader__.load({
       // Every control writes immediately: a settings page that needs a Save
       // button makes people think the toggle did nothing.
       async function push(patch) {
-        const next = { dock: !!form.dock, headless: !!form.headless, scope: form.scope, ...patch }
+        const next = {
+          dock: !!form.dock,
+          headless: !!form.headless,
+          scope: form.scope,
+          qgisRoot: form.qgisRoot,
+          ...patch,
+        }
         setForm(next)
         setSaving(true); setMsg(null); setErr(null)
         try {
@@ -338,9 +349,12 @@ window.__ModuleLoader__.load({
             body: JSON.stringify(next),
           })
           const b = await r.json().catch(() => ({}))
-          if (r.ok && b.ok !== false) setMsg('已生效')
-          else {
+          if (r.ok && b.ok !== false) {
+            setMsg('已生效')
+            if (typeof b.detectedRoot === 'string') setDetectedRoot(b.detectedRoot)
+          } else {
             setErr('保存失败：' + (b && b.error ? b.error : ('HTTP ' + r.status)))
+            if (typeof b.detectedRoot === 'string') setDetectedRoot(b.detectedRoot)
           }
         } catch (e) {
           setErr(e && e.message ? e.message : String(e))
@@ -364,6 +378,48 @@ window.__ModuleLoader__.load({
             h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
               '自动拉起 QGIS 时不显示窗口；只有需要地图画布的工具（平移/缩放/截图）才启动 GUI。关闭则总是启动 GUI。')),
           Switch({ checked: !!form.headless, onChange: (v) => push({ headless: v }) })),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
+          h('span', { style: { fontSize: 13 } }, 'QGIS 安装根目录'),
+          h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
+            '只有自动拉起 QGIS 时才用到：填包含 apps\\Python312\\python.exe 的那一层目录。留空则依次看环境变量 QGIS_ROOT、注册表、H:\\QGIS 与 Program Files。',
+            detectedRoot
+              ? h('span', { style: { display: 'block', marginTop: 2, color: GREEN } }, '当前检测到：' + detectedRoot)
+              : h('span', { style: { display: 'block', marginTop: 2, color: MUTED } }, '当前没有检测到 QGIS 安装目录。')),
+          h('div', { style: { display: 'flex', gap: 6, marginTop: 2 } },
+            h('input', {
+              type: 'text',
+              value: rootDraft,
+              placeholder: 'C:\\Program Files\\QGIS 4.2.3',
+              spellCheck: false,
+              onChange: (e) => setRootDraft(e.target.value),
+              onKeyDown: (e) => { if (e.key === 'Enter') push({ qgisRoot: rootDraft }) },
+              style: {
+                flex: '1 1 auto', minWidth: 0, padding: '6px 8px', borderRadius: 6,
+                border: '1px solid ' + BORDER, background: '#141419', color: TEXT, fontSize: 12,
+              },
+            }),
+            h('button', {
+              type: 'button',
+              onClick: () => push({ qgisRoot: rootDraft }),
+              disabled: saving,
+              style: {
+                padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                border: '1px solid ' + BORDER, background: 'transparent', color: TEXT,
+              },
+            }, '保存'),
+            detectedRoot
+              ? h('button', {
+                type: 'button',
+                onClick: () => { setRootDraft(detectedRoot); push({ qgisRoot: detectedRoot }) },
+                disabled: saving,
+                style: {
+                  padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600,
+                  border: '1px solid ' + ACCENT, background: 'transparent', color: ACCENT,
+                },
+              }, '填入检测值')
+              : null),
+          h('span', { style: { fontSize: 10.5, color: '#6f6f7a', lineHeight: 1.45 } },
+            '保存前会校验该目录下确实有 apps\\Python312\\python.exe，否则报错并保留原值。')),
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
           h('span', { style: { fontSize: 13 } }, '工具权限范围'),
           h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },

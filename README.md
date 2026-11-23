@@ -69,6 +69,10 @@ live; next to it sits the permission switch.
 
 - Tested on **Windows 10/11 with QGIS 4.2.3**. The built-in headless launcher is
   Windows-only; on other platforms start QGIS yourself (the bundle still finds it).
+- The launcher locates QGIS via the `qgisRoot` setting, `QGIS_ROOT`/`QGIS_BIN`/
+  `QGIS_PREFIX_PATH`, the OSGeo4W registry entry, `H:\QGIS`, `Program Files`, then
+  a capped sweep of drive roots. A QGIS MSI on an unusual drive is found by that
+  sweep — or set the root once in Settings → QGIS install root.
 - DSH capable of loading a bundle (Node 18+).
 
 ## Layout

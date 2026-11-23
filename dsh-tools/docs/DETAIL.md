@@ -257,7 +257,35 @@ Override the launcher with config `autostart.command` or env
 `QGIS_LIVE_AUTOSTART_CMD` (runs through `cmd.exe /d /s /c <command>`);
 tune the wait with `autostart.timeoutMs` (default 90000) or
 `QGIS_LIVE_AUTOSTART_TIMEOUT_MS`; force GUI launches with the `headless`
-config toggle off; point at a non-standard install with `QGIS_ROOT`.
+config toggle off.
+
+### Finding the installation (why a fresh machine works)
+
+The launcher needs the install root — the folder holding
+`apps\Python312\python.exe`. It tries, in order:
+
+1. the `qgisRoot` setting (Settings → QGIS install root);
+2. `QGIS_ROOT`, `QGIS_BIN` (`<root>\bin\qgis-bin.exe`), `QGIS_PREFIX_PATH`
+   (`<root>\apps\qgis`);
+3. the registry: `InstallRoot` under `HKLM|HKCU\SOFTWARE\OSGeo4W` (OSGeo4W
+   installer) and the `App Paths` default value for `qgis.exe` / `qgis-ltr.exe` /
+   `qgis-bin.exe` (third-party builds);
+4. `H:\QGIS` and `QGIS*` folders under `Program Files` / `Program Files (x86)`;
+5. `QGIS*` folders at the root of each drive, as a last sweep (capped per probe,
+   stops after ~3 s, results cached).
+
+A plain QGIS **MSI** usually leaves its uninstall entry with an empty
+`InstallLocation`, so step 3 legitimately finds nothing on such machines and the
+disk sweep in step 5 is what saves a non-standard path like `H:\QGIS`. When
+discovery still fails, the error names the setting to fill instead of guessing:
+
+> QGIS not found: set the install root in this plugin's settings (QGIS install
+> root — the folder that holds apps\Python312\python.exe), or QGIS_ROOT, or
+> install under H:\QGIS / Program Files.
+
+The setting is validated on save (it must contain that Python), applies to the
+next autostart **without a plugin reload** (`currentQgisRoot()`), and the settings
+page shows what discovery currently resolves to (`detectedRoot`).
 
 ## Security
 

@@ -38,6 +38,10 @@ export const Config = z.object({
   headless: z.boolean().default(true),
   // schemastery has no enum(); the value is validated by effectiveScope().
   scope: z.string().default('write'),
+  // QGIS installation root (the folder holding apps/Python312/python.exe). Empty
+  // means "find it": QGIS_ROOT/QGIS_BIN/QGIS_PREFIX_PATH, then the registry, then
+  // H:\QGIS and Program Files. Set it when QGIS lives somewhere unusual.
+  qgisRoot: z.string().default(''),
 })
 
 /**
@@ -69,6 +73,23 @@ export function setLiveScope(value) {
   const wanted = String(value || '').trim().toLowerCase()
   liveScope = SCOPE_NAMES.includes(wanted) ? wanted : 'write'
   return liveScope
+}
+
+/**
+ * Live QGIS install root (empty = discover it). Same reasoning as `liveScope`:
+ * saving the path in Settings must apply to the next autostart without a reload.
+ */
+let liveQgisRoot = ''
+
+/** The install root the launcher would use right now, or '' when it auto-detects. */
+export function currentQgisRoot() {
+  return liveQgisRoot
+}
+
+/** Set the live install root; returns the trimmed value actually in force. */
+export function setLiveQgisRoot(value) {
+  liveQgisRoot = String(value || '').trim().replace(/^"|"$/g, '')
+  return liveQgisRoot
 }
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
@@ -256,9 +277,105 @@ function restartInstance() {
 
 const DEFAULT_AUTOSTART_TIMEOUT_MS = 90000
 
+/** True when `root` looks like a QGIS installation (the bundle needs its Python). */
+function isQgisRoot(root) {
+  try {
+    return !!root && fs.existsSync(path.join(root, 'apps', 'Python312', 'python.exe'))
+  } catch {
+    return false
+  }
+}
+
+/** Run one `reg query`; returns '' when the key or value does not exist. */
+function regQuery(args) {
+  try {
+    const r = spawnSync('reg', args, { encoding: 'utf8', timeout: 4000, windowsHide: true })
+    return r && r.status === 0 && r.stdout ? r.stdout : ''
+  } catch {
+    return ''
+  }
+}
+
+let registryRootsCache = null
+
+/**
+ * Install roots the Windows registry knows about (best effort, once per process).
+ *
+ * Two shapes exist in the wild: the OSGeo4W installer writes `InstallRoot`, and a
+ * QGIS build that registers an App Path gives the launcher itself. A plain QGIS
+ * MSI usually leaves `InstallLocation` empty, so that key is not worth scanning —
+ * when it does carry a path, `DisplayIcon`/`InstallLocation` are read here too.
+ */
+function registryQgisRoots() {
+  if (registryRootsCache) return registryRootsCache
+  const roots = []
+  const push = (value) => {
+    const v = String(value || '').trim().replace(/^"|"$/g, '')
+    if (v) roots.push(v)
+  }
+  if (process.platform === 'win32') {
+    for (const key of [
+      'HKLM\\SOFTWARE\\OSGeo4W',
+      'HKLM\\SOFTWARE\\WOW6432Node\\OSGeo4W',
+      'HKCU\\SOFTWARE\\OSGeo4W',
+    ]) {
+      const m = /^\s*InstallRoot\s+REG_[A-Z_]+\s+(.+)$/m.exec(regQuery(['query', key]))
+      if (m) push(m[1])
+    }
+    for (const exe of ['qgis.exe', 'qgis-ltr.exe', 'qgis-bin.exe']) {
+      const out = regQuery([
+        'query',
+        `HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\${exe}`,
+        '/ve',
+      ])
+      const m = /^\s+\(Default\)\s+REG_[A-Z_]+\s+(.+)$/m.exec(out)
+      // <root>/bin/qgis-bin.exe → <root>
+      if (m) push(path.dirname(path.dirname(m[1].trim().replace(/^"|"$/g, ''))))
+    }
+  }
+  registryRootsCache = roots
+  return roots
+}
+
+let driveRootsCache = null
+
+/**
+ * `<drive>:\\QGIS*` folders, e.g. an MSI installed to `H:\\QGIS` or `D:\\QGIS 4.2.3`.
+ * A plain QGIS MSI often leaves the uninstall entry without a path, so the disk is
+ * the last honest source. Each probe is capped, and the whole sweep stops after a
+ * few seconds, so a dead network drive cannot hang a launch.
+ */
+function driveQgisRoots() {
+  if (driveRootsCache) return driveRootsCache
+  const roots = []
+  if (process.platform === 'win32') {
+    const started = Date.now()
+    for (let code = 67; code <= 90 && Date.now() - started < 3000; code += 1) {
+      const drive = `${String.fromCharCode(code)}:\\`
+      let out = ''
+      try {
+        const r = spawnSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', 'dir', '/b', '/ad', drive], {
+          encoding: 'utf8', timeout: 1200, windowsHide: true,
+        })
+        out = r && r.status === 0 && r.stdout ? r.stdout : ''
+      } catch {
+        out = ''
+      }
+      for (const line of out.split(/\r?\n/)) {
+        const name = line.trim()
+        if (/^QGIS/i.test(name)) roots.push(path.join(drive, name))
+      }
+    }
+  }
+  driveRootsCache = roots
+  return roots
+}
+
 /** Candidate QGIS installation roots (first hit wins). */
-function findQgisRoot() {
+function findQgisRoot(manual) {
   const cands = []
+  const want = String(manual || '').trim().replace(/^"|"$/g, '')
+  if (want) cands.push(want)
   if (process.env.QGIS_ROOT) cands.push(process.env.QGIS_ROOT)
   if (process.env.QGIS_BIN) cands.push(path.dirname(path.dirname(process.env.QGIS_BIN)))
   if (process.env.QGIS_PREFIX_PATH) {
@@ -268,7 +385,16 @@ function findQgisRoot() {
   }
   // The bundle only knows the Windows layout (apps/Python312/python.exe …). Elsewhere
   // we discover a running instance instead of guessing install paths.
-  if (process.platform !== 'win32') return cands.find((r) => r && fs.existsSync(r)) || null
+  if (process.platform !== 'win32') {
+    return cands.find((r) => {
+      try {
+        return r && fs.existsSync(r)
+      } catch {
+        return false
+      }
+    }) || null
+  }
+  cands.push(...registryQgisRoots())
   cands.push('H:\\QGIS')
   for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'C:\\Program Files (x86)']) {
     if (!base) continue
@@ -281,11 +407,10 @@ function findQgisRoot() {
     }
   }
   for (const root of cands) {
-    try {
-      if (root && fs.existsSync(path.join(root, 'apps', 'Python312', 'python.exe'))) return root
-    } catch {
-      /* ignore */
-    }
+    if (isQgisRoot(root)) return root
+  }
+  for (const root of driveQgisRoots()) {
+    if (isQgisRoot(root)) return root
   }
   return null
 }
@@ -384,8 +509,8 @@ function autostartLogPath(tag) {
   return path.join(dir, `qgis-${tag}.log`)
 }
 
-function launchBuiltin(mode) {
-  const root = findQgisRoot()
+function launchBuiltin(mode, manualRoot) {
+  const root = findQgisRoot(manualRoot)
   if (!root) {
     if (process.platform !== 'win32') {
       throw new Error(
@@ -393,7 +518,10 @@ function launchBuiltin(mode) {
         'dsh_qgis_driver plugin enabled — the driver finds it through ~/.qgis-live — or set ' +
         'QGIS_LIVE_AUTOSTART_CMD to your own launch command.')
     }
-    throw new Error('QGIS not found: set QGIS_ROOT (or install under H:\\QGIS / Program Files)')
+    throw new Error(
+      'QGIS not found: set the install root in this plugin\'s settings (QGIS install root — the folder ' +
+      `that holds apps\\Python312\\python.exe), or QGIS_ROOT, or install under H:\\QGIS / Program Files.` +
+      (manualRoot ? ` Checked "${manualRoot}".` : ''))
   }
   const env = qgisEnv(root)
   if (mode === 'headless') {
@@ -454,7 +582,12 @@ function resolveAutostart(config, gui = false) {
     return { command: envCommand, timeoutMs: DEFAULT_AUTOSTART_TIMEOUT_MS, env: {} }
   }
   const wantHeadless = !gui && config?.headless !== false
-  return { builtin: wantHeadless ? 'headless' : 'gui', timeoutMs: 120000, gui: !wantHeadless }
+  return {
+    builtin: wantHeadless ? 'headless' : 'gui',
+    timeoutMs: 120000,
+    gui: !wantHeadless,
+    qgisRoot: currentQgisRoot(),
+  }
 }
 
 /** Launch QGIS (built-in launcher or a custom command), then wait for a fresh registry. */
@@ -462,7 +595,7 @@ async function autostartQgis(auto, requireGui = false) {
   const startedAt = Date.now()
   if (auto.builtin) {
     try {
-      launchBuiltin(auto.builtin)
+      launchBuiltin(auto.builtin, auto.qgisRoot)
     } catch (e) {
       throw new Error(`QGIS autostart failed: ${e && e.message ? e.message : e}`)
     }
@@ -1206,6 +1339,12 @@ export const internals = {
   currentScope,
   setLiveScope,
   restartInstance,
+  findQgisRoot,
+  isQgisRoot,
+  registryQgisRoots,
+  driveQgisRoots,
+  currentQgisRoot,
+  setLiveQgisRoot,
 }
 
 export function apply(ctx, config = {}) {
@@ -1213,6 +1352,8 @@ export function apply(ctx, config = {}) {
   // Seed the live scope from the stored setting; the config endpoint re-seeds it
   // whenever the user moves the pill, without waiting for a plugin reload.
   setLiveScope(effectiveScope(config))
+  // Same for the install root: the launcher reads it through currentQgisRoot().
+  setLiveQgisRoot(config?.qgisRoot)
 
   /** Resolve the connection target: the local instance (file channel first). */
   async function resolveTarget(opts = {}) {
@@ -1335,6 +1476,9 @@ export function apply(ctx, config = {}) {
             headless: config?.headless !== false,
             scope: currentScope(),
             scopes: SCOPE_NAMES,
+            qgisRoot: currentQgisRoot(),
+            // What the launcher would use right now; null when nothing was found.
+            detectedRoot: findQgisRoot(currentQgisRoot()),
           }
           if (request.method !== 'POST') {
             return new Response(JSON.stringify(current), {
@@ -1364,15 +1508,33 @@ export function apply(ctx, config = {}) {
             scope = wanted
           }
           const previous = currentScope()
+          const previousRoot = currentQgisRoot()
+          let qgisRoot = previousRoot
+          if (typeof body.qgisRoot === 'string') {
+            qgisRoot = body.qgisRoot.trim().replace(/^"|"$/g, '')
+            if (qgisRoot && !isQgisRoot(qgisRoot)) {
+              return new Response(JSON.stringify({
+                ok: false,
+                error: `that folder does not look like a QGIS installation: ${qgisRoot} ` +
+                  `(expected ${path.join(qgisRoot, 'apps', 'Python312', 'python.exe')})`,
+                detectedRoot: findQgisRoot(),
+              }), {
+                status: 400,
+                headers: { 'content-type': 'application/json' },
+              })
+            }
+          }
           setLiveScope(scope)
+          setLiveQgisRoot(qgisRoot)
           try {
-            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless, scope }))
-            return new Response(JSON.stringify({ ok: true }), {
+            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless, scope, qgisRoot }))
+            return new Response(JSON.stringify({ ok: true, detectedRoot: findQgisRoot(qgisRoot) }), {
               status: 200,
               headers: { 'content-type': 'application/json' },
             })
           } catch (e) {
             setLiveScope(previous)
+            setLiveQgisRoot(previousRoot)
             return new Response(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }), {
               status: 400,
               headers: { 'content-type': 'application/json' },
