@@ -14,6 +14,13 @@
 > be merged upstream. Copyright in the original work remains with its author.
 > See `LICENSE` and `NOTICE` at the repository root.
 
+> **搭配使用.** 该插件建议与 `@local/dsh-qgis-driver`（DeepSeek Harness 侧 bundle）
+> 组合使用：本插件只提供服务端，工具调用由那个 bundle 发起。
+>
+> **Use it with the bundle.** This plugin is the service side only; it is meant to be
+> driven by the `@local/dsh-qgis-driver` bundle in DeepSeek Harness, which supplies the
+> `qgis_*` tools.
+
 ## What it is
 
 A headless execution service inside QGIS: it turns the running process into a
