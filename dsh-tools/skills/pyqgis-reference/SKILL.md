@@ -160,6 +160,43 @@ processing.run("native:buffer", {
 cheaper and more reliable than guessing parameter names. Long runs belong in
 `submit_qgis_async` (threads) or the `qgis-batch-parallel` skill, never in a 30-second sync call.
 
+## Kriging: pull the package, do not substitute
+
+Nothing in the installed providers does kriging (SAGA is gone in QGIS 4). `pykrige` is a pure-Python
+wheel and takes seconds to install into the QGIS interpreter, so install it once instead of quietly
+using IDW and calling the result kriging. `execute_qgis_sync` needs the `danger` scope for this,
+because the first step shells out:
+
+```python
+import subprocess, sys
+r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                    "--no-input", "pykrige"], capture_output=True, text=True, timeout=180)
+result = {"ok": r.returncode == 0, "tail": (r.stdout or r.stderr).strip().splitlines()[-1:]}
+```
+
+Then interpolate onto a grid and write a GeoTIFF with the GDAL bindings that already ship inside QGIS:
+
+```python
+import numpy as np
+from pykrige.ok import OrdinaryKriging
+from osgeo import gdal, osr
+
+ok = OrdinaryKriging(xs, ys, zs, variogram_model="spherical", verbose=False, enable_plotting=False)
+zi, variance = ok.execute("grid", grid_x, grid_y)      # both are grids, not vectors
+arr = np.asarray(zi, dtype=np.float32)
+
+ds = gdal.GetDriverByName("GTiff").Create(path, arr.shape[1], arr.shape[0], 1, gdal.GDT_Float32)
+sr = osr.SpatialReference(); sr.ImportFromEPSG(crs_epsg)
+ds.SetProjection(sr.ExportToWkt())
+ds.SetGeoTransform([xmin, (xmax - xmin) / arr.shape[1], 0, ymax, 0, -(ymax - ymin) / arr.shape[0]])
+ds.GetRasterBand(1).WriteArray(arr); ds = None
+```
+
+Load the result with `qgis_layer add path=<tif>` and read it back like any other raster. If the
+machine is offline, say so and offer IDW (`qgis:idwinterpolation`) as a different method — never
+report an IDW surface as kriging. `variance` is the kriging variance grid; it is the reason to use
+kriging at all, so write it as a second band or a second file when the product needs uncertainty.
+
 ## Rendering a map image
 
 ```python

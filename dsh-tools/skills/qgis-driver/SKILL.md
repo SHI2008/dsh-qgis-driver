@@ -115,8 +115,9 @@ install; re-check on the target machine with `list keyword=<word>`):
   `accumulation`, `drainage`, `basin` and `stream` together.
 - Slope / aspect / curvature: `native:slope`, `gdal:slope`, `grass:r.slope.aspect`.
 - Interpolation: `qgis:idwinterpolation`, `qgis:tininterpolation`. Kriging is the one genuine gap —
-  nothing in `3d`/`gdal`/`grass`/`native`/`qgis` provides it, so say so instead of substituting a
-  different method and calling it kriging.
+  nothing in `3d`/`gdal`/`grass`/`native`/`qgis` provides it. `pykrige` installs into the QGIS
+  interpreter in seconds and the recipe is in the `pyqgis-reference` skill ("Kriging: pull the
+  package, do not substitute"); that call needs the `danger` scope. Never report IDW as kriging.
 - Raster algebra and reclassification: `gdal:rastercalculator`, `native:reclassifybytable`.
 
 ## Calling GRASS / GDAL / native algorithms
