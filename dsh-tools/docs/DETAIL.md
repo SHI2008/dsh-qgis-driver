@@ -270,18 +270,20 @@ The launcher needs the install root — the folder holding
 3. the registry: `InstallRoot` under `HKLM|HKCU\SOFTWARE\OSGeo4W` (OSGeo4W
    installer) and the `App Paths` default value for `qgis.exe` / `qgis-ltr.exe` /
    `qgis-bin.exe` (third-party builds);
-4. `H:\QGIS` and `QGIS*` folders under `Program Files` / `Program Files (x86)`;
-5. `QGIS*` folders at the root of each drive, as a last sweep (capped per probe,
-   stops after ~3 s, results cached).
+4. `QGIS*` folders under the `ProgramFiles` / `ProgramW6432` /
+   `ProgramFiles(x86)` folders the process reports;
+5. `QGIS*` folders at the root of each drive, as a last sweep (each probe capped,
+   stops at the first usable root or after ~3 s, cached).
 
-A plain QGIS **MSI** usually leaves its uninstall entry with an empty
-`InstallLocation`, so step 3 legitimately finds nothing on such machines and the
-disk sweep in step 5 is what saves a non-standard path like `H:\QGIS`. When
-discovery still fails, the error names the setting to fill instead of guessing:
+Nothing is hardcoded to one machine: no drive letter and no `C:\Program Files`
+literal appears in the lookup — a QGIS MSI on `E:\QGIS 4.2.3` or `H:\QGIS` is
+found by the sweep in step 5. A plain QGIS **MSI** usually leaves its uninstall
+entry with an empty `InstallLocation`, so step 3 legitimately finds nothing on
+such machines and the sweep is what saves them. When discovery still fails, the
+error names the setting to fill instead of guessing:
 
 > QGIS not found: set the install root in this plugin's settings (QGIS install
-> root — the folder that holds apps\Python312\python.exe), or QGIS_ROOT, or
-> install under H:\QGIS / Program Files.
+> root — the folder that holds apps\Python312\python.exe), or QGIS_ROOT.
 
 The setting is validated on save (it must contain that Python), applies to the
 next autostart **without a plugin reload** (`currentQgisRoot()`), and the settings
@@ -556,7 +558,8 @@ What has actually been run, as opposed to what might work:
 | Windows 10/11 | 3.44 LTR | same launcher, plugin code | not tested |
 | Linux / macOS | any | plugin running inside QGIS (discovery through `~/.qgis-live`), or `QGIS_LIVE_AUTOSTART_CMD` | not tested; the built-in launcher is Windows-only and says so instead of guessing paths |
 
-`findQgisRoot()` only walks the Windows layout (`H:\QGIS`, `%ProgramFiles%\QGIS*`,
+`findQgisRoot()` only walks the Windows layout (`%ProgramFiles%\QGIS*`, drive-root
+`QGIS*` dirs,
 `apps/Python312/python.exe`). Elsewhere, start QGIS yourself with the plugin enabled and
 the driver finds it; the error text says exactly that.
 

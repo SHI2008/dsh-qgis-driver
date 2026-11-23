@@ -82,7 +82,7 @@ round-trip, while hand-written pyeval is one round-trip per step.
    A4 export at 200 dpi does not fit in a minute either. Anything longer belongs in
    `submit_qgis_async` shards, not in a raised `QGIS_LIVE_EVAL_TIMEOUT`.
 12. **Never write a `.py` file and never start a second QGIS.** The tempting loop — dump a
-    script to temp, run it with `H:\QGIS\apps\Python312\python.exe`, read the output — creates
+    script to temp, run it with the QGIS-bundled `python.exe`, read the output — creates
     a second `QgsApplication`, fights the live instance over the same data, renders fonts
     differently, and returns results in a shape nothing else can read. The driver *is* the
     execution path: `execute_qgis_sync` for main-thread PyQGIS, `submit_qgis_async tasks[]`

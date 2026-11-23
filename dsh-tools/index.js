@@ -39,8 +39,8 @@ export const Config = z.object({
   // schemastery has no enum(); the value is validated by effectiveScope().
   scope: z.string().default('write'),
   // QGIS installation root (the folder holding apps/Python312/python.exe). Empty
-  // means "find it": QGIS_ROOT/QGIS_BIN/QGIS_PREFIX_PATH, then the registry, then
-  // H:\QGIS and Program Files. Set it when QGIS lives somewhere unusual.
+  // means "find it": env vars, registry, Program Files, then a bounded sweep of
+  // drive roots. Set it when QGIS lives somewhere those do not look.
   qgisRoot: z.string().default(''),
 })
 
@@ -340,17 +340,18 @@ function registryQgisRoots() {
 let driveRootsCache = null
 
 /**
- * `<drive>:\\QGIS*` folders, e.g. an MSI installed to `H:\\QGIS` or `D:\\QGIS 4.2.3`.
- * A plain QGIS MSI often leaves the uninstall entry without a path, so the disk is
- * the last honest source. Each probe is capped, and the whole sweep stops after a
- * few seconds, so a dead network drive cannot hang a launch.
+ * `<drive>:\\QGIS*` folders, e.g. an MSI installed to `E:\\QGIS 4.2.3`. A plain QGIS
+ * MSI usually leaves its uninstall entry without a path, so the disk is the last
+ * honest source. Each probe is capped, and the sweep stops at the first usable
+ * root (or after ~3 s), so a dead network drive cannot hang a launch.
  */
 function driveQgisRoots() {
   if (driveRootsCache) return driveRootsCache
   const roots = []
   if (process.platform === 'win32') {
     const started = Date.now()
-    for (let code = 67; code <= 90 && Date.now() - started < 3000; code += 1) {
+    outer: for (let code = 67; code <= 90; code += 1) {
+      if (Date.now() - started > 3000) break
       const drive = `${String.fromCharCode(code)}:\\`
       let out = ''
       try {
@@ -363,7 +364,10 @@ function driveQgisRoots() {
       }
       for (const line of out.split(/\r?\n/)) {
         const name = line.trim()
-        if (/^QGIS/i.test(name)) roots.push(path.join(drive, name))
+        if (!/^QGIS/i.test(name)) continue
+        const root = path.join(drive, name)
+        roots.push(root)
+        if (isQgisRoot(root)) break outer
       }
     }
   }
@@ -395,8 +399,11 @@ function findQgisRoot(manual) {
     }) || null
   }
   cands.push(...registryQgisRoots())
-  cands.push('H:\\QGIS')
-  for (const base of [process.env.ProgramFiles, 'C:\\Program Files', 'C:\\Program Files (x86)']) {
+  for (const base of [
+    process.env.ProgramFiles,
+    process.env.ProgramW6432,
+    process.env['ProgramFiles(x86)'],
+  ]) {
     if (!base) continue
     try {
       for (const d of fs.readdirSync(base)) {
@@ -520,7 +527,7 @@ function launchBuiltin(mode, manualRoot) {
     }
     throw new Error(
       'QGIS not found: set the install root in this plugin\'s settings (QGIS install root — the folder ' +
-      `that holds apps\\Python312\\python.exe), or QGIS_ROOT, or install under H:\\QGIS / Program Files.` +
+      `that holds apps\\Python312\\python.exe), or QGIS_ROOT.` +
       (manualRoot ? ` Checked "${manualRoot}".` : ''))
   }
   const env = qgisEnv(root)
