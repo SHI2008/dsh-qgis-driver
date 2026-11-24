@@ -12,7 +12,7 @@ import fs from 'node:fs'
 
 import { internals } from '../index.js'
 import {
-  MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner,
+  MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner, preflightBatch,
   SCOPES, DANGER_ACTIONS, WRITE_ACTIONS, scopeRefusal, assertScope, requiredScope,
 } from '../tools.js'
 
@@ -148,6 +148,18 @@ await ok('a batch list satisfies the per-item requirement', () => {
   // …but without the list the parameter is still required.
   assert.throws(() => checkRequired('qgis_analysis', 'run', {}), /missing parameter "algorithm"/)
   assert.throws(() => checkRequired('qgis_layout', 'add_item', { layout_name: 'L' }), /missing parameter "kind"/)
+})
+
+// A batch runs item by item, so a bad item used to leave the earlier ones behind and
+// the retry duplicated them. Preflight rejects the batch before anything changes.
+await ok('a malformed batch item fails the batch before it changes anything', () => {
+  assert.equal(preflightBatch('qgis_layout', 'add_item', [{ kind: 'map', width: 160 }, { kind: 'legend' }]), null)
+  assert.match(
+    preflightBatch('qgis_layout', 'add_item', [{ kind: 'map', width: 160 }, { kind: 'scalebar', width: 60 }]),
+    /item 2: kind=scalebar sizes itself/)
+  assert.match(preflightBatch('qgis_layout', 'add_item', [{ kind: 'map' }]), /item 1: kind=map needs width/)
+  assert.match(preflightBatch('qgis_layout', 'add_item', [{ kind: 'rect', width: 10 }]), /kind=rect needs width and height/)
+  assert.equal(preflightBatch('qgis_layer', 'export', ['a']), null)
 })
 
 // ---------- write lease: which actions serialise

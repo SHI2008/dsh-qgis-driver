@@ -154,6 +154,46 @@ What help cannot tell you, and how to handle it:
   `unwritten_outputs` names anything the algorithm claimed yet never wrote. Pass `output=<file>`,
   or `params={"OUTPUT": "<file>"}` to choose the path yourself.
 
+## Recipes: the order that works first time
+
+Follow a recipe instead of improvising. Each line is one tool call, and the argument names are the
+ones the schema accepts — passing `layer_name`, `layout_name` where `layout` is expected, or a bare
+string where an array is expected is the most common first-call failure.
+
+**A thematic map from a layer that already exists**
+
+1. `qgis_project action=info` — empty project? nothing to map yet.
+2. `qgis_layer action=list` — use the exact names it returns.
+3. `qgis_layer action=style layer="<name>" field="<field>" classes=5` (or `action=classify`).
+4. `qgis_layout action=create layout_name="Map"`.
+5. `qgis_layout action=add_item layout="Map" kind=map fit_layer="<name>" x=15 y=15 width=160`.
+6. `qgis_layout action=add_item layout="Map" kind=legend x=185 y=15` (width defaults to 60 mm).
+7. `qgis_layout action=add_item layout="Map" kind=scalebar x=15 y=190 segments=2 units_per_segment=5`.
+8. `qgis_layout action=export layout="Map" formats=["png","pdf"] inline=true`.
+
+**Analysis followed by a map**
+
+1. `qgis_analysis action=help algorithm="<id>"` — parameter names and enum options.
+2. `qgis_analysis action=run algorithm="<id>" params={...} output="C:/path/result.tif"` — an
+   omitted raster sink gets a file and appears in `written_outputs`.
+3. `qgis_layer action=raster_style layer="<result>" mode=pseudocolor classes=5`.
+4. Continue with the map recipe from step 4.
+
+**Several objects at once** — `layers=[...]`, `paths=[{path:...}, ...]`, `items=[{...}, ...]`,
+`updates=[...]`, `runs=[{...}]`, `layouts=[...]`: one call, `{count, results}` back.
+
+**Long job** — `submit_qgis_async tasks=[{name,code}, ...] max_workers=4`, then
+`check_qgis_task task_ids=[...]` until every `status` is `done`.
+
+## Write no scripts
+
+The driver is the script runner. Do not create a `.py` file, do not call `qgis_process`, and do not
+start a second QGIS: every one of those leaves the project you are editing. `execute_qgis_sync`
+already runs inside the live project with `prj`, `P` (`prj` is the project, `P` the call's own
+arguments) and `_prj_extent()`, and `submit_qgis_async` runs pure Python on worker threads. A
+fragment that fails should be rewritten from the rename table, not retried verbatim, and
+`initQgis()` / `QgsApplication(...)` are rejected by the service on purpose.
+
 ## Availability
 
 All ten tools are registered globally: every agent — including subagents — can call them,

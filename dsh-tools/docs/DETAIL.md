@@ -206,6 +206,11 @@ back with something a model can correct in one step:
   without `kind` fails locally, so a wrong first call costs a sentence instead of a QGIS call.
 - Every failure that does come from QGIS is prefixed with `tool action:` so one line names the
   call that failed.
+- An unknown parameter is rejected by name: `qgis_layer: unknown parameter "layer_name" — did you
+  mean "layer"?; this tool takes: action, layer, layers, ...`. A model that guesses a name from
+  memory gets the real one back instead of having the argument silently dropped.
+- A scalar where the schema says array is wrapped (`layers: "roads"` becomes `["roads"]`), and a
+  JSON string where it says object is parsed. Guessing the container type stops being fatal.
 
 ### Descriptions carry the calling contract
 
@@ -505,7 +510,9 @@ has), so yesterday's incident is readable without going to the filesystem.
 `scalebar` follows the linked map's scale, so `width`/`height` are rejected with an
 explanation (the numbers would be ignored) and a coarse `units_per_segment` is shrunk
 until the bar fits inside the page instead of exporting a bar that runs off the sheet.
-`legend` without `layers` mirrors the project instead of coming out empty. Item
+`legend` without `layers` mirrors the project instead of coming out empty, and without `width`
+it takes 60 mm — the size that sits beside a 160 mm map on A4 — instead of refusing the call.
+Item
 `index` follows scene order (newest first) and therefore shifts as items are added —
 `add_item` returns a `uuid` for that reason, and `update_item` accepts either.
 

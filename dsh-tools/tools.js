@@ -830,7 +830,8 @@ layers = [L(n) for n in (P.get('layers') or [])]
 item = None
 if kind == 'map':
     if w is None:
-        raise ValueError('kind=map requires width')
+        raise ValueError('kind=map requires width — the item width in mm (e.g. 160); '
+                         'height follows the layer aspect unless you pass it too')
     m = QgsLayoutItemMap(lay)
     lay.addLayoutItem(m)
     m.attemptMove(QgsLayoutPoint(x, y, MM()))
@@ -869,7 +870,8 @@ if kind == 'map':
     item = m
 elif kind == 'legend':
     if w is None:
-        raise ValueError('kind=legend requires width')
+        # 60 mm fits beside a map on A4; refusing the call taught nothing.
+        w = 60.0
     lg = QgsLayoutItemLegend(lay)
     base = first_map(lay)
     if base is not None:
@@ -877,11 +879,12 @@ elif kind == 'legend':
     _legend_title = P.get('title') or '图例'
     lay.addLayoutItem(lg)
     lg.attemptMove(QgsLayoutPoint(x, y, MM()))
+    # bound before the branch: the height estimate below walks the same root
+    root = lg.model().rootGroup()
     if layers:
         # An explicit list means an explicit legend; otherwise keep the model live so the
         # legend mirrors the project instead of coming out empty.
         lg.setAutoUpdateModel(False)
-        root = lg.model().rootGroup()
         for ch in list(root.children()):
             root.removeChildNode(ch)
         for lyr in layers:
@@ -994,7 +997,7 @@ elif kind == 'text':
     item = t
 elif kind == 'rect':
     if w is None or h is None:
-        raise ValueError('kind=rect requires width and height')
+        raise ValueError('kind=rect requires width and height in mm (e.g. 160 and 100)')
     s = QgsLayoutItemShape(lay)
     s.setShapeType(QgsLayoutItemShape.Rectangle)
     s.setSymbol(QgsFillSymbol.createSimple({'color': P.get('color') or '#ffffff',
@@ -1802,6 +1805,38 @@ export function checkRequired(tool, action, a) {
   }
 }
 
+// Shape rules a batch item can violate. A batch runs item by item, so an item that
+// fails halfway leaves the earlier ones behind; the model retries and duplicates them.
+// These checks run before the round-trip, so a malformed batch changes nothing.
+const PREFLIGHT = {
+  'qgis_layout:add_item': (item, i) => {
+    const it = typeof item === 'string' ? { kind: item } : item || {};
+    const kind = String(it.kind ?? '');
+    const at = `item ${i + 1}`;
+    if (kind === 'scalebar' && (it.width != null || it.height != null)) {
+      return `${at}: kind=scalebar sizes itself from the linked map (segments/units_per_segment) — drop width/height`;
+    }
+    if (kind === 'map' && it.width == null) {
+      return `${at}: kind=map needs width in mm (e.g. 160); height follows the layer aspect`;
+    }
+    if (kind === 'rect' && (it.width == null || it.height == null)) {
+      return `${at}: kind=rect needs width and height in mm (e.g. 160 and 100)`;
+    }
+    return null;
+  },
+};
+
+/** First problem in a batch, or null. Exported for tests. */
+export function preflightBatch(tool, action, items) {
+  const check = PREFLIGHT[tool + ':' + action];
+  if (!check || !Array.isArray(items)) return null;
+  for (let i = 0; i < items.length; i += 1) {
+    const problem = check(items[i], i);
+    if (problem) return problem;
+  }
+  return null;
+}
+
 export function batchItems(args, spec) {
   const raw = args?.[spec.key];
   if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -2037,11 +2072,17 @@ export function registerConsolidatedTools(deps) {
       delete a.layout;
       delete a.layout_name;
     }
+    // `label_field` is the name `annotate` uses for the same argument.
+    if (a.field === undefined && a.label_field !== undefined) a.field = a.label_field;
     if (tool) checkRequired(tool, String(a.action ?? ''), a);
     const scopeChecked = String(a.action ?? '');
     assertScope(activeScope(), tool, scopeChecked, a);
     const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;
     const items = spec ? batchItems(a, spec) : null;
+    if (items) {
+      const problem = preflightBatch(tool, String(a.action ?? ''), items);
+      if (problem) throw new Error(`${tool} ${String(a.action ?? '')}: nothing was changed — ${problem}; fix the items and retry`);
+    }
     const payload = items ? batchBody(body, spec) : body;
     if (items) a[spec.key] = items;
     const code = preludeFor(a) + payload;

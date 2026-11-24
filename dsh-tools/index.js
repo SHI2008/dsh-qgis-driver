@@ -892,7 +892,9 @@ function tidyError(input) {
   if (!hint) hint = hints[type] || ''
   let out = type ? `${type}: ${body}` : body
   if (hint) out += ` (${hint})`
-  if (out.length > 160) out = out.slice(0, 156) + '...'
+  // 400, not 160: our own validation messages carry the fix ("... drop them") and a
+  // truncated message made a model retry the same wrong call.
+  if (out.length > 400) out = out.slice(0, 396) + '...'
   return out
 }
 
@@ -998,12 +1000,34 @@ function guardExecute(def) {
       }
     }
     const props = (def.parameters && def.parameters.properties) || {}
+    const known = Object.keys(props)
+    // The host hands us a frozen object, so normalize into a copy. A model without a reasoning
+    // budget passes "layers": "roads" and "params": "{...}" as readily as the typed form; the
+    // intent is unambiguous, so coerce instead of failing.
+    const norm = { ...(args || {}) }
+    const unknown = []
+    for (const [key, value] of Object.entries(norm)) {
+      if (!known.includes(key)) { unknown.push(key); continue }
+      const schema = props[key] || {}
+      if (schema.type === 'array' && value != null && !Array.isArray(value)) {
+        norm[key] = [value]
+      } else if (schema.type === 'object' && typeof value === 'string') {
+        try { norm[key] = JSON.parse(value) } catch { /* leave it; the tool body reports */ }
+      }
+    }
+    if (unknown.length) {
+      const key = unknown[0]
+      const near = nearestName(key, known)
+      throw new Error(`${def.name}: unknown parameter "${key}"`
+        + (near ? ` — did you mean "${near}"?` : '')
+        + `; this tool takes: ${known.join(', ')}`)
+    }
     for (const [key, schema] of Object.entries(props)) {
-      if (key === 'action' || !schema || args?.[key] == null) continue
+      if (key === 'action' || !schema || norm[key] == null) continue
       const allowed = Array.isArray(schema.enum) ? schema.enum
         : (schema.type === 'array' && schema.items && Array.isArray(schema.items.enum) ? schema.items.enum : null)
       if (!allowed) continue
-      const values = Array.isArray(args[key]) ? args[key] : [args[key]]
+      const values = Array.isArray(norm[key]) ? norm[key] : [norm[key]]
       for (const value of values) {
         if (typeof value !== 'string' || allowed.includes(value)) continue
         const near = nearestName(value, allowed)
@@ -1012,7 +1036,7 @@ function guardExecute(def) {
       }
     }
     try {
-      return await inner(args, exec)
+      return await inner(norm, exec)
     } catch (e) {
       throw new Error(explainFailure(def, action, e))
     }
