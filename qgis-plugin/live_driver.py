@@ -68,6 +68,38 @@ _GROUP_POOLS = []
 # task_id -> Future for shards that have not started yet (cancel support).
 _GROUP_FUTURES = {}
 
+# Whether the code running in *this* thread sits inside processing.run(). Python
+# cannot stop a C++ call, so a cancel that lands there can only mean "finish, then
+# stop". _task_cancel reports which case the caller is actually in.
+_CPP_STATE = threading.local()
+
+
+def _in_cpp() -> bool:
+    return getattr(_CPP_STATE, "depth", 0) > 0
+
+
+def patch_processing_run() -> bool:
+    """Wrap processing.run once so cancel can tell C++ work from Python work."""
+    try:
+        import processing
+    except Exception:
+        return False
+    if getattr(processing, "_dsh_wrapped", False):
+        return True
+    original = processing.run
+
+    def run(*args, **kwargs):
+        depth = getattr(_CPP_STATE, "depth", 0)
+        _CPP_STATE.depth = depth + 1
+        try:
+            return original(*args, **kwargs)
+        finally:
+            _CPP_STATE.depth = depth
+
+    processing._dsh_wrapped = True
+    processing.run = run
+    return True
+
 # Kinds that use plugin_id as their own command argument, not as a route.
 # These are always handled by this driver itself.
 _LOCAL_TYPES = {"status", "pyeval", "pyeval_async", "pyeval_group", "task_status",
@@ -172,13 +204,14 @@ class WriteGate:
     def acquire(self, owner, reason="", ttl=None):
         with self._lock:
             self._drop_if_expired()
+            if self._owner and self._owner != owner:
+                # A waiter must not rewrite the holder's lease length.
+                return {"ok": False, "busy": True, **self._snapshot()}
             if ttl:
                 try:
                     self._ttl = max(5.0, float(ttl))
                 except Exception:  # nosec B110  # keep the previous ttl
                     pass
-            if self._owner and self._owner != owner:
-                return {"ok": False, "busy": True, **self._snapshot()}
             self._owner = owner or "unknown"
             self._since = time.monotonic()
             self._reason = reason or ""
@@ -665,6 +698,10 @@ class LiveDriver:
         # in-memory counters for `status` (the audit jsonl is the durable copy)
         self.stats = {"calls": 0, "errors": 0, "last_error": None}
         self.gate = WriteGate()
+        try:
+            patch_processing_run()
+        except Exception:
+            pass
         # command currently running on the GUI thread (read by the heartbeat thread)
         self._busy = {}
         self._beat_t0 = time.time()
@@ -1033,7 +1070,21 @@ class LiveDriver:
                         pass
                     if fut.cancelled() or fut.done():
                         _GROUP_FUTURES.pop(tid, None)
-                results.append(self.tasks.abort(tid))
+                res = self.tasks.abort(tid)
+                if res.get("cancelled"):
+                    res["stopped_by"] = "queue"
+                elif res.get("status") == "running":
+                    # "will stop soon" and "cannot be stopped" must not look alike.
+                    if _in_cpp():
+                        res["stopped_by"] = "uninterruptible"
+                        res["reason"] = ("it is inside processing.run (C++), so the algorithm "
+                                         "cannot be interrupted and will run to completion; "
+                                         "wait for it, or restart the instance to abandon it")
+                    else:
+                        res["stopped_by"] = "cooperative"
+                        res["reason"] = ("it checks dsh_should_stop() between steps, so it stops "
+                                         "at the next checkpoint")
+                results.append(res)
             reply({"id": cid, "result": {"count": len(results), "results": results}})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})

@@ -338,7 +338,7 @@ window.__ModuleLoader__.load({
     }
 
     function SettingsPanel(props) {
-      const [form, setForm] = React.useState({ dock: false, headless: true, scope: 'write', qgisRoot: '' })
+      const [form, setForm] = React.useState({ dock: false, headless: true, scope: 'write', qgisRoot: '', allowPaths: '', allowAlgorithms: '' })
       const [detectedRoot, setDetectedRoot] = React.useState(null)
       const [rootDraft, setRootDraft] = React.useState('')
       const [loaded, setLoaded] = React.useState(false)
@@ -359,6 +359,8 @@ window.__ModuleLoader__.load({
                 headless: c?.headless !== false,
                 scope: typeof c?.scope === 'string' ? c.scope : 'write',
                 qgisRoot: typeof c?.qgisRoot === 'string' ? c.qgisRoot : '',
+                allowPaths: typeof c?.allowPaths === 'string' ? c.allowPaths : '',
+                allowAlgorithms: typeof c?.allowAlgorithms === 'string' ? c.allowAlgorithms : '',
               })
               setRootDraft(typeof c?.qgisRoot === 'string' ? c.qgisRoot : '')
               setDetectedRoot(typeof c?.detectedRoot === 'string' ? c.detectedRoot : null)
@@ -380,6 +382,8 @@ window.__ModuleLoader__.load({
           headless: !!form.headless,
           scope: form.scope,
           qgisRoot: form.qgisRoot,
+          allowPaths: form.allowPaths,
+          allowAlgorithms: form.allowAlgorithms,
           ...patch,
         }
         setForm(next)
@@ -423,6 +427,38 @@ window.__ModuleLoader__.load({
             h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
               '自动拉起 QGIS 时不显示窗口；只有需要地图画布的工具（平移/缩放/截图）才启动 GUI。关闭则总是启动 GUI。')),
           Switch({ checked: !!form.headless, onChange: (v) => push({ headless: v }) })),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
+          h('span', { style: { fontSize: 13 } }, '可写入的目录'),
+          h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
+            '分号或换行分隔。填了就只允许把文件写到这些目录下；留空表示不限制。只约束结构化工具（导出、导出布局、分析输出），不约束 danger 档的裸 Python。'),
+          h('input', {
+            type: 'text',
+            value: form.allowPaths,
+            placeholder: 'D:\\gis\\out; E:\\\\deliverables',
+            spellCheck: false,
+            onChange: (e) => setForm({ ...form, allowPaths: e.target.value }),
+            onKeyDown: (e) => { if (e.key === 'Enter') push({ allowPaths: form.allowPaths }) },
+            style: {
+              padding: '6px 8px', borderRadius: 6,
+              border: '1px solid ' + BORDER, background: '#141419', color: TEXT, fontSize: 12,
+            },
+          })),
+        h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
+          h('span', { style: { fontSize: 13 } }, '允许的算法'),
+          h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },
+            '空格或逗号分隔，可用后缀通配。填了就只允许跑列出的算法；留空表示不限制。例：native:* grass:r.watershed gdal:slope'),
+          h('input', {
+            type: 'text',
+            value: form.allowAlgorithms,
+            placeholder: 'native:* gdal:*',
+            spellCheck: false,
+            onChange: (e) => setForm({ ...form, allowAlgorithms: e.target.value }),
+            onKeyDown: (e) => { if (e.key === 'Enter') push({ allowAlgorithms: form.allowAlgorithms }) },
+            style: {
+              padding: '6px 8px', borderRadius: 6,
+              border: '1px solid ' + BORDER, background: '#141419', color: TEXT, fontSize: 12,
+            },
+          })),
         h('div', { style: { display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 18 } },
           h('span', { style: { fontSize: 13 } }, 'QGIS 安装根目录'),
           h('span', { style: { fontSize: 11, color: MUTED, lineHeight: 1.4 } },

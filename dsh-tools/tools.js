@@ -8,6 +8,9 @@
 // PyQGIS snippet on the QGIS main thread (file channel or REST), `runCmd`
 // dispatches a JSON command through /api/cmd.
 
+import { posix, dirname } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+
 const PRELUDE = `
 import json, os, shutil, tempfile, time, secrets, base64
 from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
@@ -374,6 +377,9 @@ if not path:
     if not os.path.isdir(_dir):
         os.makedirs(_dir, exist_ok=True)
     path = os.path.join(_dir, str(l.name()) + _ext)
+_d = os.path.dirname(path)
+if _d and not os.path.isdir(_d):
+    os.makedirs(_d, exist_ok=True)
 if os.path.exists(path):
     os.remove(path)
 opts = QgsVectorFileWriter.SaveVectorOptions()
@@ -1764,6 +1770,48 @@ function isUnder(key) {
   return !/^(list|info|help|query|table|selected|describe|status|log|render|screenshot)$/.test(action)
 }
 
+/**
+ * A shard plan is the resume record for `tasks[]`: one JSON file naming each
+ * shard and how far it got. Writing it here (and merging status later) means a
+ * failed group can be resubmitted without re-running the shards that finished.
+ */
+export function readPlan(file) {
+  if (!file || !existsSync(file)) return { shards: {} }
+  try {
+    const raw = JSON.parse(readFileSync(file, 'utf8'))
+    return { shards: (raw && typeof raw.shards === 'object' && raw.shards) || {} }
+  } catch (e) {
+    throw new Error(`cannot read the plan file ${file}: ${e && e.message ? e.message : String(e)}`)
+  }
+}
+
+export function writePlan(file, plan) {
+  if (!file) return false
+  try {
+    const dir = dirname(file)
+    if (dir) mkdirSync(dir, { recursive: true })
+    writeFileSync(file, JSON.stringify(plan, null, 2))
+    return true
+  } catch (e) {
+    throw new Error(`cannot write the plan file ${file}: ${e && e.message ? e.message : String(e)}`)
+  }
+}
+
+/** Shards already finished in the plan survive a resubmission. */
+export function pendingShards(tasks, plan, resume) {
+  const shards = (plan && plan.shards) || {}
+  if (!resume) return { run: tasks, skip: [] }
+  const run = []
+  const skip = []
+  for (const t of tasks) {
+    const name = String((t && t.name) || '')
+    const done = name && shards[name] && /^(completed|done)$/.test(String(shards[name].status || ''))
+    if (done) skip.push(name)
+    else run.push(t)
+  }
+  return { run, skip }
+}
+
 const SCOPE_RANK = { read: 0, write: 1, danger: 2 }
 
 /** null when the call is allowed, otherwise the message the model reads. */
@@ -1787,6 +1835,81 @@ export function assertScope(scope, tool, action, args) {
   if (message) {
     const err = new Error(message)
     err.code = 'SCOPE_DENIED'
+    throw err
+  }
+}
+
+/** Split an operator-typed list ("a; b", "a, b", newlines) into entries. */
+export function parseList(value) {
+  return String(value || '')
+    .split(/[;,\n]+/)
+    .map((one) => one.trim())
+    .filter(Boolean)
+}
+
+/** True when `target` sits inside one of `dirs` (no dirs = the rule is off). */
+export function pathAllowed(target, dirs) {
+  const list = parseList(dirs)
+  if (!list.length) return true
+  const wanted = String(target || '').trim().replace(/^"|"$/g, '')
+  if (!wanted) return true
+  const norm = (one) => posix.normalize(String(one || '').replace(/\\/g, '/')).replace(/\/$/, '').toLowerCase()
+  const here = norm(wanted)
+  return list.some((dir) => {
+    const base = norm(dir)
+    return here === base || here.startsWith(base + '/')
+  })
+}
+
+/** Algorithm patterns also split on spaces: `native:* grass:r.*` reads as two. */
+export function parsePatterns(value) {
+  return String(value || '')
+    .split(/[;,\s]+/)
+    .map((one) => one.trim())
+    .filter(Boolean)
+}
+
+/** True when `id` matches one of the patterns (`native:*` allows the prefix). */
+export function algorithmAllowed(id, patterns) {
+  const list = parsePatterns(patterns)
+  if (!list.length) return true
+  const name = String(id || '').trim().toLowerCase()
+  if (!name) return true
+  return list.some((raw) => {
+    const one = raw.toLowerCase()
+    if (one.endsWith('*')) return name.startsWith(one.slice(0, -1))
+    return name === one
+  })
+}
+
+/** null when the call is inside the operator's narrowing rules, else the message. */
+export function allowRefusal(tool, action, args, allowPaths, allowAlgorithms) {
+  const label = action ? `${tool} ${action}` : tool
+  const algo = args && args.algorithm
+  if (algo && !algorithmAllowed(algo, allowAlgorithms)) {
+    return `${label}: algorithm "${algo}" is not on this session's allowlist ` +
+      `(${parsePatterns(allowAlgorithms).join(', ')}). Ask the user (ask_user_question) to add it ` +
+      'in Settings, or run one that is listed; QGIS_LIVE_ALLOW_ALGORITHMS sets the same rule.'
+  }
+  const targets = []
+  if (args && typeof args.path === 'string') targets.push(args.path)
+  if (args && typeof args.output === 'string') targets.push(args.output)
+  if (args && Array.isArray(args.paths)) targets.push(...args.paths)
+  for (const one of targets) {
+    if (!pathAllowed(one, allowPaths)) {
+      return `${label}: "${one}" is outside the directories this session may write ` +
+        `(${parseList(allowPaths).join(', ')}). Ask the user (ask_user_question) to widen them ` +
+        'in Settings, or write under one of those; QGIS_LIVE_ALLOW_PATHS sets the same rule.'
+    }
+  }
+  return null
+}
+
+export function assertAllow(tool, action, args, allowPaths, allowAlgorithms) {
+  const message = allowRefusal(tool, action, args, allowPaths, allowAlgorithms)
+  if (message) {
+    const err = new Error(message)
+    err.code = 'ALLOW_DENIED'
     throw err
   }
 }
@@ -1973,9 +2096,12 @@ export function taskOutcome(status) {
 }
 
 export function registerConsolidatedTools(deps) {
-  const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance } = deps;
+  const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance,
+    allowPaths, allowAlgorithms } = deps;
   // `scope` is a getter in the live bundle (so the pill applies without a reload)
   // and a plain string in older builds / tests. Accept both.
+  const activeAllowPaths = () => (typeof allowPaths === 'function' ? allowPaths() : (allowPaths || ''));
+  const activeAllowAlgorithms = () => (typeof allowAlgorithms === 'function' ? allowAlgorithms() : (allowAlgorithms || ''));
   const activeScope = () => {
     const raw = typeof scope === 'function' ? scope() : scope;
     return SCOPES.includes(raw) ? raw : 'write';
@@ -2000,13 +2126,15 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: 'Run pure Python on a worker thread. `code` for one task, `tasks=[{name,code}]` + `max_workers` (default 4, max 32) for a group; returns ids, poll with check_qgis_task. I/O and per-file work only - no QGIS objects, no `prj`, and poll `dsh_should_stop()` between files. Minutes-long calls belong here, not in execute_qgis_sync.',
+    description: 'Run pure Python on a worker thread. `code` for one task, `tasks=[{name,code}]` + `max_workers` (default 4, max 32) for a group; returns ids, poll with check_qgis_task. I/O and per-file work only - no QGIS objects, no `prj`, and poll `dsh_should_stop()` between files. Minutes-long calls belong here, not in execute_qgis_sync. `plan` names a JSON file: with `resume:true` the shards it already marks completed are skipped, so a failed group continues instead of restarting.',
     parameters: {
       type: 'object',
       properties: {
         code: { type: 'string', description: 'single task body (pure Python)' },
         tasks: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'batch [{name, code}] submitted as one worker pool' },
         max_workers: { type: 'integer', description: 'pool size for tasks (default 4, max 32)' },
+        plan: { type: 'string', description: 'tasks: JSON file recording each shard and its state; check_qgis_task writes it back' },
+        resume: { type: 'boolean', description: 'tasks: skip the shards the plan already marks completed' },
       },
       required: [],
     },
@@ -2028,12 +2156,35 @@ export function registerConsolidatedTools(deps) {
         : [];
       if (group.length) {
         const workers = Math.max(1, Math.min(Number(args?.max_workers) || 4, 32));
+        const planFile = typeof args?.plan === 'string' ? args.plan.trim() : '';
+        const plan = planFile ? readPlan(planFile) : null;
+        const picked = plan ? pendingShards(group, plan, args?.resume === true) : { run: group, skip: [] };
+        if (!picked.run.length) {
+          return asText({ tasks: [], count: 0, skipped: picked.skip, plan: planFile || null,
+            note: 'every shard in the plan is already completed; delete the plan or pass resume:false to redo them' });
+        }
+        const submit = picked.run;
+        if (plan) {
+          for (const t of submit) {
+            plan.shards[String(t.name || '')] = { status: 'queued', task_id: null, started: new Date().toISOString() };
+          }
+          writePlan(planFile, plan);
+        }
         try {
-          return asText(await deps.callRaw('/api/pyeval_group', 'POST', { tasks: group, max_workers: workers }, exec?.signal, target));
+          const started = await deps.callRaw('/api/pyeval_group', 'POST', { tasks: submit, max_workers: workers }, exec?.signal, target);
+          if (plan) {
+            const byName = new Map((started && started.tasks ? started.tasks : []).map((t) => [String(t.name || ''), t.task_id]));
+            for (const t of submit) {
+              const key = String(t.name || '');
+              if (byName.has(key)) plan.shards[key] = { ...(plan.shards[key] || {}), status: 'queued', task_id: byName.get(key) || null };
+            }
+            writePlan(planFile, plan);
+          }
+          return asText(picked.skip.length ? { ...started, skipped: picked.skip, plan: planFile } : started);
         } catch (e) {
           if (!/not found|unsupported endpoint|不支持/i.test(String(e && e.message))) throw e;
           // Older plugin without the group endpoint: submit each shard on its own.
-          const started = await Promise.all(group.map(async (t) => {
+          const started = await Promise.all(submit.map(async (t) => {
             const r = await deps.callRaw('/api/pyeval_async', 'POST', { code: String(t.code) }, exec?.signal, target);
             return { name: t.name || '', ...(r && typeof r === 'object' ? r : { result: r }) };
           }));
@@ -2048,7 +2199,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. Every task carries `outcome` (completed/failed/killed/running/queued) next to `status`. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
+    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. Every task carries `outcome` (completed/failed/killed/running/queued) next to `status`. `cancel:true` stops instead and reports `stopped_by`: queue (never ran), cooperative (stops at the next `dsh_should_stop()`), or uninterruptible (inside a C++ algorithm - only time or qgis_plugin restart ends it). `plan` merges these statuses into the shard plan file.',
     parameters: {
       type: 'object',
       properties: {
@@ -2057,6 +2208,7 @@ export function registerConsolidatedTools(deps) {
         wait: { type: 'boolean', description: 'block until every task is done/error/cancelled (or the timeout passes)' },
         timeout_ms: { type: 'integer', description: 'wait: how long to block (default 30000, max 180000)' },
         cancel: { type: 'boolean', description: 'cancel task_id/task_ids instead of polling' },
+        plan: { type: 'string', description: 'merge these statuses into the shard plan file written by submit_qgis_async' },
       },
       required: [],
     },
@@ -2080,6 +2232,29 @@ export function registerConsolidatedTools(deps) {
       };
       const ids = many.length ? many : (String(args?.task_id ?? '').trim() ? [String(args.task_id).trim()] : []);
       if (!ids.length) throw new Error('give task_id or task_ids');
+      const planFile = typeof args?.plan === 'string' ? args.plan.trim() : '';
+      // A finished shard is the only thing worth remembering: writing running
+      // states back would make the plan look further along than it is.
+      const mergePlan = (tasks) => {
+        if (!planFile) return null;
+        const plan = readPlan(planFile);
+        let touched = 0;
+        for (const one of (Array.isArray(tasks) ? tasks : [tasks])) {
+          if (!one) continue;
+          const key = Object.keys(plan.shards).find((name) => plan.shards[name] && plan.shards[name].task_id
+            && plan.shards[name].task_id === one.task_id);
+          if (!key) continue;
+          plan.shards[key] = {
+            ...plan.shards[key],
+            status: one.outcome || one.status || 'unknown',
+            finished: ['completed', 'failed', 'killed'].includes(String(one.outcome)) ? new Date().toISOString() : undefined,
+            error: one.error || undefined,
+          };
+          touched += 1;
+        }
+        if (touched) writePlan(planFile, plan);
+        return { file: planFile, updated: touched };
+      };
       if (args?.wait === true) {
         // ops_bash waits for a job the same way; a poll loop here keeps the
         // model from burning a round-trip per second of a long shard.
@@ -2097,10 +2272,15 @@ export function registerConsolidatedTools(deps) {
           waited_ms: Date.now() - start,
           count: tasks.length,
           tasks,
+          plan: mergePlan(tasks),
         });
       }
-      if (many.length) return asText(await Promise.all(many.map(readOne)));
-      return asText(await readOne(String(args.task_id).trim()));
+      if (many.length) {
+        const tasks = await Promise.all(many.map(readOne));
+        return asText(planFile ? { count: tasks.length, tasks, plan: mergePlan(tasks) } : tasks);
+      }
+      const one = await readOne(String(args.task_id).trim());
+      return asText(planFile ? { ...one, plan: mergePlan(one) } : one);
     },
   });
 
@@ -2111,21 +2291,31 @@ export function registerConsolidatedTools(deps) {
    * overwrite each other (one renames a layout while the other exports it).
    * A lease expires on its own, so a killed agent cannot lock the instance.
    */
+  // Parallel agents used to collide here: whoever lost the race got an error and had to
+  // guess when to retry. Waiting behind the lease turns that into serial writes, which is
+  // the only ordering one QGIS instance can hold anyway (see docs/DETAIL.md).
+  const LOCK_WAIT_MS = Math.max(0, Math.min(Number(process.env.QGIS_LIVE_LOCK_WAIT_MS ?? 15000) || 0, 180000))
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   async function withWriteLock(tool, action, args, exec, fn) {
     if (!tool || !isMutating(tool, action, args)) return fn()
     const owner = lockOwner(exec)
+    const deadline = Date.now() + LOCK_WAIT_MS
     let got
-    try {
-      got = await runCmd('write_lock', { op: 'acquire', owner, ttl: 120,
-        reason: `${tool} ${action}` }, exec?.signal)
-    } catch (e) {
-      // An older plugin has no gate; run unlocked instead of failing the call.
-      if (/unknown|not found|unsupported|invalid type/i.test(String(e && e.message))) return fn()
-      throw e
-    }
-    if (got && got.ok === false) {
-      const held = Math.round((Number(got.held_ms) || 0) / 1000)
-      throw new Error(`${tool} ${action}: another agent ("${got.owner}") has been writing to this QGIS instance for ${held}s — wait for it, then retry. Reads are never blocked.`)
+    for (;;) {
+      try {
+        got = await runCmd('write_lock', { op: 'acquire', owner, ttl: 120,
+          reason: `${tool} ${action}` }, exec?.signal)
+      } catch (e) {
+        // An older plugin has no gate; run unlocked instead of failing the call.
+        if (/unknown|not found|unsupported|invalid type/i.test(String(e && e.message))) return fn()
+        throw e
+      }
+      if (!got || got.ok !== false) break
+      if (Date.now() >= deadline) {
+        const held = Math.round((Number(got.held_ms) || 0) / 1000)
+        throw new Error(`${tool} ${action}: another agent ("${got.owner}") has been writing to this QGIS instance for ${held}s, and the wait budget (${Math.round(LOCK_WAIT_MS / 1000)}s) ran out — retry, or raise QGIS_LIVE_LOCK_WAIT_MS. Reads are never blocked.`)
+      }
+      await sleep(250)
     }
     try {
       return await fn()
@@ -2161,6 +2351,7 @@ export function registerConsolidatedTools(deps) {
     if (tool) checkRequired(tool, String(a.action ?? ''), a);
     const scopeChecked = String(a.action ?? '');
     assertScope(activeScope(), tool, scopeChecked, a);
+    assertAllow(tool, scopeChecked, a, activeAllowPaths(), activeAllowAlgorithms());
     const spec = tool ? BATCH_SPEC[tool + ':' + String(a.action ?? '')] : null;
     const items = spec ? batchItems(a, spec) : null;
     if (items) {

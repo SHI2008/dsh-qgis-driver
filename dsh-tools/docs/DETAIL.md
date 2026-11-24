@@ -139,6 +139,56 @@ polling it. Python threads cannot be killed, so what cancellation can honestly d
 A cancelled shard answers `{"status": "cancelled", "result": null, "error": "cancelled before it started"}`
 on its next poll, then it is popped like any other finished task.
 
+Every answer also says **how** the stop happened, so a caller does not mistake "will stop soon" for
+"stopped" (`stopped_by`):
+
+| `stopped_by` | meaning | what to do |
+|---|---|---|
+| `queue` | the shard had not started; it never will | nothing, it is finished |
+| `cooperative` | it is running Python and polls `dsh_should_stop()`, so it stops at the next checkpoint | wait, then poll |
+| `uninterruptible` | it is inside `processing.run` — a C++ algorithm — so nothing in Python can interrupt it | wait for it, or `qgis_plugin restart` and accept losing the work |
+
+The last row is the honest limit of cancellation: `native:*`, `grass:*` and `gdal:*` algorithms run in
+C++, the `dsh_should_stop()` checkpoint is only reached *between* calls, and a cancel that arrives
+mid-algorithm can only be remembered. `processing.run` is wrapped once at start-up so this state is
+known rather than guessed.
+
+### Resuming a group (`plan` + `resume`)
+
+A group of shards is independent work, so a failed group should not rerun the two hundred shards that
+already finished. Name a plan file and the driver keeps it up to date:
+
+```
+submit_qgis_async({ "tasks": [...], "max_workers": 4, "plan": "D:/work/parcels.plan.json" })
+check_qgis_task({ "task_ids": ["…"], "plan": "D:/work/parcels.plan.json", "wait": true })
+```
+
+The plan is JSON: `{"shards": {"<name>": {"status": "queued|completed|failed|killed", "task_id": "…", "finished": "…"}}}`.
+`submit_qgis_async` writes `queued` plus the `task_id` it got back; `check_qgis_task` merges the terminal
+states it reads. Resubmitting the same `tasks[]` with `"resume": true` submits only the shards the plan
+does **not** mark completed, and the answer lists them under `skipped`. Without `resume: true` the plan
+is rewritten and everything runs again.
+
+Two limits worth stating: a shard that is `running` when the instance dies stays `queued` in the plan
+(so a resume reruns it — safe, but it is a rerun), and the plan is a file the caller owns, so two agents
+sharing one plan file will fight over it.
+
+### Narrowing a session (`allowPaths`, `allowAlgorithms`)
+
+The three-permission scope answers "may this session write at all". Operators who need finer control set
+one or both of these in Settings (or `QGIS_LIVE_ALLOW_PATHS` / `QGIS_LIVE_ALLOW_ALGORITHMS`):
+
+| setting | form | effect |
+|---|---|---|
+| `allowPaths` | `D:\gis\out; E:\deliverables` (semicolon, comma or newline) | a structured call may only write under these directories |
+| `allowAlgorithms` | `native:* grass:r.watershed gdal:slope` (space, comma or semicolon; `*` suffix wildcard) | `qgis_analysis run` may only run the listed algorithms |
+
+Empty means "no narrowing", so nothing changes for a session that never sets them. The checks run in the
+bundle, before the call reaches QGIS, on `path`, `paths[]`, `output` and `algorithm`; a refusal names the
+rule and tells the model to ask the user (`ask_user_question`) to widen it. `execute_qgis_sync` and
+`submit_qgis_async` are **not** filtered — arbitrary Python can compute its own paths — which is why they
+sit behind the `danger` scope rather than behind these lists.
+
 A long snippet can honour the request itself: every background namespace exposes
 `dsh_should_stop()` (and `dsh_task_id`), so a loop bails out on the next iteration instead of
 running to the end:

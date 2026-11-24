@@ -14,7 +14,7 @@ import { internals } from '../index.js'
 import {
   MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner, preflightBatch,
   SCOPES, DANGER_ACTIONS, WRITE_ACTIONS, scopeRefusal, assertScope, requiredScope,
-  taskOutcome,
+  taskOutcome, pathAllowed, algorithmAllowed, allowRefusal, pendingShards, parseList,
 } from '../tools.js'
 
 const {
@@ -441,6 +441,47 @@ await ok('a task carries the harness job outcome word', () => {
   }
   assert.equal(taskOutcome('weird'), 'weird', 'an unknown status passes through instead of being invented')
   assert.equal(taskOutcome(undefined), 'unknown')
+})
+
+// The coarse scope says "may write"; these narrow it to "may write here" and
+// "may run these algorithms". Empty means the rule is off, so nothing changes
+// for anyone who never sets them.
+await ok('the write and algorithm allowlists narrow a call', () => {
+  assert.deepEqual(parseList(' D:\\gis\\out; E:\\deliverables\n'), ['D:\\gis\\out', 'E:\\deliverables'])
+  assert.equal(pathAllowed('D:\\gis\\out\\a.geojson', 'D:\\gis\\out'), true)
+  assert.equal(pathAllowed('D:\\gis\\out2\\a.geojson', 'D:\\gis\\out'), false, 'a sibling prefix is outside')
+  assert.equal(pathAllowed('C:\\temp\\a.tif', ''), true, 'no rule, no refusal')
+
+  assert.equal(algorithmAllowed('native:buffer', 'native:*'), true)
+  assert.equal(algorithmAllowed('grass:r.watershed', 'native:*'), false)
+  assert.equal(algorithmAllowed('grass:r.watershed', 'grass:r.watershed gdal:slope'), true)
+  assert.equal(algorithmAllowed('native:buffer', ''), true)
+
+  const paths = allowRefusal('qgis_layer', 'export', { path: 'C:\\temp\\a.gpkg' }, 'D:\\gis\\out', '')
+  assert.match(paths, /outside the directories this session may write/)
+  const algos = allowRefusal('qgis_analysis', 'run', { algorithm: 'grass:r.watershed' }, '', 'native:*')
+  assert.match(algos, /not on this session's allowlist/)
+  assert.equal(allowRefusal('qgis_analysis', 'run', { algorithm: 'native:buffer' }, 'D:\\gis', 'native:*'), null)
+})
+
+// A failed group must not rerun the shards that already finished: the plan file
+// remembers them, and a resume skips exactly those.
+await ok('a resumed group skips the shards the plan already finished', () => {
+  const plan = { shards: { a: { status: 'completed' }, b: { status: 'failed' }, c: { status: 'queued' } } }
+  const tasks = [{ name: 'a' }, { name: 'b' }, { name: 'c' }]
+  const first = pendingShards(tasks, plan, true)
+  assert.deepEqual(first.skip, ['a'])
+  assert.deepEqual(first.run.map((t) => t.name), ['b', 'c'])
+  const noResume = pendingShards(tasks, plan, false)
+  assert.deepEqual(noResume.skip, [], 'without resume:true nothing is skipped')
+})
+
+// Two agents writing at once used to be an error for whoever lost the race.
+await ok('a write waits for the lease instead of failing at once', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /QGIS_LIVE_LOCK_WAIT_MS/)
+  assert.match(src, /if \(Date\.now\(\) >= deadline\)/, 'the acquire loop has a deadline')
+  assert.match(src, /await sleep\(250\)/, 'and retries')
 })
 
 // A project with hundreds of layers answered `qgis_layer list` with every one of

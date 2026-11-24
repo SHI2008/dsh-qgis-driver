@@ -48,6 +48,23 @@ check_qgis_task({ "task_ids": ["…", "…"], "cancel": true })
   `cancel_requested: true` stays on the record either way. Do not poll it to death waiting.
 - Cancel only pays off on the **queued tail**, which is exactly the expensive case: 200 shards
   discovered to be wrong at shard 3 cost one call instead of 197 remaining shards.
+- The answer says `stopped_by`: `queue` (never ran, finished), `cooperative` (will stop at the next
+  `dsh_should_stop()`), or `uninterruptible` (a shard sitting inside `processing.run`, i.e. in C++ —
+  it runs to completion; wait or `qgis_plugin restart`).
+
+### Resume instead of restart
+
+Give the group a `plan` file and a failed run continues where it stopped:
+
+```
+submit_qgis_async({ "tasks": [...], "plan": "D:/work/plan.json" })
+check_qgis_task({ "task_ids": [...], "plan": "D:/work/plan.json", "wait": true })
+submit_qgis_async({ "tasks": [...], "plan": "D:/work/plan.json", "resume": true })
+```
+
+`resume: true` submits only the shards the plan does not mark `completed` and lists the rest under
+`skipped`. Shards that were running when the instance died stay `queued`, so they are rerun — resuming
+is safe, not idempotent. One agent owns the plan file; two agents sharing it will overwrite each other.
 
 ### What actually gets faster
 

@@ -42,6 +42,12 @@ export const Config = z.object({
   // means "find it": env vars, registry, Program Files, then a bounded sweep of
   // drive roots. Set it when QGIS lives somewhere those do not look.
   qgisRoot: z.string().default(''),
+  // Semicolon-separated directories a write may land in; empty means anywhere.
+  // The coarse scope says "may write"; these say "may write here".
+  allowPaths: z.string().default(''),
+  // Space- or comma-separated algorithm ids, `*` as a suffix wildcard
+  // (`native:*`, `grass:r.watershed`); empty means any algorithm.
+  allowAlgorithms: z.string().default(''),
 })
 
 /**
@@ -91,6 +97,28 @@ export function setLiveQgisRoot(value) {
   liveQgisRoot = String(value || '').trim().replace(/^"|"$/g, '')
   return liveQgisRoot
 }
+
+/** Writable directories, as the operator typed them (empty = anywhere). */
+export function effectiveAllowPaths(config) {
+  const env = String(process.env.QGIS_LIVE_ALLOW_PATHS || '').trim()
+  if (env) return env
+  return String((config && config.allowPaths) || '').trim()
+}
+
+/** Algorithm filter, as the operator typed it (empty = any algorithm). */
+export function effectiveAllowAlgorithms(config) {
+  const env = String(process.env.QGIS_LIVE_ALLOW_ALGORITHMS || '').trim()
+  if (env) return env
+  return String((config && config.allowAlgorithms) || '').trim()
+}
+
+let liveAllowPaths = ''
+let liveAllowAlgorithms = ''
+
+export function currentAllowPaths() { return liveAllowPaths }
+export function currentAllowAlgorithms() { return liveAllowAlgorithms }
+export function setLiveAllowPaths(value) { liveAllowPaths = String(value || '').trim(); return liveAllowPaths }
+export function setLiveAllowAlgorithms(value) { liveAllowAlgorithms = String(value || '').trim(); return liveAllowAlgorithms }
 
 const REGISTRY_DIR = path.join(os.homedir(), '.qgis-live')
 
@@ -1411,6 +1439,10 @@ export function apply(ctx, config = {}) {
   setLiveScope(effectiveScope(config))
   // Same for the install root: the launcher reads it through currentQgisRoot().
   setLiveQgisRoot(config?.qgisRoot)
+  // Narrowing rules are live for the same reason the scope is: the operator may
+  // tighten them mid-conversation and the next call must already obey them.
+  setLiveAllowPaths(effectiveAllowPaths(config))
+  setLiveAllowAlgorithms(effectiveAllowAlgorithms(config))
 
   /** Resolve the connection target: the local instance (file channel first). */
   async function resolveTarget(opts = {}) {
@@ -1534,6 +1566,8 @@ export function apply(ctx, config = {}) {
             scope: currentScope(),
             scopes: SCOPE_NAMES,
             qgisRoot: currentQgisRoot(),
+            allowPaths: currentAllowPaths(),
+            allowAlgorithms: currentAllowAlgorithms(),
             // What the launcher would use right now; null when nothing was found.
             detectedRoot: findQgisRoot(currentQgisRoot()),
           }
@@ -1566,6 +1600,12 @@ export function apply(ctx, config = {}) {
           }
           const previous = currentScope()
           const previousRoot = currentQgisRoot()
+          const previousPaths = currentAllowPaths()
+          const previousAlgorithms = currentAllowAlgorithms()
+          const allowPaths = (typeof body.allowPaths === 'string')
+            ? body.allowPaths.trim() : previousPaths
+          const allowAlgorithms = (typeof body.allowAlgorithms === 'string')
+            ? body.allowAlgorithms.trim() : previousAlgorithms
           let qgisRoot = previousRoot
           if (typeof body.qgisRoot === 'string') {
             qgisRoot = body.qgisRoot.trim().replace(/^"|"$/g, '')
@@ -1583,8 +1623,12 @@ export function apply(ctx, config = {}) {
           }
           setLiveScope(scope)
           setLiveQgisRoot(qgisRoot)
+          setLiveAllowPaths(allowPaths)
+          setLiveAllowAlgorithms(allowAlgorithms)
           try {
-            await configEditor.edit(configEntry, (prev) => ({ ...(prev || {}), dock, headless, scope, qgisRoot }))
+            await configEditor.edit(configEntry, (prev) => ({
+              ...(prev || {}), dock, headless, scope, qgisRoot, allowPaths, allowAlgorithms,
+            }))
             return new Response(JSON.stringify({ ok: true, detectedRoot: findQgisRoot(qgisRoot) }), {
               status: 200,
               headers: { 'content-type': 'application/json' },
@@ -1592,6 +1636,8 @@ export function apply(ctx, config = {}) {
           } catch (e) {
             setLiveScope(previous)
             setLiveQgisRoot(previousRoot)
+            setLiveAllowPaths(previousPaths)
+            setLiveAllowAlgorithms(previousAlgorithms)
             return new Response(JSON.stringify({ ok: false, error: e && e.message ? e.message : String(e) }), {
               status: 400,
               headers: { 'content-type': 'application/json' },
@@ -1667,6 +1713,8 @@ export function apply(ctx, config = {}) {
     resolve: resolveTarget,
     restartInstance,
     scope: currentScope,
+    allowPaths: currentAllowPaths,
+    allowAlgorithms: currentAllowAlgorithms,
     stringOutput,
     asText,
   })
