@@ -1965,7 +1965,7 @@ export function taskOutcome(status) {
   switch (String(status || '')) {
     case 'done': return 'completed'
     case 'error': return 'failed'
-    case 'cancelled': return 'cancelled'
+    case 'cancelled': return 'killed'
     case 'running': return 'running'
     case 'queued': return 'queued'
     default: return String(status || 'unknown')
@@ -2048,7 +2048,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. Every task carries `outcome` (completed/failed/cancelled/running/queued) next to `status`. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
+    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. Every task carries `outcome` (completed/failed/killed/running/queued) next to `status`. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
     parameters: {
       type: 'object',
       properties: {

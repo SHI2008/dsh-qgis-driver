@@ -435,7 +435,7 @@ await ok('the settings section has a heading and an intro', () => {
 // only done | error | cancelled, which reads as a different vocabulary to a model
 // that has seen job_output. Publish the same word next to the internal status.
 await ok('a task carries the harness job outcome word', () => {
-  const map = { done: 'completed', error: 'failed', cancelled: 'cancelled', running: 'running', queued: 'queued' }
+  const map = { done: 'completed', error: 'failed', cancelled: 'killed', running: 'running', queued: 'queued' }
   for (const [status, outcome] of Object.entries(map)) {
     assert.equal(taskOutcome(status), outcome, `${status} should read as ${outcome}`)
   }
