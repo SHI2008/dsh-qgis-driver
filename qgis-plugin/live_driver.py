@@ -47,7 +47,7 @@ import time
 import tokenize
 import traceback
 
-from qgis.PyQt.QtCore import QTimer
+from qgis.PyQt.QtCore import QObject, QTimer, Qt, pyqtSignal
 
 from .profile_store import registry_dir
 
@@ -422,53 +422,6 @@ def _audit_record(driver_pkg, cmd, obj, ms):
             pass
 
 
-def _audit_match(rec, filt):
-    """Filter for auditLog. dict = field match, str = substring match on key fields."""
-    if filt in (None, ""):
-        return True
-    if isinstance(filt, dict):
-        for k, v in filt.items():
-            rv = rec.get(k)
-            if rv is None or isinstance(rv, bool) or isinstance(v, bool):
-                if rv != v:
-                    return False
-            elif str(v).lower() not in str(rv).lower():
-                return False
-        return True
-    s = str(filt).lower()
-    return any(s in str(rec.get(k) or "").lower()
-               for k in ("type", "method", "plugin_id", "origin", "id"))
-
-
-def _audit_recent(n, filt=None):
-    """Return up to n entries from audit-*.jsonl, newest first."""
-    try:
-        names = sorted(
-            (x for x in os.listdir(_audit_base_dir())
-             if x.startswith("audit-") and x.endswith(".jsonl")),
-            reverse=True)
-    except OSError:
-        return []
-    out = []
-    for name in names:
-        try:
-            with open(os.path.join(_audit_base_dir(), name),
-                      "r", encoding="utf-8") as f:
-                lines = f.readlines()
-        except OSError:
-            continue
-        for line in reversed(lines):
-            try:
-                rec = json.loads(line)
-            except Exception:  # nosec B110  # skip corrupt lines
-                continue
-            if _audit_match(rec, filt):
-                out.append(rec)
-                if len(out) >= n:
-                    return out
-    return out
-
-
 class TaskRegistry:
     """Registry of background pyeval tasks for the async channel.
 
@@ -663,6 +616,17 @@ class Heartbeat(threading.Thread):
         self._stop.set()
 
 
+class _Waker(QObject):
+    """Hand a queued command to the GUI thread without waiting for the next poll tick.
+
+    `submit()` is called from an HTTP thread; emitting a queued signal is the one
+    thread-safe way to say "there is work", and it turns the 50 ms poll interval
+    into roughly a wake-up latency. The QTimer keeps polling for file commands.
+    """
+
+    ping = pyqtSignal()
+
+
 class LiveDriver:
     def __init__(self, live_dir, iface):
         self.iface = iface
@@ -719,6 +683,9 @@ class LiveDriver:
         self.timer = QTimer()
         self.timer.timeout.connect(self._poll)
         self.timer.start(POLL_MS)
+        # Wake the GUI thread as soon as a command is queued (HTTP path).
+        self._waker = _Waker()
+        self._waker.ping.connect(self._poll, Qt.ConnectionType.QueuedConnection)
 
     def submit(self, cmd, timeout=180.0, origin=None):
         """Inject a command from another thread, wait for GUI-thread execution, return it.
@@ -731,6 +698,10 @@ class LiveDriver:
         box = {}
         done = threading.Event()
         self._queue.put((cmd, box, done))
+        try:
+            self._waker.ping.emit()
+        except Exception:  # nosec B110  # a missed wake-up only costs one poll interval
+            pass
         if not done.wait(timeout):
             return {"id": cmd.get("id"), "error": f"submit timeout ({timeout}s)"}
         return box.get("reply", {"id": cmd.get("id"), "error": "no reply"})
@@ -824,6 +795,22 @@ class LiveDriver:
         def _audited(obj, _reply=reply):
             self._audit(cmd, obj, (time.monotonic() - t0) * 1000.0)
             _reply(obj)
+        # Take the write lease inside this same request. Two extra round trips
+        # (acquire + release) used to cost ~130 ms on every mutating call; the
+        # bundle now tags the command with {"lock": {owner, ttl, reason}} and the
+        # plugin refuses before dispatching when the lease belongs to someone else.
+        held = None
+        lease = cmd.get("lock") if isinstance(cmd.get("lock"), dict) else None
+        if lease and lease.get("owner") and cmd.get("type") != "write_lock":
+            got = self.gate.acquire(str(lease["owner"]),
+                                    str(lease.get("reason") or ""),
+                                    lease.get("ttl") or 120)
+            if not got.get("ok"):
+                held_s = int((got.get("held_ms") or 0) / 1000)
+                _audited({"id": cmd.get("id"), "lock_busy": True, **got,
+                          "error": f"write lease is held by {got.get('owner')} for {held_s}s"})
+                return
+            held = str(lease["owner"])
         try:
             return self._dispatch(cmd, _audited)
         except Exception:
@@ -833,6 +820,11 @@ class LiveDriver:
             raise
         finally:
             self._busy = {}
+            if held:
+                try:
+                    self.gate.release(held)
+                except Exception:  # nosec B110  # the lease expires on its own
+                    pass
 
     def _audit(self, cmd, obj, ms):
         """Record the dispatch result in the audit jsonl (failures do not block the call).

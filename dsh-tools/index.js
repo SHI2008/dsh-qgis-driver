@@ -6,14 +6,9 @@
 // plugin's file channel (commands.jsonl/results.jsonl), falling back to its local
 // HTTP port + Bearer session token.
 //
-// Tools: 3 generic PyQGIS tools (execute_qgis_sync / submit_qgis_async /
-// check_qgis_task), 6 read/analysis tools (list_layers / list_layouts /
-// list_algorithms / run_processing / export_layout / render_map), 8 P0 daily-workflow
-// tools (layer_fields / query_features / algorithm_help / add_layer / export_layer /
-// set_extent / zoom_to_layer / screenshot) and 13 P1/P2 tools (selection, feature
-// CRUD, layer visibility/remove, project info/save/CRS, layout items, style, plugin
-// status). P1/P2 tools marked `deferLoading: true` only load their description when
-// the model needs them, keeping the first-turn prompt small.
+// Ten tools, one per noun: project, layer, feature, analysis, layout, map, plugin,
+// plus the PyQGIS escape hatches execute_qgis_sync / submit_qgis_async /
+// check_qgis_task. Each one takes an `action`; see tools.js for the bodies.
 //
 // Optional autostart: when no local QGIS instance is found, the bundle can launch one
 // from `config.autostart.command` (cordis.patch.yml) or QGIS_LIVE_AUTOSTART_CMD, then
@@ -1470,7 +1465,10 @@ export function apply(ctx, config = {}) {
     // the file channel then has to wait a little longer than that budget, not less.
     const budget = Number(opts && opts.budget) > 0 ? Number(opts.budget) : undefined
     const timeoutMs = budget ? budget * 1000 + 8000 : undefined
-    return callQgis('/api/pyeval', 'POST', { code, timeout: budget }, signal, target, timeoutMs)
+    // `lock` rides along so the plugin takes the write lease inside this one request
+    // instead of two extra round trips (acquire + release ≈ 129 ms per write).
+    const lock = opts && opts.lock
+    return callQgis('/api/pyeval', 'POST', { code, timeout: budget, lock }, signal, target, timeoutMs)
   }
 
   /** Run a plugin REST command via POST /api/cmd (dispatch type + args as-is). */

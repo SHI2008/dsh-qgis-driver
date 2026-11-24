@@ -29,6 +29,13 @@ from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
 from qgis.PyQt.QtCore import QSize, Qt
 prj = QgsProject.instance()
 P = json.loads(__PARAMS__)
+def _lim(key='limit', dflt=200, cap=1000):
+    """One page-size rule for every list-shaped result."""
+    try:
+        n = int(P.get(key) or dflt)
+    except (TypeError, ValueError):
+        n = dflt
+    return max(1, min(n, cap))
 def _prj_extent():
     ext = None
     for lyr in prj.mapLayers().values():
@@ -157,7 +164,7 @@ _all = [{'id': l.id(), 'name': l.name(),
          'type': 'Vector' if l.type() == 0 else 'Raster',
          'crs': l.crs().authid() or l.crs().description(),
          'feature_count': l.featureCount() if hasattr(l, 'featureCount') else None} for l in prj.mapLayers().values()]
-_lim = max(1, min(int(P.get('limit') or 200), 1000))
+_lim = _lim()
 result = {'count': min(len(_all), _lim), 'total': len(_all), 'truncated': len(_all) > _lim, 'layers': _all[:_lim]}`,
   info: `
 l = L(P['layer'])
@@ -809,7 +816,7 @@ result = {'layer': lyr.name(), 'fields': fields, 'total': total, 'offset': offse
 const LAYOUT_BODY = {
   list: `
 _all = [l.name() for l in prj.layoutManager().layouts()]
-_lim = max(1, min(int(P.get('limit') or 200), 1000))
+_lim = _lim()
 result = {'count': min(len(_all), _lim), 'total': len(_all), 'truncated': len(_all) > _lim, 'layouts': _all[:_lim]}`,
   create: `
 name = P['layout_name']
@@ -1444,7 +1451,7 @@ const ANALYSIS_BODY = {
   list: `
 kw = (P.get('keyword') or '').lower()
 want = (P.get('provider') or '').lower()
-limit = max(1, min(int(P.get('limit') or 200), 1000))
+limit = _lim()
 reg = QgsApplication.processingRegistry()
 if reg.algorithms() == [] or True:
     from qgis.analysis import QgsNativeAlgorithms
@@ -2102,8 +2109,15 @@ export function taskOutcome(status) {
 }
 
 export function registerConsolidatedTools(deps) {
-  const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance,
-    allowPaths, allowAlgorithms } = deps;
+  const { registerTool, run: runRaw, runCmd: runCmdRaw, stringOutput, asText, jsonSafeString,
+    scope, restartInstance, allowPaths, allowAlgorithms } = deps;
+  // Set by withWriteLock for the duration of one mutating call. The lease rides inside
+  // the command that needs it, so the plugin can take and drop it in the same request.
+  let _lease = null
+  const run = (code, signal, opts) => runRaw(code, signal, _lease ? { ...(opts || {}), lock: _lease } : opts)
+  const runCmd = (type, args, signal) => (type === 'write_lock' || !_lease
+    ? runCmdRaw(type, args, signal)
+    : runCmdRaw(type, { ...(args || {}), lock: _lease }, signal))
   // `scope` is a getter in the live bundle (so the pill applies without a reload)
   // and a plain string in older builds / tests. Accept both.
   const activeAllowPaths = () => (typeof allowPaths === 'function' ? allowPaths() : (allowPaths || ''));
@@ -2304,29 +2318,24 @@ export function registerConsolidatedTools(deps) {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
   async function withWriteLock(tool, action, args, exec, fn) {
     if (!tool || !isMutating(tool, action, args)) return fn()
-    const owner = lockOwner(exec)
+    const lease = { owner: lockOwner(exec), ttl: 120, reason: `${tool} ${action}` }
     const deadline = Date.now() + LOCK_WAIT_MS
-    let got
     for (;;) {
+      const previous = _lease
+      _lease = lease
       try {
-        got = await runCmd('write_lock', { op: 'acquire', owner, ttl: 120,
-          reason: `${tool} ${action}` }, exec?.signal)
+        return await fn()
       } catch (e) {
-        // An older plugin has no gate; run unlocked instead of failing the call.
-        if (/unknown|not found|unsupported|invalid type/i.test(String(e && e.message))) return fn()
-        throw e
+        const msg = String((e && e.message) || e)
+        // The plugin refused before touching the project: nothing to undo, just queue.
+        if (!/write lease is held|write lease busy|lock_busy/i.test(msg)) throw e
+        if (Date.now() >= deadline) {
+          throw new Error(`${tool} ${action}: ${msg.replace(/^.*?write lease is held by /i, 'another agent (')}; the wait budget (${Math.round(LOCK_WAIT_MS / 1000)}s) ran out — retry, or raise QGIS_LIVE_LOCK_WAIT_MS. Reads are never blocked.`)
+        }
+        await sleep(250)
+      } finally {
+        _lease = previous
       }
-      if (!got || got.ok !== false) break
-      if (Date.now() >= deadline) {
-        const held = Math.round((Number(got.held_ms) || 0) / 1000)
-        throw new Error(`${tool} ${action}: another agent ("${got.owner}") has been writing to this QGIS instance for ${held}s, and the wait budget (${Math.round(LOCK_WAIT_MS / 1000)}s) ran out — retry, or raise QGIS_LIVE_LOCK_WAIT_MS. Reads are never blocked.`)
-      }
-      await sleep(250)
-    }
-    try {
-      return await fn()
-    } finally {
-      try { await runCmd('write_lock', { op: 'release', owner }, exec?.signal) } catch (e) { /* the lease expires on its own */ }
     }
   }
 

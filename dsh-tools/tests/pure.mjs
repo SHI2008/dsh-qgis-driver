@@ -488,6 +488,8 @@ await ok('a write waits for the lease instead of failing at once', () => {
   assert.match(src, /QGIS_LIVE_LOCK_WAIT_MS/)
   assert.match(src, /if \(Date\.now\(\) >= deadline\)/, 'the acquire loop has a deadline')
   assert.match(src, /await sleep\(250\)/, 'and retries')
+  assert.match(src, /write lease is held|lock_busy/, 'a busy lease is what makes it queue')
+  assert.match(src, /lock: _lease/, 'the lease rides inside the command, not two extra round trips')
 })
 
 // A project with hundreds of layers answered `qgis_layer list` with every one of
