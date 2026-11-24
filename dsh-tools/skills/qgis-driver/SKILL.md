@@ -166,10 +166,14 @@ string where an array is expected is the most common first-call failure.
 2. `qgis_layer action=list` — use the exact names it returns.
 3. `qgis_layer action=style layer="<name>" field="<field>" classes=5` (or `action=classify`).
 4. `qgis_layout action=create layout_name="Map"`.
-5. `qgis_layout action=add_item layout="Map" kind=map fit_layer="<name>" x=15 y=15 width=160`.
-6. `qgis_layout action=add_item layout="Map" kind=legend x=185 y=15` (width defaults to 60 mm).
+5. `qgis_layout action=add_item layout="Map" kind=map fit_layer="<name>" x=15 y=15` — width is
+   optional (160 mm default) and height follows the layer aspect.
+6. `qgis_layout action=add_item layout="Map" kind=legend x=185 y=15` — width defaults to 60 mm and
+   the legend lists what the map draws (it follows the map's layers, not the whole project).
 7. `qgis_layout action=add_item layout="Map" kind=scalebar x=15 y=190 segments=2 units_per_segment=5`.
-8. `qgis_layout action=export layout="Map" formats=["png","pdf"] inline=true`.
+8. `qgis_layout action=export layout="Map" formats=["png","pdf"] inline=true` — `layout` is only
+   needed when the project holds more than one; with several layouts the call names them instead of
+   guessing.
 
 **Analysis followed by a map**
 
@@ -202,8 +206,7 @@ does not show `qgis_*`, call it anyway; the listing can lag a reload. Never conc
 missing" from a listing alone, and do not fall back to hand-written `execute_qgis_sync` for a job
 that has a dedicated action.
 
-## Recipes
-
+## More recipes
 - **Load a folder of shapefiles**: one call
   `qgis_layer action=add paths=[{path:"…"},…] crs_file="<study>.prj" set_project=true`
   (ArcGIS custom `.prj` is not parsed from the layer, so `crs_file` matters).

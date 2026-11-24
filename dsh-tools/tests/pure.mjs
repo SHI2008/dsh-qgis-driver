@@ -128,13 +128,17 @@ await fails('a KeyError on a declared parameter is reported as missing',
   }))({ action: 'export' }, {}), /missing required parameter "path"/)
 
 // ---------- required parameters per action
-await fails('qgis_layer export without path is caught locally',
-  () => checkRequired('qgis_layer', 'export', {}), /missing parameter "path"/)
-await ok('alternatives satisfy one requirement group', () => {
-  checkRequired('qgis_layer', 'export', { path: 'C:/tmp/a.geojson' })
+// The smallest call is `action` plus the object it acts on. `path` for an export, the
+// layout for an export, the width of a map: all defaulted, so a model that forgets them
+// still gets its file (see "make the minimal call" in DETAIL.md).
+await fails('qgis_layer export without a layer is caught locally',
+  () => checkRequired('qgis_layer', 'export', {}), /missing parameter "layer" or "layers"/)
+await ok('one argument is enough for the common actions', () => {
+  checkRequired('qgis_layer', 'export', { layer: 'roads' })
+  checkRequired('qgis_layer', 'export', { layers: ['roads', 'rivers'] })
   checkRequired('qgis_layout', 'export', { layouts: ['A'] })
   checkRequired('qgis_layout', 'export', { layout: 'A' })
-  assert.throws(() => checkRequired('qgis_layout', 'export', {}), /missing parameter/)
+  checkRequired('qgis_layout', 'export', {})
 })
 await ok('an action with no table is never blocked', () => {
   checkRequired('qgis_layer', 'list', {})
@@ -157,7 +161,7 @@ await ok('a malformed batch item fails the batch before it changes anything', ()
   assert.match(
     preflightBatch('qgis_layout', 'add_item', [{ kind: 'map', width: 160 }, { kind: 'scalebar', width: 60 }]),
     /item 2: kind=scalebar sizes itself/)
-  assert.match(preflightBatch('qgis_layout', 'add_item', [{ kind: 'map' }]), /item 1: kind=map needs width/)
+  assert.equal(preflightBatch('qgis_layout', 'add_item', [{ kind: 'map' }]), null)
   assert.match(preflightBatch('qgis_layout', 'add_item', [{ kind: 'rect', width: 10 }]), /kind=rect needs width and height/)
   assert.equal(preflightBatch('qgis_layer', 'export', ['a']), null)
 })
@@ -383,6 +387,16 @@ await ok('update_item needs an index or a uuid, not both-in-name-only', () => {
   checkRequired('qgis_layout', 'update_item', { layout: 'L', index: 0 })
   assert.throws(() => checkRequired('qgis_layout', 'update_item', { layout: 'L' }),
                 /missing parameter \"index\" or \"uuid\"/)
+})
+
+// The legend used to empty its model root to show only some layers. That root mirrors the
+// project's layer tree, so the "empty" removed the project's layers (found in the field,
+// by a probe that then saw an empty project). Keep the destructive call out of the source.
+await ok('the legend never edits the live layer-tree root', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.equal(/removeChildNode\(/.test(src), false,
+               'editing the live root removes the project layers — filter by the map instead')
+  assert.equal(/setLegendFilterByMapEnabled\(True\)/.test(src), true)
 })
 
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)

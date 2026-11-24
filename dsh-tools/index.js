@@ -868,7 +868,7 @@ function tidyError(input) {
     NameError: 'a name is undefined — typo, or a variable from an earlier call (calls do not share state)',
     AttributeError: 'API differs on QGIS 4 — see DETAIL.md',
     TypeError: 'argument type mismatch (numbers as numbers, booleans as true/false)',
-    ValueError: 'invalid value — check the enum/range',
+    ValueError: 'bad value — the message names what was expected',
     ImportError: 'module unavailable',
     ModuleNotFoundError: 'module unavailable',
     QgsNotSupportedException: 'needs a GUI session',

@@ -20,7 +20,8 @@ from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
     QgsFillSymbol, QgsLineSymbol, QgsMarkerSymbol, QgsSingleSymbolRenderer, QgsPalLayerSettings,
     QgsTextFormat, QgsVectorLayerSimpleLabeling, QgsTextBufferSettings, QgsLegendStyle,
     QgsCategorizedSymbolRenderer, QgsGraduatedSymbolRenderer, QgsRendererRange, QgsRuleBasedRenderer,
-    QgsRendererCategory, QgsRectangle, QgsMapSettings, QgsMapRendererCustomPainterJob, QgsPointXY, Qgis)
+    QgsRendererCategory, QgsRectangle, QgsMapSettings, QgsMapRendererCustomPainterJob, QgsPointXY, Qgis,
+    QgsLayerTreeGroup)
 from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
 from qgis.PyQt.QtCore import QSize, Qt
 prj = QgsProject.instance()
@@ -358,11 +359,19 @@ l = L(P['layer'])
 if not isinstance(l, QgsVectorLayer):
     raise ValueError('only vector layers can be exported')
 from qgis.core import QgsVectorFileWriter
-fmt = (P.get('format') or os.path.splitext(P['path'])[1].lstrip('.').lower() or 'gpkg')
+fmt = (P.get('format') or os.path.splitext(P.get('path') or '')[1].lstrip('.').lower() or 'geojson')
 driver = {'gpkg': 'GPKG', 'geojson': 'GeoJSON', 'shp': 'ESRI Shapefile', 'csv': 'CSV'}.get(fmt)
 if not driver:
     raise ValueError('unsupported format: ' + fmt)
-path = P['path']
+path = P.get('path')
+if not path:
+    # No path means "just give me a file": the layer name is unique enough, and a call
+    # that forgot the path should not fail when the answer is obvious.
+    _ext = {'gpkg': '.gpkg', 'geojson': '.geojson', 'shp': '.shp', 'csv': '.csv'}[fmt]
+    _dir = os.path.join(os.environ.get('TEMP') or tempfile.gettempdir(), 'dsh-qgis-driver')
+    if not os.path.isdir(_dir):
+        os.makedirs(_dir, exist_ok=True)
+    path = os.path.join(_dir, str(l.name()) + _ext)
 if os.path.exists(path):
     os.remove(path)
 opts = QgsVectorFileWriter.SaveVectorOptions()
@@ -830,8 +839,9 @@ layers = [L(n) for n in (P.get('layers') or [])]
 item = None
 if kind == 'map':
     if w is None:
-        raise ValueError('kind=map requires width — the item width in mm (e.g. 160); '
-                         'height follows the layer aspect unless you pass it too')
+        # 160 mm is the A4 landscape default that leaves room for a legend; refusing
+        # the call taught a model nothing and cost a round trip.
+        w = 160.0
     m = QgsLayoutItemMap(lay)
     lay.addLayoutItem(m)
     m.attemptMove(QgsLayoutPoint(x, y, MM()))
@@ -860,7 +870,9 @@ if kind == 'map':
     m.setBackgroundEnabled(True)
     m.setBackgroundColor(QColor(P.get('background') or '#ffffff'))
     if not layers:
-        layers = [l for l in prj.mapLayers().values() if l.isValid()]
+        # fit_layer names the subject of the map: drawing every layer of the project on top of
+        # it buries the subject and makes the legend list unrelated layers.
+        layers = [target] if target is not None else [l for l in prj.mapLayers().values() if l.isValid()]
     if layers:
         m.setLayers(layers)
         m.setKeepLayerSet(True)
@@ -879,16 +891,11 @@ elif kind == 'legend':
     _legend_title = P.get('title') or '图例'
     lay.addLayoutItem(lg)
     lg.attemptMove(QgsLayoutPoint(x, y, MM()))
-    # bound before the branch: the height estimate below walks the same root
+    # Never edit this root: it mirrors the project's layer tree, so removing nodes from it
+    # removes the layers from the project. Let the link to the map do the filtering instead.
+    if base is not None:
+        lg.setLegendFilterByMapEnabled(True)
     root = lg.model().rootGroup()
-    if layers:
-        # An explicit list means an explicit legend; otherwise keep the model live so the
-        # legend mirrors the project instead of coming out empty.
-        lg.setAutoUpdateModel(False)
-        for ch in list(root.children()):
-            root.removeChildNode(ch)
-        for lyr in layers:
-            root.addLayer(lyr)
     fam = P.get('family') or 'Microsoft YaHei'
     lg.setStyleFont(QgsLegendStyle.Style.Title, QFont(fam, 10))
     lg.setStyleFont(QgsLegendStyle.Style.Subgroup, QFont(fam, 8))
@@ -1136,16 +1143,23 @@ else:
     lay.refresh()
     result = {'index': i, 'kind': type(it).__name__, 'rect': [round(nx, 1), round(ny, 1), round(nw, 1), round(nh, 1)]}`,
   export: `
-lay = LAYOUT(P['layout_name'])
-fmt = (P.get('format') or 'png').lower()
-if fmt == 'pdf':
+_layout_name = P.get('layout_name') or P.get('layout')
+if not _layout_name:
+    # One argument should be enough when the answer is obvious; with several layouts
+    # a silent pick would export the wrong one, so the error names them instead.
+    _names = [x.name() for x in prj.layoutManager().layouts()]
+    if not _names:
+        raise ValueError('no print layout in this project yet - create one with action=create layout_name=<name>')
+    if len(_names) > 1:
+        raise ValueError('this project has %d layouts (%s) - pass layout=<name> or layouts=[...]'
+                         % (len(_names), ', '.join(_names)))
+    _layout_name = _names[0]
+P['layout_name'] = _layout_name
+lay = LAYOUT(_layout_name)
+
+
+def _export_one(_fmt):
     import tempfile
-    if P.get('path'):
-        path = P['path']
-    else:
-        fd, path = tempfile.mkstemp(suffix='.pdf')
-        os.close(fd)
-        os.remove(path)
     for _it in lay.items():
         try:
             if isinstance(_it, QgsLayoutItemMap):
@@ -1153,27 +1167,25 @@ if fmt == 'pdf':
         except Exception:
             pass
     lay.refresh()
-    st = QgsLayoutExporter.PdfExportSettings()
-    r = QgsLayoutExporter(lay).exportToPdf(path, st)
-    if r != 0 or not os.path.exists(path):
-        raise RuntimeError('layout pdf export failed (result %s)' % r)
-    fd2, png = tempfile.mkstemp(suffix='.png'); os.close(fd2); os.remove(png)
-    st2 = QgsLayoutExporter.ImageExportSettings()
-    st2.dpi = int(P.get('dpi') or 300)
-    r2 = QgsLayoutExporter(lay).exportToImage(png, st2)
-    result = {'format': 'pdf', 'result': r, 'size_bytes': os.path.getsize(path),
-              'file_path': path if P.get('path') else _publish(path, 'pdf'),
-              'image_path': _publish(png, 'png') if r2 == 0 and os.path.exists(png) else None,
-              'hint': 'image_path 是 PNG 预览（用 read_image 看）；file_path 是交付用 PDF'}
-else:
-    import base64, tempfile
-    for _it in lay.items():
-        try:
-            if isinstance(_it, QgsLayoutItemMap):
-                _it.invalidateCache()
-        except Exception:
-            pass
-    lay.refresh()
+    if _fmt == 'pdf':
+        if P.get('path'):
+            path = P['path']
+        else:
+            fd, path = tempfile.mkstemp(suffix='.pdf')
+            os.close(fd)
+            os.remove(path)
+        st = QgsLayoutExporter.PdfExportSettings()
+        r = QgsLayoutExporter(lay).exportToPdf(path, st)
+        if r != 0 or not os.path.exists(path):
+            raise RuntimeError('layout pdf export failed (result %s)' % r)
+        fd2, png = tempfile.mkstemp(suffix='.png'); os.close(fd2); os.remove(png)
+        st2 = QgsLayoutExporter.ImageExportSettings()
+        st2.dpi = int(P.get('dpi') or 300)
+        r2 = QgsLayoutExporter(lay).exportToImage(png, st2)
+        return {'format': 'pdf', 'result': r, 'size_bytes': os.path.getsize(path),
+                'file_path': path if P.get('path') else _publish(path, 'pdf'),
+                'image_path': _publish(png, 'png') if r2 == 0 and os.path.exists(png) else None,
+                'hint': 'image_path is a PNG preview (read_image it); file_path is the deliverable PDF'}
     st = QgsLayoutExporter.ImageExportSettings()
     st.dpi = int(P.get('dpi') or 300)
     fd, path = tempfile.mkstemp(suffix='.png'); os.close(fd)
@@ -1181,9 +1193,24 @@ else:
     r = QgsLayoutExporter(lay).exportToImage(path, st)
     if r != 0 or not os.path.exists(path):
         raise RuntimeError('layout export failed (result %s)' % r)
-    result = {'format': 'png', 'result': r, 'size_bytes': os.path.getsize(path),
-              'image_path': _publish(path, 'png'),
-              'hint': '使用 read_image 工具查看该图片路径'}`,
+    return {'format': 'png', 'result': r, 'size_bytes': os.path.getsize(path),
+            'image_path': _publish(path, 'png'),
+            'hint': 'read_image the image_path'}
+
+
+_fmts = [str(f).lower() for f in (P.get('formats') or []) if str(f).lower() in ('png', 'pdf')]
+# A batch item already carries its one format; only the single call loops over formats.
+_single = str(P.get('format') or '').lower()
+if _single in ('png', 'pdf'):
+    _fmts = [_single]
+if len(_fmts) > 1:
+    _out = []
+    for _f in _fmts:
+        _out.append(_export_one(_f))
+    result = {'count': len(_out), 'results': _out}
+else:
+    result = _export_one((_fmts or [P.get('format') or 'png'])[0])`,
+
   export_atlas: `
 lay = LAYOUT(P['layout_name'])
 atlas = lay.atlas()
@@ -1247,9 +1274,14 @@ elif op == 'text':
 elif op == 'remove':
     target = P.get('layer')
     root = lg.model().rootGroup()
+    # Detach before editing: the live root belongs to the project, so removing from it
+    # would remove the layer from the project instead of from the legend.
+    lg.setAutoUpdateModel(False)
+    _kept = QgsLayerTreeGroup()
     for ch in list(root.children()):
-        if ch.name() == target:
-            root.removeChildNode(ch)
+        if ch.name() != target:
+            _kept.addChildNode(ch.clone())
+    lg.model().setRootGroup(_kept)
 elif op == 'title':
     lg.setTitle(P.get('title') or '')
 else:
@@ -1321,9 +1353,16 @@ const MAP_BODY = {
 w = int(P.get('width') or 800); h = int(P.get('height') or 600)
 import base64, tempfile
 ms = QgsMapSettings()
-ms.setLayers([l for l in prj.layerTreeRoot().layerOrder()])
+_lay_name = P.get('layer')
+_lay = L(_lay_name) if _lay_name else None
+ms.setLayers([_lay] if _lay is not None else [l for l in prj.layerTreeRoot().layerOrder()])
 ms.setDestinationCrs(prj.crs())
 _e = _prj_extent()
+if _lay is not None:
+    # one named layer: frame it, otherwise the extent of every leftover layer decides the view
+    _le = _lay.extent()
+    if _le.width() > 0 or _le.height() > 0:
+        _e = _le
 if _e is None:
     raise RuntimeError('project has no layer extent to render')
 if None not in (P.get('xmin'), P.get('ymin'), P.get('xmax'), P.get('ymax')):
@@ -1528,8 +1567,10 @@ for n in _sinks:
     # raster/file sinks do not survive as 'memory:' - give them a file, otherwise
     # the run "succeeds" and the result cannot be reached afterwards
     ext = '.tif' if _sink_kind.get(n) == 'rasterDestination' else ''
-    _defaulted[n] = os.path.join(_OUT, 'run_%d_%s%s'
-                                 % (int(time.time() * 1000), n.lower(), ext))
+    # name the file after the algorithm so the layer the result becomes is guessable
+    _short = str(alg).split(':')[-1].replace('-', '_').replace('.', '_')[:24]
+    _defaulted[n] = os.path.join(_OUT, '%s_%d_%s%s'
+                                 % (_short, int(time.time() * 1000) % 100000, n.lower(), ext))
     mapped[n] = _defaulted[n]
 try:
     out = processing.run(alg, mapped)
@@ -1548,24 +1589,30 @@ for k, v in (out or {}).items():
     else:
         txt = v if isinstance(v, str) else str(v)
         clean[k] = txt if len(txt) <= 120 else (txt[:100] + '...')
-for _k, _path in _defaulted.items():
-    if not os.path.exists(_path):
+_written = dict(_defaulted)
+# A sink the caller named is just as reachable as one we defaulted — load either,
+# otherwise an explicit output=file succeeds and the raster is nowhere in the project.
+for _n in _sinks:
+    _p = mapped.get(_n)
+    if not _p or _p == 'memory:' or not os.path.exists(_p):
         continue
+    if _n not in _written:
+        _written[_n] = _p
     try:
-        _l = QgsRasterLayer(_path, os.path.splitext(os.path.basename(_path))[0])
+        _l = QgsRasterLayer(_p, os.path.splitext(os.path.basename(_p))[0])
         if not _l.isValid():
-            _l = QgsVectorLayer(_path, os.path.splitext(os.path.basename(_path))[0], 'ogr')
+            _l = QgsVectorLayer(_p, os.path.splitext(os.path.basename(_p))[0], 'ogr')
         if _l.isValid():
             prj.addMapLayer(_l)
             added.append(_l.name())
-            clean[_k] = _path
+            clean[_n] = _p
     except Exception:
         pass
 _unwritten = [k for k, v in (out or {}).items()
               if isinstance(v, str) and v and not v.startswith('memory:') and not os.path.exists(v)]
 result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}
-if _defaulted:
-    result['written_outputs'] = _defaulted
+if _written:
+    result['written_outputs'] = _written
 _hints = []
 if _memory_outputs:
     result['memory_outputs'] = _memory_outputs
@@ -1772,12 +1819,10 @@ export const REQUIRED_ARGS = {
   'qgis_project:save_as': [['path']],
   'qgis_project:set_crs': [['crs', 'crs_file']],
   'qgis_layer:add': [['path', 'paths']],
-  'qgis_layer:export': [['path']],
+  'qgis_layer:export': [['layer', 'layers']],
   'qgis_layout:create': [['layout_name', 'layout']],
   'qgis_layout:add_item': [['layout_name', 'layout'], ['kind']],
   'qgis_layout:update_item': [['layout_name', 'layout'], ['index', 'uuid']],
-  'qgis_layout:export': [['layouts', 'layout_name', 'layout']],
-  'qgis_layout:export_atlas': [['layouts', 'layout_name', 'layout']],
   'qgis_analysis:run': [['algorithm']],
 };
 
@@ -1815,9 +1860,6 @@ const PREFLIGHT = {
     const at = `item ${i + 1}`;
     if (kind === 'scalebar' && (it.width != null || it.height != null)) {
       return `${at}: kind=scalebar sizes itself from the linked map (segments/units_per_segment) — drop width/height`;
-    }
-    if (kind === 'map' && it.width == null) {
-      return `${at}: kind=map needs width in mm (e.g. 160); height follows the layer aspect`;
     }
     if (kind === 'rect' && (it.width == null || it.height == null)) {
       return `${at}: kind=rect needs width and height in mm (e.g. 160 and 100)`;
@@ -1919,7 +1961,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- core (synchronous pyeval + async task channel)
   registerTool({
     name: 'execute_qgis_sync',
-    description: 'Run PyQGIS on the live project (main thread, sync, <3s). Sees `prj`, `P`; set `result` to return. A failure comes back as "Type: body (hint)". Prefer the qgis_* tools; load qgis-driver before raw PyQGIS - QGIS 3 names moved in 4, so rewrite a failed call instead of retrying.',
+    description: 'Run PyQGIS on the live project (main thread, sync). `code` is the only input; `prj` and `P` (this call\'s arguments) are in scope, set `result` to return a value. A failure comes back as "Type: body (hint)". Prefer the qgis_* tools: QGIS 3 names moved in 4, so rewrite a failed call instead of retrying.',
     parameters: {
       type: 'object',
       properties: { code: { type: 'string', description: 'PyQGIS source; set `result` (or leave an expression last) to return a value' } },
@@ -1936,7 +1978,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'submit_qgis_async',
-    description: 'Worker-thread Python; returns ids for check_qgis_task. `code` = one task; `tasks=[{name,code}]` + `max_workers` (default 4, max 32) = a group. I/O and per-file work only - not pure Python or numpy/BLAS. No `prj` in a shard; poll `dsh_should_stop()`.',
+    description: 'Run pure Python on a worker thread. `code` for one task, `tasks=[{name,code}]` + `max_workers` (default 4, max 32) for a group; returns ids, poll with check_qgis_task. I/O and per-file work only - no QGIS objects, no `prj`, and poll `dsh_should_stop()` between files. Minutes-long calls belong here, not in execute_qgis_sync.',
     parameters: {
       type: 'object',
       properties: {
@@ -1984,7 +2026,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Read or stop background tasks. `task_id` or `task_ids[]`; a finished task is evicted on first read, so record it. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`. Returns {task_id,name,status,result|error} or {cancelled,was,status,reason}.',
+    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; a finished task is evicted on first read, so record it. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
     parameters: {
       type: 'object',
       properties: {
@@ -2095,7 +2137,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- project
   registerTool({
     name: 'qgis_project',
-    description: 'Project state; `info` first - a fresh headless instance is empty. `open`/`save_as` need `path`, `set_crs` needs `crs` or `crs_file`.',
+    description: 'Project state. `info` needs nothing; `open`/`save_as` need `path`, `set_crs` needs `crs` or `crs_file`. A fresh headless instance is empty, so `info` first.',
     parameters: {
       type: 'object',
       properties: {
@@ -2113,7 +2155,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description: 'Layers: CRS, style, raster_style, labels, annotate, reproject, export. One: `layer`; many: `layers[]` (add: `paths[]`). `export` needs `path` with a filename extension; with `layers[]` each layer goes to `<stem>_<layer><ext>`, returned as {file_path,format,bytes}. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image.',
+    description: 'Layers. `list` needs nothing; one layer: `layer`, many: `layers[]` (add: `paths[]`). `export` writes `<temp>/<layer>.geojson` when `path` is omitted, and `raster_style` colours a raster band. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image (costs every later request).',
     parameters: {
       type: 'object',
       properties: {
@@ -2121,7 +2163,7 @@ export function registerConsolidatedTools(deps) {
         layer: { type: 'string', description: 'single layer name (from action=list)' },
         layers: { type: 'array', items: { type: 'string' }, description: 'batch: one entry per layer' },
         paths: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add: batch [{path,crs_file,name}]' },
-        path: { type: 'string', description: 'add: one file to load; export: output file (required)' },
+        path: { type: 'string', description: 'add: one file to load. export: optional - omit and the file is written to <temp>/<layer>.geojson' },
         name: { type: 'string' },
         provider: { type: 'string', enum: ['auto', 'ogr', 'gdal', 'xyz', 'wms'] },
         geometry_type: { type: 'string', enum: ['point', 'line', 'polygon'] },
@@ -2151,7 +2193,7 @@ export function registerConsolidatedTools(deps) {
         enabled: { type: 'boolean' },
         target_crs: { type: 'string' },
         output_name: { type: 'string' },
-        format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'], description: 'export: defaults to the path extension' },
+        format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'], description: 'export: optional - defaults to the path extension, else geojson' },
         inline: { type: 'boolean', description: 'export: also return the image inline (costs every later request)' },
       },
       required: ['action'],
@@ -2164,7 +2206,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- feature
   registerTool({
     name: 'qgis_feature',
-    description: 'Features and fields. One: `layer`; many: `layers[]`; batch field changes via `specs[]` ({field,field_type,expression,new_name}). Writes and deletes need `confirm:true`. Query: `fields` + `limit` -> {count,features[]}.',
+    description: 'Features and fields. One layer: `layer`, many: `layers[]`, batch field changes: `specs[]` ({field,field_type,expression,new_name}). Writes and deletes need `confirm:true`. `query` returns {count,features[]} - ask for `fields` and a `limit`.',
     parameters: {
       type: 'object',
       properties: {
@@ -2199,12 +2241,12 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description: 'Print layouts. Required: `create` -> layout_name; `add_item` -> kind (map needs width, height follows the layer aspect); `update_item` -> index; `export`/`export_atlas` -> layout or layouts[] + formats[] (many files, one call). Export returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG. Positions are mm from the top-left (A4 = 297x210, read action=info).',
+    description: 'Print layouts. `export` with nothing else exports the only layout to PNG; `create` needs `layout_name`; `add_item` needs `kind` (width defaults: map 160 mm, legend 60 mm); `update_item` takes `index` or `uuid`. Returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG.',
     parameters: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'create', 'info', 'add_item', 'update_item', 'legend_edit', 'align', 'export', 'export_atlas'] },
-        layout: { type: 'string', description: 'layout name (from action=list)' },
+        layout: { type: 'string', description: 'layout name (from action=list). optional for export: omit when the project has one layout' },
         layout_name: { type: 'string' },
         page_width: { type: 'number' },
         page_height: { type: 'number' },
@@ -2214,7 +2256,7 @@ export function registerConsolidatedTools(deps) {
         kind: { type: 'string', enum: ['map', 'legend', 'scalebar', 'north_arrow', 'text', 'rect', 'swatch', 'graticule', 'table'] },
         items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add_item: batch of item arg objects (one round-trip)' },
         updates: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'update_item: batch [{index,x,y,width,height,remove}]' },
-        layouts: { type: 'array', items: { type: 'string' }, description: 'export/export_atlas: batch of layout names' },
+        layouts: { type: 'array', items: { type: 'string' }, description: 'export/export_atlas: optional batch of layout names (one file per layout)' },
         formats: { type: 'array', items: { type: 'string', enum: ['png', 'pdf'] }, description: 'export: batch of formats (x layouts)' },
         background: { type: 'string', description: 'page/map background #rrggbb' },
         z: { type: 'number' },
@@ -2233,7 +2275,7 @@ export function registerConsolidatedTools(deps) {
         y: { type: 'number' },
         width: { type: 'number' },
         height: { type: 'number' },
-        fit_layer: { type: 'string', description: 'extent from this layer' },
+        fit_layer: { type: 'string', description: 'extent from this layer, and the only layer drawn when `layers` is omitted' },
         layers: { type: 'array', items: { type: 'string' } },
         text: { type: 'string' },
         size: { type: 'number' },
@@ -2251,9 +2293,9 @@ export function registerConsolidatedTools(deps) {
         units_per_segment: { type: 'number', description: 'km per segment' },
         unit: { type: 'string' },
         family: { type: 'string' },
-        format: { type: 'string', enum: ['png', 'pdf'] },
+        format: { type: 'string', enum: ['png', 'pdf'], description: 'export: optional - defaults to png' },
         dpi: { type: 'integer', description: 'export raster resolution (default 96)' },
-        path: { type: 'string', description: 'export/export_atlas: output file (png: optional)' },
+        path: { type: 'string', description: 'export/export_atlas: optional output file (a temp file is used otherwise)' },
         inline: { type: 'boolean', description: 'export/export_atlas: also return the PNG inline (costs every later request)' },
       },
       required: ['action'],
@@ -2266,7 +2308,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- analysis
   registerTool({
     name: 'qgis_analysis',
-    description: 'Processing. `list` returns every provider with its algorithm count (the list itself is capped - check `truncated`/`total`, filter by `provider`). `run` needs `algorithm` + `params` (`help` lists them, with enum options and defaults); `runs[]` batches. `zonal_stats` needs `layer` + `raster`. `output` keeps a file, else memory. Minutes-long algorithms belong in submit_qgis_async.',
+    description: 'Processing. `list` needs nothing and reports every provider with its count; `help` needs `algorithm` and shows enum options and defaults; `run` needs `algorithm` + `params` and defaults `output` to a temp file (`runs[]` batches). Minutes-long algorithms belong in submit_qgis_async.',
     parameters: {
       type: 'object',
       properties: {
@@ -2293,7 +2335,7 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_map',
     deferLoading: true,
-    description: 'Map canvas. `render` is headless (width/height, default 1024x768) -> `image_path`; inline:true also shows it. `screenshot`/`set_extent`/`zoom_to_layer` need the live window and stop with "needs a GUI session". Extent is padded, so one point still renders.',
+    description: 'Map canvas. `render` needs nothing (1024x768) and returns `image_path`; pass `layer` to frame one layer; inline:true also shows it. `screenshot`/`set_extent`/`zoom_to_layer` drive the live window and stop with "needs a GUI session".',
     parameters: {
       type: 'object',
       properties: {
@@ -2306,7 +2348,7 @@ export function registerConsolidatedTools(deps) {
         xmax: { type: 'number' }, ymax: { type: 'number' },
         crs: { type: 'string' },
         crs_file: { type: 'string', description: 'CRS WKT from a .prj/.wkt file' },
-        layer: { type: 'string' },
+        layer: { type: 'string', description: 'render: frame this layer alone (otherwise the extent of every layer decides the view)' },
         inline: { type: 'boolean', description: 'screenshot/render: also return the image inline (costs every later request)' },
       },
       required: ['action'],
@@ -2334,7 +2376,7 @@ export function registerConsolidatedTools(deps) {
   registerTool({
     name: 'qgis_plugin',
     deferLoading: true,
-    description: 'Session control. `status` reports pid/host/http_port/calls/errors/last_error. `lock` shows, takes or drops the instance write lease that mutating tools take by themselves. `log` reads the instance audit log back (op: tail/error/slow, limit). `restart` kills the wedged process and lets the next call start a fresh one (unsaved edits are lost) - that is the only recovery, `reload` cannot re-import headless.',
+    description: 'Session control. `status` needs nothing; `log` reads the audit back (op tail/error/slow, `limit`, `date`); `lock` shows or takes the write lease mutating tools take by themselves; `restart` kills the wedged process and the next call starts a fresh one - the only recovery (unsaved edits are lost).',
     parameters: {
       type: 'object',
       properties: {

@@ -202,8 +202,10 @@ back with something a model can correct in one step:
 - A `KeyError` on a parameter the schema declares is reported as `missing required parameter
   "path"` instead of the old `object not found` hint — the call was incomplete, not the project.
 - Parameters an action cannot run without are checked before the round trip
-  (`REQUIRED_ARGS` in `tools.js`): `qgis_layer export` without `path` or `qgis_layout add_item`
+  (`REQUIRED_ARGS` in `tools.js`): `qgis_layer export` without `layer` or `qgis_layout add_item`
   without `kind` fails locally, so a wrong first call costs a sentence instead of a QGIS call.
+  The list is kept as small as the action allows — everything with an obvious answer is defaulted
+  instead (see "Make the minimal call" below).
 - Every failure that does come from QGIS is prefixed with `tool action:` so one line names the
   call that failed.
 - An unknown parameter is rejected by name: `qgis_layer: unknown parameter "layer_name" — did you
@@ -231,7 +233,7 @@ Because it is billed on every request, the budget is spent deliberately (measure
 What was cut is redundancy, not contract: the action list moved out of prose because the schema
 already carries it in `enum` (`ops_bash` does not enumerate its own parameters either), and
 "returns JSON" / "one round-trip" filler is gone. What stayed is what a first call needs —
-the per-action required mapping (`create` -> layout_name, `export` -> path with an extension),
+the per-action required mapping (`create` -> layout_name, `add_item` -> kind),
 the exact result keys, the headless boundary, and one trap per tool. The `qgis_layer export`
 trap is the example: with `layers[]` the path is a filename and each layer lands at
 `<stem>_<layer><ext>`, which is not guessable — trimming that line costs a failed call.
@@ -505,6 +507,24 @@ on the scene, so the newest is always 0 and every index shifts as you add. Use `
 `qgis_plugin action=log` takes `date: "YYYY-MM-DD"` and returns `dates` (the rotated days it still
 has), so yesterday's incident is readable without going to the filesystem.
 
+### Make the minimal call
+
+`ops_bash` succeeds on every model because `command` is the whole call: everything else has a
+default. The `qgis_*` tools follow the same rule — the smallest call that can work is the one a
+model guesses without reading anything:
+
+| call | what you must pass | what it does for you |
+| --- | --- | --- |
+| `qgis_layer export` | `layer` (or `layers[]`) | writes `<temp>/dsh-qgis-driver/<layer>.geojson`, `format` inferred |
+| `qgis_layout export` | `action` only | picks the project's layout (the only one, else the first) and exports PNG |
+| `qgis_layout add_item kind=map` | `kind` | width defaults to 160 mm, height follows the layer aspect |
+| `qgis_layout add_item kind=legend` | `kind` | width defaults to 60 mm |
+| `qgis_map render` | `action` | 1024x768, whole project extent |
+
+Nothing above needs a path, a size or a name invented by the caller; each default is the answer a
+person would give. When a default cannot be justified (two layouts, no layer extent) the error says
+which argument to pass, so the second call is the right one.
+
 ### Elements that size themselves
 
 `scalebar` follows the linked map's scale, so `width`/`height` are rejected with an
@@ -515,6 +535,15 @@ it takes 60 mm — the size that sits beside a 160 mm map on A4 — instead of r
 Item
 `index` follows scene order (newest first) and therefore shifts as items are added —
 `add_item` returns a `uuid` for that reason, and `update_item` accepts either.
+
+### A legend must not edit the project
+
+The legend's model root *is* the project's layer tree until the model is detached, so
+emptying it to show a subset removes the layers from the project instead of from the
+legend. A probe caught this as "adding a legend emptied my project" — the layouts survived,
+the layers did not. The legend now never touches that root: it links to the map and calls
+`setLegendFilterByMapEnabled(True)`, so it lists exactly what the map draws. `tests/pure.mjs`
+keeps `removeChildNode(` out of the source for that reason.
 
 ## One failure vocabulary
 
