@@ -33,8 +33,9 @@ tarball contains the whole `dsh-tools/` bundle (code, skills, tests, docs).
    when no instance is up).
 3. Reload the bundle in DSH and run one real workflow (a render plus a layout
    export) so the shipped code is the code that was tested.
-4. `cp qgis-plugin/*.py qgis-plugin/metadata.txt` into the profile copy at
-   `%APPDATA%\QGIS\QGIS4\profiles\default\python\plugins\dsh_qgis_driver`
+4. Install the built `dist/dsh_qgis_driver-<plugin>.zip` through QGIS → Plugins → Manage and
+   Install Plugins → Install from ZIP (a hand-copied profile folder drifts: it can miss the SPDX
+   headers or keep an older version than the archive)
    if you want the GUI QGIS install to match the repo.
 
 5. Check attribution and licences before publishing:

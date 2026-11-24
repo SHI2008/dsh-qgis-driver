@@ -13,7 +13,7 @@ round-trip, while hand-written pyeval is one round-trip per step.
 | tool | actions |
 |---|---|
 | `qgis_project` | info / open / save / save_as / set_crs |
-| `qgis_layer` | list / info / fields / add / create / remove / visibility / crs / style / symbol / classify / style_multi / style_rule / labels / annotate / reproject / export / export_table |
+| `qgis_layer` | list / info / fields / add / create / remove / visibility / crs / style / symbol / classify / style_multi / style_rule / labels / annotate / reproject / raster_style / export / export_table |
 | `qgis_feature` | query / table / select / select_by_location / selected / add / update / delete / field_add / field_calc / field_delete / field_rename |
 | `qgis_layout` | list / create / info / add_item / update_item / legend_edit / align / export / export_atlas |
 | `qgis_analysis` | list / help / run / zonal_stats / reclassify |
@@ -145,6 +145,14 @@ What help cannot tell you, and how to handle it:
   list from `help`.
 - **Resampling and nodata** are parameter-level (`RESAMPLING`, `NO_DATA`, `NODATA`), not global
   settings; passing them on the wrong algorithm is silently ignored.
+- **`native:viewshed` does not exist in QGIS 4.** Viewshed is `gdal:viewshed` (`INPUT`, `BAND`,
+  `OBSERVER`, `OBSERVER_HEIGHT`, `TARGET_HEIGHT`, `MAX_DISTANCE`, `OUTPUT`) or `grass:r.viewshed`.
+  `OBSERVER` is a point: pass `[x, y]` (or `"x,y"`) in the DEM's CRS — a layer name there is an error.
+- **Outputs are named, not guessed.** `run` fills a sink you leave empty and tells you where it
+  went: `memory_outputs` for a vector sink (the layer stays in the project), `written_outputs` for
+  a raster or file sink (a real file; a raster returned as `memory:` cannot be read afterwards).
+  `unwritten_outputs` names anything the algorithm claimed yet never wrote. Pass `output=<file>`,
+  or `params={"OUTPUT": "<file>"}` to choose the path yourself.
 
 ## Availability
 

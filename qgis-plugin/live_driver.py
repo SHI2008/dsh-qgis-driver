@@ -260,19 +260,40 @@ def _audit_files():
     return paths
 
 
-def _audit_read(op="tail", limit=20):
+def _audit_dates(paths):
+    """YYYY-MM-DD labels for the log files, newest first."""
+    out = []
+    for pth in paths:
+        name = os.path.basename(pth)
+        if name.startswith("audit-") and name.endswith(".jsonl"):
+            out.append(name[6:-6])
+        elif name.startswith("audit-") and ".jsonl." in name:
+            out.append(name[6:name.index(".jsonl.")])
+    return out
+
+
+def _audit_read(op="tail", limit=20, day=None):
     """Read the audit log back so an agent can see what happened instead of guessing.
 
     op=tail    newest `limit` records
     op=error   only failures, newest first
     op=slow    slowest `limit` records
+    day        YYYY-MM-DD; default is the newest file (rotation keeps the older ones)
     """
     limit = max(1, min(int(limit or 20), 200))
     paths = _audit_files()
     if not paths:
-        return {"file": None, "count": 0, "entries": [], "files": 0,
+        return {"file": None, "count": 0, "entries": [], "files": 0, "dates": [],
                 "note": "no audit log yet: it is written to the plugin registry dir on the first call"}
+    dates = _audit_dates(paths)
     path = paths[0]
+    if day:
+        want = str(day)
+        hit = [pth for pth in paths if os.path.basename(pth) == "audit-%s.jsonl" % want]
+        if not hit:
+            return {"file": None, "count": 0, "entries": [], "files": len(paths), "dates": dates,
+                    "error": "no audit log for %s - the dates present are listed in dates" % want}
+        path = hit[0]
     records = []
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -307,7 +328,7 @@ def _audit_read(op="tail", limit=20):
             rec["args"] = rec["args"][:160] + "…"
         entries.append(rec)
     return {"file": os.path.basename(path), "count": len(entries),
-            "entries": entries, "files": len(paths)}
+            "entries": entries, "files": len(paths), "dates": dates}
 
 
 def _audit_summary(cmd):
@@ -834,7 +855,8 @@ class LiveDriver:
     def _audit_tail(self, cid, cmd, reply):
         """Return recent audit records (tail | error | slow)."""
         try:
-            reply({"id": cid, "result": _audit_read(cmd.get("op") or "tail", cmd.get("limit") or 20)})
+            reply({"id": cid, "result": _audit_read(cmd.get("op") or "tail", cmd.get("limit") or 20,
+                                     cmd.get("day"))})
         except Exception:
             reply({"id": cid, "error": traceback.format_exc()})
 

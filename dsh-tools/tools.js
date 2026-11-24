@@ -11,6 +11,8 @@
 const PRELUDE = `
 import json, os, shutil, tempfile, time, secrets, base64
 from qgis.core import (QgsProject, QgsVectorLayer, QgsRasterLayer, QgsWkbTypes,
+    QgsSingleBandPseudoColorRenderer, QgsSingleBandGrayRenderer, QgsMultiBandColorRenderer,
+    QgsColorRampShader, QgsRasterShader, QgsRasterBandStats, QgsContrastEnhancement,
     QgsCoordinateReferenceSystem, QgsCoordinateTransform, QgsFeatureRequest, QgsFeature,
     QgsGeometry, QgsField, QgsPrintLayout, QgsLayoutItem, QgsLayoutItemMap, QgsLayoutItemMapGrid,
     QgsLayoutItemLabel, QgsLayoutItemLegend, QgsLayoutItemScaleBar, QgsLayoutItemPicture,
@@ -505,7 +507,62 @@ tf = QgsTextFormat(); tf.setFont(QFont(P.get('family') or 'Microsoft YaHei')); t
 buf = QgsTextBufferSettings(); buf.setEnabled(True); buf.setSize(0.8); buf.setColor(QColor('white')); tf.setBuffer(buf)
 ps.setFormat(tf)
 mem.setLabeling(QgsVectorLayerSimpleLabeling(ps)); mem.setLabelsEnabled(True); mem.triggerRepaint()
-result = {'layer': mem.name(), 'features': len(feats), 'label_field': label_field}`
+result = {'layer': mem.name(), 'features': len(feats), 'label_field': label_field}`,
+  raster_style: `
+_name = P.get('layer') or P.get('name')
+rl = None
+for _l in prj.mapLayers().values():
+    if isinstance(_l, QgsRasterLayer) and _l.name() == _name:
+        rl = _l
+        break
+if rl is None:
+    raise ValueError('raster not found: ' + str(_name) + ' (list first)')
+mode = (P.get('mode') or 'pseudocolor').lower()
+prov = rl.dataProvider()
+if prov is None:
+    raise RuntimeError('raster has no data provider')
+band = int(P.get('band') or 1)
+info = {'layer': rl.name(), 'mode': mode}
+if mode == 'rgb':
+    bands = [int(b) for b in (P.get('bands') or [])]
+    if len(bands) != 3:
+        raise ValueError('mode=rgb needs bands: [red, green, blue]')
+    renderer = QgsMultiBandColorRenderer(prov, bands[0], bands[1], bands[2])
+    info['bands'] = bands
+elif mode == 'gray':
+    renderer = QgsSingleBandGrayRenderer(prov, band)
+    ce = QgsContrastEnhancement(prov.dataType(band))
+    ce.setContrastEnhancementAlgorithm(QgsContrastEnhancement.StretchToMinimumMaximum)
+    renderer.setContrastEnhancement(ce)
+    info['band'] = band
+else:
+    stats = prov.bandStatistics(band, QgsRasterBandStats.Min | QgsRasterBandStats.Max)
+    lo, hi = float(stats.minimumValue), float(stats.maximumValue)
+    if not hi > lo:
+        raise ValueError('band %d has no value range (min %s, max %s) - pick another band'
+                         % (band, lo, hi))
+    classes = max(2, min(int(P.get('classes') or 5), 32))
+    colors = P.get('colors') or ['#2c7bb6', '#abd9e9', '#ffffbf', '#fdae61', '#d7191c']
+    items = []
+    for i in range(classes):
+        f = float(i) / float(classes - 1)
+        items.append(QgsColorRampShader.ColorRampItem(lo + (hi - lo) * f,
+                                                      QColor(colors[i % len(colors)]),
+                                                      ('%.6g' % (lo + (hi - lo) * f))))
+    ramp = QgsColorRampShader()
+    ramp.setColorRampType(QgsColorRampShader.Interpolated)
+    ramp.setColorRampItemList(items)
+    shader = QgsRasterShader()
+    shader.setRasterShaderFunction(ramp)
+    renderer = QgsSingleBandPseudoColorRenderer(prov, band, shader)
+    renderer.setClassificationMin(lo)
+    renderer.setClassificationMax(hi)
+    info.update({'band': band, 'classes': classes, 'min': round(lo, 6), 'max': round(hi, 6),
+                 'colors': colors})
+rl.setRenderer(renderer)
+rl.triggerRepaint()
+info['renderer'] = rl.renderer().type()
+result = info`
 
 };
 
@@ -1042,9 +1099,10 @@ else:
     rect = [x, y, float(w or sum([float(v) for v in (P.get('widths') or [])])), float(h or 0)]
 _all = [it2 for it2 in lay.items() if isinstance(it2, QgsLayoutItem)]
 result = {'layout': lay.name(), 'kind': kind,
-          'index': _all.index(item) if item is not None and item in _all else None,
           'uuid': item.uuid() if item is not None else None,
-          'rect': rect}`,
+          'rect': rect,
+          'note': 'use uuid with action=update_item; indexes shift as items are added'
+                  if item is not None else 'no item was created'}`,
   update_item: `
 lay = LAYOUT(P['layout'])
 items = [it for it in lay.items() if isinstance(it, QgsLayoutItem)]
@@ -1415,19 +1473,61 @@ for k, v in params.items():
         mapped[k] = prj.mapLayersByName(v)[0]
     else:
         mapped[k] = v
-# fill missing OUTPUT sinks so the caller does not have to know they exist
+# A point parameter (gdal:viewshed OBSERVER, for one) is not a layer name: accept
+# [x, y] or "x,y" as coordinates instead of letting QGIS reject the string.
 for pdef in ad.parameterDefinitions():
-    n = pdef.name()
-    if n in mapped:
-        continue
     try:
-        optional = bool(pdef.flags() & 8)
+        if pdef.type() != 'point':
+            continue
     except Exception:
-        optional = False
-    if optional:
         continue
-    if n.upper().startswith('OUTPUT'):
+    v = mapped.get(pdef.name())
+    if isinstance(v, (list, tuple)) and len(v) == 2:
+        mapped[pdef.name()] = QgsPointXY(float(v[0]), float(v[1]))
+    elif isinstance(v, str) and ',' in v and not prj.mapLayersByName(v):
+        try:
+            a, b = v.split(',', 1)
+            mapped[pdef.name()] = QgsPointXY(float(a), float(b))
+        except ValueError:
+            pass
+# Outputs: a sink the caller left empty stays in memory, and the result says so.
+# Guessing a path would either overwrite a file or, worse, look like it wrote one.
+_SINK_TYPES = ('sink', 'rasterDestination', 'vectorDestination',
+               'fileDestination', 'folderDestination')
+_sinks = []
+_sink_kind = {}
+for pdef in ad.parameterDefinitions():
+    try:
+        t = pdef.type()
+    except Exception:
+        continue
+    if t in _SINK_TYPES:
+        _sinks.append(pdef.name())
+        _sink_kind[pdef.name()] = t
+_wanted = P.get('output')
+_named = [n for n in _sinks if mapped.get(n)]
+if _wanted and len(_sinks) > 1 and not _named:
+    raise ValueError('this algorithm has %d outputs (%s) so output= is ambiguous - name one in params, e.g. {"%s": "%s"}'
+                     % (len(_sinks), ', '.join(_sinks), _sinks[0], _wanted))
+_memory_outputs = []
+_defaulted = {}
+for n in _sinks:
+    if mapped.get(n):
+        continue
+    if _wanted and len(_sinks) == 1:
+        mapped[n] = _wanted
+        continue
+    if _sink_kind.get(n) == 'sink':
+        # a vector sink is a real layer in memory, and it is added to the project
         mapped[n] = 'memory:'
+        _memory_outputs.append(n)
+        continue
+    # raster/file sinks do not survive as 'memory:' - give them a file, otherwise
+    # the run "succeeds" and the result cannot be reached afterwards
+    ext = '.tif' if _sink_kind.get(n) == 'rasterDestination' else ''
+    _defaulted[n] = os.path.join(_OUT, 'run_%d_%s%s'
+                                 % (int(time.time() * 1000), n.lower(), ext))
+    mapped[n] = _defaulted[n]
 try:
     out = processing.run(alg, mapped)
 except Exception as e:
@@ -1445,14 +1545,37 @@ for k, v in (out or {}).items():
     else:
         txt = v if isinstance(v, str) else str(v)
         clean[k] = txt if len(txt) <= 120 else (txt[:100] + '...')
+for _k, _path in _defaulted.items():
+    if not os.path.exists(_path):
+        continue
+    try:
+        _l = QgsRasterLayer(_path, os.path.splitext(os.path.basename(_path))[0])
+        if not _l.isValid():
+            _l = QgsVectorLayer(_path, os.path.splitext(os.path.basename(_path))[0], 'ogr')
+        if _l.isValid():
+            prj.addMapLayer(_l)
+            added.append(_l.name())
+            clean[_k] = _path
+    except Exception:
+        pass
 _unwritten = [k for k, v in (out or {}).items()
               if isinstance(v, str) and v and not v.startswith('memory:') and not os.path.exists(v)]
 result = {'algorithm': alg, 'outputs': clean, 'added_layers': added}
+if _defaulted:
+    result['written_outputs'] = _defaulted
+_hints = []
+if _memory_outputs:
+    result['memory_outputs'] = _memory_outputs
+    _hints.append('no path was given for %s, so the result stayed in memory as a project layer'
+                  ' (pass params={"%s": "<file>"} or output=<file> to write a file instead)'
+                  % (', '.join(_memory_outputs), _memory_outputs[0]))
 if _unwritten:
     result['unwritten_outputs'] = _unwritten
-    result['hint'] = ('the algorithm returned success but wrote no file for ' + ', '.join(_unwritten)
-                      + ' - pass the OUTPUT_* paths explicitly, or a memory: sink, and check action=help for '
-                      + 'required options such as EXTENT_OPT/CREATION_OPTIONS')`,
+    _hints.append('returned success but wrote no file for ' + ', '.join(_unwritten)
+                  + ' - pass the OUTPUT_* paths explicitly, or a memory: sink, and check action=help for '
+                  + 'required options such as EXTENT_OPT/CREATION_OPTIONS')
+if _hints:
+    result['hint'] = '; '.join(_hints)`,
   zonal_stats: `
 rname = P.get('raster')
 rl = None
@@ -1649,7 +1772,7 @@ export const REQUIRED_ARGS = {
   'qgis_layer:export': [['path']],
   'qgis_layout:create': [['layout_name', 'layout']],
   'qgis_layout:add_item': [['layout_name', 'layout'], ['kind']],
-  'qgis_layout:update_item': [['layout_name', 'layout'], ['index']],
+  'qgis_layout:update_item': [['layout_name', 'layout'], ['index', 'uuid']],
   'qgis_layout:export': [['layouts', 'layout_name', 'layout']],
   'qgis_layout:export_atlas': [['layouts', 'layout_name', 'layout']],
   'qgis_analysis:run': [['algorithm']],
@@ -1660,7 +1783,7 @@ export const REQUIRED_ARGS = {
 const PER_ITEM_ARGS = {
   'qgis_analysis:run': ['algorithm'],
   'qgis_layout:add_item': ['kind'],
-  'qgis_layout:update_item': ['index'],
+  'qgis_layout:update_item': ['index', 'uuid'],
 };
 
 export function checkRequired(tool, action, a) {
@@ -1949,11 +2072,11 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description: 'Layers: CRS, style, labels, annotate, reproject, export. One: `layer`; many: `layers[]` (add: `paths[]`). `export` needs `path` with a filename extension; with `layers[]` each layer goes to `<stem>_<layer><ext>`, returned as {file_path,format,bytes}. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image.',
+    description: 'Layers: CRS, style, raster_style, labels, annotate, reproject, export. One: `layer`; many: `layers[]` (add: `paths[]`). `export` needs `path` with a filename extension; with `layers[]` each layer goes to `<stem>_<layer><ext>`, returned as {file_path,format,bytes}. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'export', 'export_table'] },
+        action: { type: 'string', enum: ['list', 'info', 'fields', 'add', 'create', 'remove', 'visibility', 'crs', 'style', 'symbol', 'classify', 'style_multi', 'style_rule', 'labels', 'annotate', 'reproject', 'raster_style', 'export', 'export_table'] },
         layer: { type: 'string', description: 'single layer name (from action=list)' },
         layers: { type: 'array', items: { type: 'string' }, description: 'batch: one entry per layer' },
         paths: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'add: batch [{path,crs_file,name}]' },
@@ -1976,7 +2099,10 @@ export function registerConsolidatedTools(deps) {
         rules: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'style_rule: [{expression,label,color,width,size}]' },
         label_field: { type: 'string' },
         classes: { type: 'integer' },
-        colors: { type: 'array', items: { type: 'string' }, description: 'palette #rrggbb' },
+        colors: { type: 'array', items: { type: 'string' }, description: 'palette #rrggbb (also raster_style colors)' },
+        mode: { type: 'string', enum: ['pseudocolor', 'gray', 'rgb'], description: 'raster_style: pseudocolor (default), gray or rgb' },
+        band: { type: 'integer', description: 'raster_style: band for pseudocolor/gray (default 1)' },
+        bands: { type: 'array', items: { type: 'integer' }, description: 'raster_style mode=rgb: [red, green, blue] band numbers' },
         size: { type: 'number' },
         buffer_size: { type: 'number', description: 'halo in mm' },
         buffer_color: { type: 'string' },
@@ -2175,6 +2301,7 @@ export function registerConsolidatedTools(deps) {
         op: { type: 'string', description: 'lock: acquire/release/status; log: tail/error/slow',
           enum: ['acquire', 'release', 'status', 'tail', 'error', 'slow'] },
         limit: { type: 'integer', description: 'log: how many records (default 20, max 200)' },
+        date: { type: 'string', description: 'log: YYYY-MM-DD (default: the newest file; older rotated days are listed in dates)' },
       },
       required: ['action'],
     },
@@ -2183,7 +2310,7 @@ export function registerConsolidatedTools(deps) {
       const a = args?.action;
       if (a === 'status') return asText(await runCmd('status', {}, exec?.signal));
       if (a === 'log') {
-        return asText(await runCmd('audit', { op: args?.op || 'tail', limit: args?.limit || 20 }, exec?.signal));
+        return asText(await runCmd('audit', { op: args?.op || 'tail', limit: args?.limit || 20, day: args?.date }, exec?.signal));
       }
       if (a === 'lock') {
         return asText(await runCmd('write_lock', { op: args?.op || 'status', owner: lockOwner(exec), ttl: 120 }, exec?.signal));

@@ -11,6 +11,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
   call: measured per-call latency fell from 207 ms to 65 ms median on the
   file channel (HTTP path 209 ms -> 63 ms).
 
+### Added
+- `audit` accepts `day: "YYYY-MM-DD"` and every answer lists the `dates` it still
+  has, so yesterday's incident is readable after the log rotates. Asking for a day
+  that is gone answers with the dates that exist instead of an empty list.
+
 ### Fixed
 - A `pyeval` call no longer fails when its watchdog cannot be armed: if the process
   has run out of threads, `_run_with_deadline()` runs the snippet without a deadline

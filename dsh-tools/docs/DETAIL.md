@@ -477,6 +477,29 @@ QGIS process. Three things caused that, and all three are now closed:
 When the process really does die, the failure is reported once as `DEAD` and
 the next call autostarts a fresh instance; nothing repeats the error for you.
 
+### Rasters, outputs and history
+
+`qgis_layer action=raster_style` is the structured way to colour a raster: `mode=pseudocolor`
+(equal-interval ramp over the band's real min/max, `classes`, `colors`), `mode=gray` (stretch to
+min/max), `mode=rgb` (`bands:[r,g,b]`). It returns the renderer it installed and the value range it
+used, so a wrong band shows up immediately instead of producing a flat-colour image.
+
+`qgis_analysis action=run` never guesses what a sink means. A vector `sink` left empty becomes
+`memory:` and is listed in `memory_outputs` (the layer stays in the project). A raster or file sink
+gets a file under the tool temp directory and is listed in `written_outputs`, because a raster
+returned as `memory:` cannot be reached once `processing.run` returns - that was a silent
+"success" until it was fixed. Anything the algorithm never wrote is named in `unwritten_outputs`.
+All three carry a `hint`, since "success with no file" is the failure that looks like nothing
+happened. Point parameters such as `gdal:viewshed`'s `OBSERVER` accept `[x, y]` or `"x,y"` and are
+converted for you.
+
+`qgis_layout action=add_item` returns `uuid` and a note instead of a stable index: items are ordered
+on the scene, so the newest is always 0 and every index shifts as you add. Use `uuid` with
+`action=update_item`, or read the current index from `action=info`.
+
+`qgis_plugin action=log` takes `date: "YYYY-MM-DD"` and returns `dates` (the rotated days it still
+has), so yesterday's incident is readable without going to the filesystem.
+
 ### Elements that size themselves
 
 `scalebar` follows the linked map's scale, so `width`/`height` are rejected with an

@@ -363,5 +363,15 @@ await ok('the scope names are the three the config accepts', () => {
   assert.ok(WRITE_ACTIONS.has('qgis_layer:export'))
 })
 
+await ok('update_item needs an index or a uuid, not both-in-name-only', () => {
+  // add_item no longer returns a stable index, so a uuid has to be accepted -
+  // otherwise the documented flow ("use uuid with action=update_item") is refused
+  // by our own guard before it reaches QGIS.
+  checkRequired('qgis_layout', 'update_item', { layout: 'L', uuid: '{a-b}' })
+  checkRequired('qgis_layout', 'update_item', { layout: 'L', index: 0 })
+  assert.throws(() => checkRequired('qgis_layout', 'update_item', { layout: 'L' }),
+                /missing parameter \"index\" or \"uuid\"/)
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0
