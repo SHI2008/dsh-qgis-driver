@@ -29,6 +29,20 @@ from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase, QImage, QPainter
 from qgis.PyQt.QtCore import QSize, Qt
 prj = QgsProject.instance()
 P = json.loads(__PARAMS__)
+def _extent_arg(P):
+    """[xmin,ymin,xmax,ymax] or the four scalars -> a QgsRectangle (or None)."""
+    e = P.get('extent')
+    if isinstance(e, (list, tuple)) and len(e) == 4:
+        try:
+            return QgsRectangle(float(e[0]), float(e[1]), float(e[2]), float(e[3]))
+        except (TypeError, ValueError):
+            return None
+    if None not in (P.get('xmin'), P.get('ymin'), P.get('xmax'), P.get('ymax')):
+        return QgsRectangle(float(P['xmin']), float(P['ymin']),
+                            float(P['xmax']), float(P['ymax']))
+    return None
+
+
 def _lim(key='limit', dflt=200, cap=1000):
     """One page-size rule for every list-shaped result."""
     try:
@@ -847,6 +861,12 @@ for it in lay.items():
     d = {'index': len(items), 'uuid': it.uuid(), 'kind': type(it).__name__, 'rect': rect_of(it)}
     if isinstance(it, QgsLayoutItemMap):
         d['layers'] = [l.name() for l in it.layers()]
+        # The extent is what decides whether the frame shows anything: an item with no
+        # extent renders a blank box and the scale bar invents a planetary scale.
+        _e = it.extent()
+        d['extent'] = [round(v, 4) for v in (_e.xMinimum(), _e.yMinimum(),
+                                             _e.xMaximum(), _e.yMaximum())]
+        d['crs'] = it.crs().authid()
     if isinstance(it, QgsLayoutItemLabel):
         d['text'] = it.text()[:60]
     items.append(d)
@@ -902,6 +922,16 @@ if kind == 'map':
         m.setKeepLayerSet(True)
     if target is not None:
         m.zoomToExtent(e)
+    _rect = _extent_arg(P)
+    if _rect is not None:
+        # An explicit extent wins over the layer framing: it is the only way to frame a
+        # subject that is not a whole layer (a corner of a raster, a padded view).
+        _crs = P.get('crs') or (target.crs() if target is not None else prj.crs())
+        _r = QgsCoordinateReferenceSystem(_crs)
+        if _r.isValid() and prj.crs().isValid() and _r != prj.crs():
+            _rect = QgsCoordinateTransform(_r, prj.crs(), prj).transformBoundingBox(_rect)
+        m.setCrs(prj.crs() if prj.crs().isValid() else _r)
+        m.zoomToExtent(_rect)
     m.invalidateCache()
     item = m
 elif kind == 'legend':
@@ -1135,8 +1165,23 @@ _all = [it2 for it2 in lay.items() if isinstance(it2, QgsLayoutItem)]
 result = {'layout': lay.name(), 'kind': kind,
           'uuid': item.uuid() if item is not None else None,
           'rect': rect,
-          'note': 'use uuid with action=update_item; indexes shift as items are added'
-                  if item is not None else 'no item was created'}`,
+          'note': ('use uuid with action=update_item; indexes shift as items are added'
+                   if item is not None else 'no item was created')}
+if isinstance(item, QgsLayoutItemMap):
+    # A frame with no extent is a blank box that looks like a broken export; hand the
+    # extent back so the caller can see what it framed before spending an export.
+    _e2 = item.extent()
+    result['extent'] = [round(v, 4) for v in (_e2.xMinimum(), _e2.yMinimum(),
+                                              _e2.xMaximum(), _e2.yMaximum())]
+    if _e2.width() <= 0 or _e2.height() <= 0:
+        result['warning'] = ('map extent is empty - pass fit_layer or extent so the frame '
+                             'has something to draw')
+    elif not prj.crs().isValid():
+        # Observed once: every element drew except the map. Without a project CRS the
+        # renderer has nothing to transform into, and the page looks broken rather than
+        # unfinished - say it here instead of leaving the model to guess.
+        result['warning'] = ('the project has no CRS, so the map frame may render blank - '
+                             'set one with qgis_project action=set_crs')`,
   update_item: `
 lay = LAYOUT(P['layout'])
 items = [it for it in lay.items() if isinstance(it, QgsLayoutItem)]
@@ -1164,8 +1209,20 @@ else:
     nh = s.height() if P.get('height') is None else float(P['height'])
     it.attemptMove(QgsLayoutPoint(nx, ny, MM()))
     it.attemptResize(QgsLayoutSize(nw, nh, MM()))
+    _rect = _extent_arg(P) if isinstance(it, QgsLayoutItemMap) else None
+    if _rect is not None:
+        _crs = QgsCoordinateReferenceSystem(P.get('crs') or prj.crs().authid())
+        if _crs.isValid() and prj.crs().isValid() and _crs != prj.crs():
+            _rect = QgsCoordinateTransform(_crs, prj.crs(), prj).transformBoundingBox(_rect)
+        it.zoomToExtent(_rect)
+        it.invalidateCache()
     lay.refresh()
-    result = {'index': i, 'kind': type(it).__name__, 'rect': [round(nx, 1), round(ny, 1), round(nw, 1), round(nh, 1)]}`,
+    result = {'index': i, 'kind': type(it).__name__,
+              'rect': [round(nx, 1), round(ny, 1), round(nw, 1), round(nh, 1)]}
+    if isinstance(it, QgsLayoutItemMap):
+        _e = it.extent()
+        result['extent'] = [round(v, 4) for v in (_e.xMinimum(), _e.yMinimum(),
+                                                  _e.xMaximum(), _e.yMaximum())]`,
   export: `
 _layout_name = P.get('layout_name') or P.get('layout')
 if not _layout_name:
@@ -1836,10 +1893,13 @@ export function scopeRefusal(scope, tool, action, args) {
   const what = need === 'danger'
     ? 'that action can destroy data or run arbitrary Python'
     : 'that action writes to the project or to disk'
+  const redirect = tool === 'execute_qgis_sync' || tool === 'submit_qgis_async'
+    ? ' For a read-only look at the same session, `qgis_plugin status` needs no scope.'
+    : ''
   return `${label} is blocked: ${what}, and the current permission scope is "${have}". ` +
     'This bundle cannot open a dialog itself. Tell the user which call is blocked and why, ' +
     `and ask them (ask_user_question) to switch the scope to "${need}" in the composer scope ` +
-    'selector or in Settings; the switch takes effect on your very next call, so retry then. ' +
+    `selector or in Settings; the switch takes effect on your very next call, so retry then.${redirect} ` +
     'Reads, renders and the audit log are never blocked.'
 }
 
@@ -2106,6 +2166,22 @@ export function taskOutcome(status) {
     case 'queued': return 'queued'
     default: return String(status || 'unknown')
   }
+}
+
+// `extent: [xmin, ymin, xmax, ymax]` is the shape a model reaches for, but the
+// bodies read the four scalars. Convert once here so the documented alias is real
+// instead of silently ignored (it was: render framed the project and said nothing).
+export function withExtent(args) {
+  const a = args && typeof args === 'object' ? args : {}
+  const e = Array.isArray(a.extent) ? a.extent : null
+  if (!e || e.length !== 4) return a
+  if (e.some((v) => typeof v !== 'number' || !Number.isFinite(v))) return a
+  const out = { ...a }
+  if (a.xmin === undefined) out.xmin = e[0]
+  if (a.ymin === undefined) out.ymin = e[1]
+  if (a.xmax === undefined) out.xmax = e[2]
+  if (a.ymax === undefined) out.ymax = e[3]
+  return out
 }
 
 export function registerConsolidatedTools(deps) {
@@ -2490,7 +2566,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description: 'Print layouts. `list` returns {count,total,truncated,layouts} (limit defaults to 200). `export` with nothing else exports the only layout to PNG; `create` needs `layout_name`; `add_item` needs `kind` (width defaults: map 160 mm, legend 60 mm); `update_item` takes `index` or `uuid`. Returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG.',
+    description: 'Print layouts. `list` returns {count,total,truncated,layouts} (limit defaults to 200). `export` with nothing else exports the only layout to PNG; `create` needs `layout_name`; `add_item` needs `kind` (width defaults: map 160 mm, legend 60 mm); a map item frames `fit_layer`, or `extent`/xmin..ymax, and reports its `extent` back (an empty one warns). `update_item` takes `index` or `uuid` and also sets the extent of a map item. Returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG.',
     parameters: {
       type: 'object',
       properties: {
@@ -2525,6 +2601,12 @@ export function registerConsolidatedTools(deps) {
         width: { type: 'number' },
         height: { type: 'number' },
         fit_layer: { type: 'string', description: 'extent from this layer, and the only layer drawn when `layers` is omitted' },
+        extent: { type: 'array', items: { type: 'number' }, description: 'map item: [xmin,ymin,xmax,ymax] to frame - wins over fit_layer; in `crs` (default the project)' },
+        xmin: { type: 'number' },
+        ymin: { type: 'number' },
+        xmax: { type: 'number' },
+        ymax: { type: 'number' },
+        crs: { type: 'string', description: 'extent: CRS of those numbers (default the project CRS)' },
         layers: { type: 'array', items: { type: 'string' } },
         text: { type: 'string' },
         size: { type: 'number' },
@@ -2584,7 +2666,6 @@ export function registerConsolidatedTools(deps) {
   // ---------------- map (GUI-only canvas ops + offscreen render)
   registerTool({
     name: 'qgis_map',
-    deferLoading: true,
     description: 'Map canvas. `render` needs nothing (1024x768) and returns `image_path`; pass `layer` to frame one layer; inline:true also shows it. `screenshot`/`set_extent`/`zoom_to_layer` drive the live window and stop with "needs a GUI session".',
     parameters: {
       type: 'object',
@@ -2618,14 +2699,13 @@ export function registerConsolidatedTools(deps) {
       }
       const a = args?.action;
       const gui = a === 'set_extent' || a === 'zoom_to_layer' || a === 'screenshot';
-      return call(MAP_BODY[a], args, exec, gui ? { gui: true } : undefined, 'qgis_map');
+      return call(MAP_BODY[a], withExtent(args), exec, gui ? { gui: true } : undefined, 'qgis_map');
     },
   });
 
   // ---------------- plugin / diagnostics
   registerTool({
     name: 'qgis_plugin',
-    deferLoading: true,
     description: 'Session control. `status` needs nothing; `log` reads the audit back (op tail/error/slow, `limit`, `date`); `lock` shows or takes the write lease mutating tools take by themselves; `restart` kills the wedged process and the next call starts a fresh one - the only recovery (unsaved edits are lost).',
     parameters: {
       type: 'object',

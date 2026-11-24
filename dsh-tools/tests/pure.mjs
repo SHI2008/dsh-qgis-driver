@@ -11,11 +11,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 
 import { internals } from '../index.js'
-import {
-  MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner, preflightBatch,
-  SCOPES, DANGER_ACTIONS, WRITE_ACTIONS, scopeRefusal, assertScope, requiredScope,
-  taskOutcome, pathAllowed, algorithmAllowed, allowRefusal, pendingShards, parseList,
-} from '../tools.js'
+import { MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner, preflightBatch, SCOPES, DANGER_ACTIONS, WRITE_ACTIONS, scopeRefusal, assertScope, requiredScope, taskOutcome, pathAllowed, algorithmAllowed, allowRefusal, pendingShards, parseList, withExtent } from '../tools.js'
 
 const {
   routeToCommand, tidyError, describeFailure, nearestName, guardExecute, asText,
@@ -502,6 +498,49 @@ await ok('both list actions report count, total and truncated', () => {
   assert.match(src, /'layers': _all\[:_lim\]/, 'layers are cut to the limit')
   assert.match(src, /'layouts': _all\[:_lim\]/, 'layouts are cut to the limit')
   assert.match(src, /list: max rows to return \(default 200, max 1000\)/, 'the limit is documented')
+})
+
+// A no-thinking probe asked for "session status" and reached for
+// execute_qgis_sync, which is danger-scoped, instead of qgis_plugin status.
+// Hiding a tool behind deferLoading means a model that never saw its
+// description cannot pick it; correctness outranks the tokens it saves.
+await ok('every tool arrives with its description on the first turn', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.equal((src.match(/deferLoading/g) || []).length, 0, 'no tool is deferred')
+  assert.match(src, /name: 'qgis_plugin'/, 'the session tool is registered')
+  assert.match(src, /name: 'qgis_map'/, 'the render tool is registered')
+})
+
+// The same probe stumbled on the refusal: it said what was blocked but not what
+// to call instead. A refusal now names the read-only alternative.
+await ok('a blocked PyQGIS call points at the read-only alternative', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /For a read-only look at the same session, `qgis_plugin status` needs no scope/)
+  assert.match(src, /tool === 'execute_qgis_sync' \|\| tool === 'submit_qgis_async'/)
+})
+
+// Names a model reaches for from memory stay accepted, because a rejected alias
+// costs a whole round trip: label_field (labels), layout_name/layout (export),
+// layer/layers, extent vs xmin..ymax.
+await ok('the forgiving aliases survive every trim', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /P\.get\('label_field'\)/, 'labels accept label_field')
+  assert.match(src, /P\.get\('layout_name'\) or P\.get\('layout'\)/, 'export accepts layout')
+  // The schema documents `extent` as the array form of xmin..ymax, so render must
+  // actually convert it: it used to be accepted and ignored, framing the project.
+  assert.deepEqual(withExtent({ extent: [1, 2, 3, 4] }), { extent: [1, 2, 3, 4], xmin: 1, ymin: 2, xmax: 3, ymax: 4 })
+  assert.deepEqual(withExtent({ xmin: 9 }), { xmin: 9 }, 'nothing to convert')
+  assert.deepEqual(withExtent({ extent: ['a', 2, 3, 4] }), { extent: ['a', 2, 3, 4] }, 'not numbers: refuse to guess')
+})
+
+// A layout map with no extent draws a blank box, and a model cannot tell "no data"
+// from "no frame": the item now takes an explicit extent and reports the one it has.
+await ok('a layout map takes an extent and reports it', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /def _extent_arg\(P\)/, 'one converter for both call shapes')
+  assert.match(src, /result\['warning'\] = \('map extent is empty/, 'an empty frame says so')
+  assert.match(src, /it\.zoomToExtent\(_rect\)/, 'update_item can move the frame')
+  assert.match(src, /map item: \[xmin,ymin,xmax,ymax\] to frame/, 'the parameter is documented')
 })
 
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)

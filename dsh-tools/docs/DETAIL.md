@@ -289,6 +289,39 @@ Because it is billed on every request, the budget is spent deliberately (measure
 | ten tool descriptions | 3864 chars | 2539 chars (-34%) |
 | all description strings | 5810 chars | 4194 chars (-28%) |
 
+### Trimming never buys tokens with calls
+
+A description or parameter is only worth deleting if the model still gets it right the
+first time. A no-thinking probe (ten kinds of call, one session) found the failure this
+rule prevents: `qgis_plugin` and `qgis_map` were registered with `deferLoading: true`, so
+the model never saw their descriptions, asked for "session status" and reached for
+`execute_qgis_sync` — a danger-scoped tool it had to be refused. Two entry points were
+invisible and cost a whole round trip.
+
+So the ledger now reads:
+
+- every tool is loaded on the first turn; `deferLoading` is not used for tools a planner
+  may need (529 chars/request is cheaper than one wrong call);
+- alias parameters stay (`label_field` for labels, `layout_name`/`layout` for export,
+  `paths`/`path`, `extent` vs `xmin..ymax`), and each one is pinned by a test;
+- a refusal names the alternative (`execute_qgis_sync` → "a read-only look at the same
+  session… `qgis_plugin status` needs no scope"), because a refusal without a next step is
+  just another failed call;
+- an alias in the schema is a promise the body must keep. `extent` was documented as the
+  array form of `xmin..ymax` and silently ignored — the render framed the project and said
+  nothing. `withExtent()` converts it in one place and the test covers both the converted
+  and the refused shapes.
+
+Re-run the probe before landing any trim that removes a parameter, an alias or a tool from
+the first turn; the bar is zero failures.
+
+The same probe found the mirror-image problem in the layout: a map frame that is created
+with `fit_layer` but no data draws an empty box, and the caller has no way to tell "no
+extent" from "nothing there". `qgis_layout` therefore takes `extent` (or the four
+scalars) on `add_item`/`update_item` for map items, returns the extent it ended up with,
+and warns when the frame is empty or the project has no CRS — the two ways a map frame
+comes out blank.
+
 What was cut is redundancy, not contract: the action list moved out of prose because the schema
 already carries it in `enum` (`ops_bash` does not enumerate its own parameters either), and
 "returns JSON" / "one round-trip" filler is gone. What stayed is what a first call needs —
