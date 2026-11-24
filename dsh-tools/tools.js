@@ -1950,6 +1950,23 @@ result = {'count': len(_parts_), 'results': _parts_}
 /** PRELUDE + the call's parameters: every body — and execute_qgis_sync — starts from it. */
 const preludeFor = (params) => PRELUDE.replace('__PARAMS__', JSON.stringify(JSON.stringify(params || {})));
 
+/**
+ * One word for "how did the job end", shaped like the harness's own job
+ * outcomes (`completed | killed | failed`) instead of our internal statuses.
+ * @param status - a task's `status` field.
+ * @returns the matching outcome word.
+ */
+export function taskOutcome(status) {
+  switch (String(status || '')) {
+    case 'done': return 'completed'
+    case 'error': return 'failed'
+    case 'cancelled': return 'cancelled'
+    case 'running': return 'running'
+    case 'queued': return 'queued'
+    default: return String(status || 'unknown')
+  }
+}
+
 export function registerConsolidatedTools(deps) {
   const { registerTool, run, runCmd, stringOutput, asText, jsonSafeString, scope, restartInstance } = deps;
   // `scope` is a getter in the live bundle (so the pill applies without a reload)
@@ -2026,7 +2043,7 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
+    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. Every task carries `outcome` (completed/failed/cancelled/running/queued) next to `status`. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
     parameters: {
       type: 'object',
       properties: {
@@ -2050,9 +2067,10 @@ export function registerConsolidatedTools(deps) {
       const readOne = async (id) => {
         try {
           const r = await deps.callRaw('/api/tasks/' + encodeURIComponent(id), 'GET', null, exec?.signal, target);
-          return r && typeof r === 'object' ? { task_id: id, ...r } : { task_id: id, result: r };
+          const one = r && typeof r === 'object' ? { task_id: id, ...r } : { task_id: id, result: r };
+          return { ...one, outcome: taskOutcome(one.status) };
         } catch (e) {
-          return { task_id: id, status: 'error', error: e?.message || String(e) };
+          return { task_id: id, status: 'error', outcome: 'failed', error: e?.message || String(e) };
         }
       };
       const ids = many.length ? many : (String(args?.task_id ?? '').trim() ? [String(args.task_id).trim()] : []);

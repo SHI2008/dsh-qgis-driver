@@ -14,7 +14,7 @@ same, this bundle copies their answer instead of inventing another one.
 | A result may carry an image | `read_image` returns `{type:'image', attachment}` — never inline base64 | `inline:true` saves the PNG through the attachment store and returns the same shape |
 | An overlay inside the composer must not be clipped | composer controls portal to `document.body` (`createPortal`), because the slot contract says fixed overlays must leave the docked composer | `client.js` measures the trigger and positions the panel `fixed` against the viewport — the client loader offers no `react-dom` external (only `react`), so portaling is not available and measuring achieves the same |
 | A settings page needs a title | `PluginsSettingsSection` renders its own `<h2>` heading and one intro paragraph; the shell adds none | `SettingsPanel` opens with `h('h2', …)` and the existing connection sentence as the intro (`tests/pure.mjs` #48) |
-| Job outcome vocabulary | `completed | killed | failed`, with `exit code: N` / `signal: X` in `detail` | tasks report `done | error | cancelled`, with the traceback or the cancel reason in `error` |
+| Job outcome vocabulary | `completed | killed | failed`, with `exit code: N` / `signal: X` in `detail` | every task carries `outcome` (`completed | failed | cancelled | running | queued`) beside its internal `status`; the traceback or cancel reason stays in `error` (`taskOutcome()`, `tests/pure.mjs` #49) |
 
 Two things deliberately differ:
 

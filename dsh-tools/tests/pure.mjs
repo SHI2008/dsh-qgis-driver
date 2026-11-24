@@ -14,6 +14,7 @@ import { internals } from '../index.js'
 import {
   MUTATING, isMutating, checkRequired, batchItems, batchBody, lockOwner, preflightBatch,
   SCOPES, DANGER_ACTIONS, WRITE_ACTIONS, scopeRefusal, assertScope, requiredScope,
+  taskOutcome,
 } from '../tools.js'
 
 const {
@@ -428,6 +429,18 @@ await ok('the settings section has a heading and an intro', () => {
   const src = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
   assert.match(src, /h\('h2', \{ style: \{ fontSize: 15, fontWeight: 600/, 'the panel opens with an h2')
   assert.match(src, /连接本机正在运行的 QGIS/, 'and one intro sentence under it')
+})
+
+// The harness reports a finished job as completed | killed | failed. Our tasks used
+// only done | error | cancelled, which reads as a different vocabulary to a model
+// that has seen job_output. Publish the same word next to the internal status.
+await ok('a task carries the harness job outcome word', () => {
+  const map = { done: 'completed', error: 'failed', cancelled: 'cancelled', running: 'running', queued: 'queued' }
+  for (const [status, outcome] of Object.entries(map)) {
+    assert.equal(taskOutcome(status), outcome, `${status} should read as ${outcome}`)
+  }
+  assert.equal(taskOutcome('weird'), 'weird', 'an unknown status passes through instead of being invented')
+  assert.equal(taskOutcome(undefined), 'unknown')
 })
 
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
