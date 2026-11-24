@@ -421,5 +421,14 @@ await ok('composer popovers position fixed from the trigger, not inside the clip
   assert.match(src, /function popoverStyle\(pos, width, fallback\)/, 'one shared popover style')
 })
 
+// A settings section draws its own heading: upstream PluginsSettingsSection renders an
+// <h2> plus an intro paragraph, and the shell adds none. Without it this page is a
+// stack of rows with no title.
+await ok('the settings section has a heading and an intro', () => {
+  const src = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  assert.match(src, /h\('h2', \{ style: \{ fontSize: 15, fontWeight: 600/, 'the panel opens with an h2')
+  assert.match(src, /连接本机正在运行的 QGIS/, 'and one intro sentence under it')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

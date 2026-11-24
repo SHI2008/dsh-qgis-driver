@@ -406,6 +406,9 @@ window.__ModuleLoader__.load({
       }
 
       return h('div', { style: { maxWidth: 520, padding: '8px 0', color: TEXT, fontSize: 13, lineHeight: 1.5 } },
+        // Sections draw their own heading (upstream PluginsSettingsSection does the same);
+        // without it this page has no title above the rows.
+        h('h2', { style: { fontSize: 15, fontWeight: 600, margin: '0 0 6px', color: TEXT } }, 'dsh-qgis-driver'),
         h('div', { style: { fontSize: 12, color: MUTED, marginBottom: 14 } },
           '连接本机正在运行的 QGIS：通过插件写下的注册表自动发现，不需要填地址或密钥。'),
         h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 18 } },
