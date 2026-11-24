@@ -222,9 +222,15 @@ await ok('the batch body clears the batched key per item', () => {
 })
 
 // ---------- output + skills
-await ok('asText keeps strings and pretty-prints objects', () => {
+await ok('a feature query says whether it truncated', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /'count': len\(rows\), 'limit': _lim, 'truncated': _trunc/)
+  assert.match(src, /'total': int\(l\.featureCount\(\)\) if not expr else None, 'rows': rows/)
+})
+
+await ok('asText keeps strings and emits compact json', () => {
   assert.equal(asText('plain'), 'plain')
-  assert.equal(asText({ a: 1 }), '{\n  "a": 1\n}')
+  assert.equal(asText({ a: 1 }), '{"a":1}')
 })
 await ok('an oversized result is truncated and spills to a file', () => {
   // ops_bash keeps a bounded window and reports where the rest went; one

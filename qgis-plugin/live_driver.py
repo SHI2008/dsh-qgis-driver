@@ -896,12 +896,21 @@ class LiveDriver:
             reply({"id": cid, "error": traceback.format_exc()})
 
     def _font_count(self):
-        """0 families means labels would render as boxes; useful when a report says so."""
+        """0 families means labels would render as boxes; useful when a report says so.
+
+        Cached: the font database is built once at start-up and never changes while
+        the process lives, and building the list on every status call is wasted work.
+        """
+        cached = getattr(self, "_font_cache", None)
+        if cached is not None:
+            return cached
         try:
             from qgis.PyQt.QtGui import QFontDatabase
-            return len(QFontDatabase.families())
+            count = len(QFontDatabase.families())
         except Exception:
             return -1
+        self._font_cache = count
+        return count
 
     def _status(self):
         """Liveness of this instance: pid, live dir, port, counters, current work."""

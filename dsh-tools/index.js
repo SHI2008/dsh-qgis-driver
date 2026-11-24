@@ -1111,7 +1111,10 @@ async function callQgis(route, method, body, signal, target, timeoutMs) {
 
 /** Normalize an arbitrary result value to text for the model. */
 function asText(value) {
-  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  // Compact JSON: the model pays for every byte on every later request, and these
+  // results are read by a machine, not indented for a human. ~20% smaller than the
+  // two-space form on typical feature/analysis payloads.
+  const text = typeof value === 'string' ? value : JSON.stringify(value)
   return clampResult(text)
 }
 

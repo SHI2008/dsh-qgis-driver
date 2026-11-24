@@ -590,7 +590,9 @@ expr = P.get('expression') or ''
 req = QgsFeatureRequest()
 if expr:
     req.setFilterExpression(expr)
-req.setLimit(int(P.get('limit') or 20))
+_lim = max(1, int(P.get('limit') or 20))
+# One extra row tells us whether the layer holds more, without a second full scan.
+req.setLimit(_lim + 1)
 fields = P.get('fields') or [f.name() for f in l.fields()]
 rows = []
 for f in l.getFeatures(req):
@@ -598,7 +600,11 @@ for f in l.getFeatures(req):
     if P.get('include_geometry'):
         d['__wkt__'] = f.geometry().asWkt()
     rows.append(d)
-result = {'layer': l.name(), 'count': len(rows), 'rows': rows}`,
+_trunc = len(rows) > _lim
+if _trunc:
+    rows = rows[:_lim]
+result = {'layer': l.name(), 'count': len(rows), 'limit': _lim, 'truncated': _trunc,
+          'total': int(l.featureCount()) if not expr else None, 'rows': rows}`,
   select: `
 l = L(P['layer'])
 mode = P.get('mode') or 'replace'
@@ -2440,7 +2446,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- feature
   registerTool({
     name: 'qgis_feature',
-    description: 'Features and fields. One layer: `layer`, many: `layers[]`, batch field changes: `specs[]` ({field,field_type,expression,new_name}). Writes and deletes need `confirm:true`. `query` returns {count,features[]} - ask for `fields` and a `limit`.',
+    description: 'Features and fields. One layer: `layer`, many: `layers[]`, batch field changes: `specs[]` ({field,field_type,expression,new_name}). Writes and deletes need `confirm:true`. `query` returns {count,limit,truncated,total,rows[]} - ask for `fields` and a `limit`.',
     parameters: {
       type: 'object',
       properties: {
