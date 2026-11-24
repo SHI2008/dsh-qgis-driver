@@ -443,5 +443,17 @@ await ok('a task carries the harness job outcome word', () => {
   assert.equal(taskOutcome(undefined), 'unknown')
 })
 
+// A project with hundreds of layers answered `qgis_layer list` with every one of
+// them, and an array has nowhere to say "there were more". Both list actions now
+// return the same bounded shape `qgis_analysis list` uses.
+await ok('both list actions report count, total and truncated', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  const bounded = src.match(/'truncated': len\(_all\) > _lim/g) || []
+  assert.equal(bounded.length, 2, 'layers and layouts share the bounded shape')
+  assert.match(src, /'layers': _all\[:_lim\]/, 'layers are cut to the limit')
+  assert.match(src, /'layouts': _all\[:_lim\]/, 'layouts are cut to the limit')
+  assert.match(src, /list: max rows to return \(default 200, max 1000\)/, 'the limit is documented')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

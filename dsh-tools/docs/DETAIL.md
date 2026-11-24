@@ -52,6 +52,10 @@ write the PNG to a temp file and return its path; open it with `read_image`.
 `qgis_map` and `qgis_plugin` carry `deferLoading: true`, so their descriptions
 load on demand — they stay callable but do not cost prompt space up front.
 
+Both `qgis_layer list` and `qgis_layout list` return a bounded shape —
+`{count, total, truncated, layers|layouts}` — so a project with hundreds of entries
+says so instead of silently listing the first page.
+
 Where a layer name is ambiguous, pass the layer id instead: `qgis_layer list`
 
 #### A capped list hides providers

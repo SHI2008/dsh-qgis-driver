@@ -150,10 +150,12 @@ result = {'saved': bool(ok), 'path': path, 'layers': len(prj.mapLayers())}`,
 
 const LAYER_BODY = {
   list: `
-result = [{'id': l.id(), 'name': l.name(),
-           'type': 'Vector' if l.type() == 0 else 'Raster',
-           'crs': l.crs().authid() or l.crs().description(),
-           'feature_count': l.featureCount() if hasattr(l, 'featureCount') else None} for l in prj.mapLayers().values()]`,
+_all = [{'id': l.id(), 'name': l.name(),
+         'type': 'Vector' if l.type() == 0 else 'Raster',
+         'crs': l.crs().authid() or l.crs().description(),
+         'feature_count': l.featureCount() if hasattr(l, 'featureCount') else None} for l in prj.mapLayers().values()]
+_lim = max(1, min(int(P.get('limit') or 200), 1000))
+result = {'count': min(len(_all), _lim), 'total': len(_all), 'truncated': len(_all) > _lim, 'layers': _all[:_lim]}`,
   info: `
 l = L(P['layer'])
 d = {'name': l.name(), 'valid': l.isValid(), 'crs': l.crs().authid() or l.crs().description(),
@@ -793,7 +795,10 @@ result = {'layer': lyr.name(), 'fields': fields, 'total': total, 'offset': offse
 };
 
 const LAYOUT_BODY = {
-  list: `result = [l.name() for l in prj.layoutManager().layouts()]`,
+  list: `
+_all = [l.name() for l in prj.layoutManager().layouts()]
+_lim = max(1, min(int(P.get('limit') or 200), 1000))
+result = {'count': min(len(_all), _lim), 'total': len(_all), 'truncated': len(_all) > _lim, 'layouts': _all[:_lim]}`,
   create: `
 name = P['layout_name']
 lm = prj.layoutManager()
@@ -2192,7 +2197,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layer
   registerTool({
     name: 'qgis_layer',
-    description: 'Layers. `list` needs nothing; one layer: `layer`, many: `layers[]` (add: `paths[]`). `export` writes `<temp>/<layer>.geojson` when `path` is omitted, and `raster_style` colours a raster band. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image (costs every later request).',
+    description: 'Layers. `list` needs nothing and returns {count,total,truncated,layers} (limit defaults to 200); one layer: `layer`, many: `layers[]` (add: `paths[]`). `export` writes `<temp>/<layer>.geojson` when `path` is omitted, and `raster_style` colours a raster band. A name that does not resolve is an error, not a no-op - list first. inline:true adds the image (costs every later request).',
     parameters: {
       type: 'object',
       properties: {
@@ -2232,6 +2237,7 @@ export function registerConsolidatedTools(deps) {
         output_name: { type: 'string' },
         format: { type: 'string', enum: ['gpkg', 'geojson', 'shp', 'csv', 'json'], description: 'export: optional - defaults to the path extension, else geojson' },
         inline: { type: 'boolean', description: 'export: also return the image inline (costs every later request)' },
+        limit: { type: 'integer', description: 'list: max rows to return (default 200, max 1000); check total and truncated' },
       },
       required: ['action'],
     },
@@ -2278,7 +2284,7 @@ export function registerConsolidatedTools(deps) {
   // ---------------- layout
   registerTool({
     name: 'qgis_layout',
-    description: 'Print layouts. `export` with nothing else exports the only layout to PNG; `create` needs `layout_name`; `add_item` needs `kind` (width defaults: map 160 mm, legend 60 mm); `update_item` takes `index` or `uuid`. Returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG.',
+    description: 'Print layouts. `list` returns {count,total,truncated,layouts} (limit defaults to 200). `export` with nothing else exports the only layout to PNG; `create` needs `layout_name`; `add_item` needs `kind` (width defaults: map 160 mm, legend 60 mm); `update_item` takes `index` or `uuid`. Returns {format,file_path,image_path,size_bytes} per file; inline:true adds the PNG.',
     parameters: {
       type: 'object',
       properties: {
@@ -2334,6 +2340,7 @@ export function registerConsolidatedTools(deps) {
         dpi: { type: 'integer', description: 'export raster resolution (default 96)' },
         path: { type: 'string', description: 'export/export_atlas: optional output file (a temp file is used otherwise)' },
         inline: { type: 'boolean', description: 'export/export_atlas: also return the PNG inline (costs every later request)' },
+        limit: { type: 'integer', description: 'list: max rows to return (default 200, max 1000); check total and truncated' },
       },
       required: ['action'],
     },

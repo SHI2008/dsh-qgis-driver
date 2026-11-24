@@ -163,7 +163,8 @@ string where an array is expected is the most common first-call failure.
 **A thematic map from a layer that already exists**
 
 1. `qgis_project action=info` — empty project? nothing to map yet.
-2. `qgis_layer action=list` — use the exact names it returns.
+2. `qgis_layer action=list` — it returns `{count, total, truncated, layers[]}`; use the exact
+   names in `layers`. When `truncated` is true, narrow with `limit` or ask only for what you need.
 3. `qgis_layer action=style layer="<name>" field="<field>" classes=5` (or `action=classify`).
 4. `qgis_layout action=create layout_name="Map"`.
 5. `qgis_layout action=add_item layout="Map" kind=map fit_layer="<name>" x=15 y=15` — width is
