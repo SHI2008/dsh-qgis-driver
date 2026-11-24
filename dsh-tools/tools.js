@@ -2026,12 +2026,14 @@ export function registerConsolidatedTools(deps) {
 
   registerTool({
     name: 'check_qgis_task',
-    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; a finished task is evicted on first read, so record it. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
+    description: 'Poll or stop background tasks. `task_id` or `task_ids[]`; reads are snapshots, so polling twice is safe. `wait:true` blocks until every id finishes or `timeout_ms` (default 30000, max 180000) passes. `cancel:true` stops instead: queued shards never run, a running one only sees `dsh_should_stop()`.',
     parameters: {
       type: 'object',
       properties: {
         task_id: { type: 'string' },
         task_ids: { type: 'array', items: { type: 'string' }, description: 'batch of task ids' },
+        wait: { type: 'boolean', description: 'block until every task is done/error/cancelled (or the timeout passes)' },
+        timeout_ms: { type: 'integer', description: 'wait: how long to block (default 30000, max 180000)' },
         cancel: { type: 'boolean', description: 'cancel task_id/task_ids instead of polling' },
       },
       required: [],
@@ -2045,20 +2047,37 @@ export function registerConsolidatedTools(deps) {
         if (!ids.length) throw new Error('cancel needs task_id or task_ids');
         return asText(await deps.callRaw('/api/task_cancel', 'POST', { task_ids: ids }, exec?.signal, target));
       }
-      if (many.length) {
-        const out = await Promise.all(many.map(async (id) => {
-          try {
-            const r = await deps.callRaw('/api/tasks/' + encodeURIComponent(id), 'GET', null, exec?.signal, target);
-            return r && typeof r === 'object' ? { task_id: id, ...r } : { task_id: id, result: r };
-          } catch (e) {
-            return { task_id: id, status: 'error', error: e?.message || String(e) };
-          }
-        }));
-        return asText(out);
+      const readOne = async (id) => {
+        try {
+          const r = await deps.callRaw('/api/tasks/' + encodeURIComponent(id), 'GET', null, exec?.signal, target);
+          return r && typeof r === 'object' ? { task_id: id, ...r } : { task_id: id, result: r };
+        } catch (e) {
+          return { task_id: id, status: 'error', error: e?.message || String(e) };
+        }
+      };
+      const ids = many.length ? many : (String(args?.task_id ?? '').trim() ? [String(args.task_id).trim()] : []);
+      if (!ids.length) throw new Error('give task_id or task_ids');
+      if (args?.wait === true) {
+        // ops_bash waits for a job the same way; a poll loop here keeps the
+        // model from burning a round-trip per second of a long shard.
+        const budget = Math.max(1000, Math.min(Number(args?.timeout_ms) || 30000, 180000));
+        const start = Date.now();
+        const terminal = (t) => ['done', 'error', 'cancelled'].includes(String(t?.status));
+        let tasks = await Promise.all(ids.map(readOne));
+        while (!tasks.every(terminal) && Date.now() - start < budget) {
+          if (exec?.signal?.aborted) break;
+          await new Promise((r) => setTimeout(r, 400));
+          tasks = await Promise.all(ids.map(readOne));
+        }
+        return asText({
+          timed_out: !tasks.every(terminal),
+          waited_ms: Date.now() - start,
+          count: tasks.length,
+          tasks,
+        });
       }
-      const id = String(args?.task_id ?? '');
-      if (!id.trim()) throw new Error('give task_id or task_ids');
-      return asText(await deps.callRaw('/api/tasks/' + encodeURIComponent(id), 'GET', null, exec?.signal, target));
+      if (many.length) return asText(await Promise.all(many.map(readOne)));
+      return asText(await readOne(String(args.task_id).trim()));
     },
   });
 

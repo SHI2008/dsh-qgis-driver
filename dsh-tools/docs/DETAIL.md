@@ -37,7 +37,7 @@ one tool keeps the first-turn prompt small — 10 descriptions instead of the
 | --- | --- |
 | `execute_qgis_sync` | run PyQGIS on the QGIS main thread (short tasks only, < 3 s); the bundled `pyqgis-reference` skill carries the QGIS 4 idioms and the renames that trip models |
 | `submit_qgis_async` | run Python off-thread, returns a `task_id`; `tasks=[{name,code}] + max_workers` submits a bounded worker pool |
-| `check_qgis_task` | poll an async task (result is popped on first read); `task_ids=[…]` polls a whole group |
+| `check_qgis_task` | poll an async task (reads are snapshots); `task_ids=[…]` polls a whole group, `wait` blocks |
 | `qgis_project` | `info` / `open` / `save` / `save_as` / `set_crs` |
 | `qgis_layer` | `list` / `info` / `fields` / `add` / `create` / `remove` / `visibility` / `crs` / `style` / `symbol` / `classify` / `style_multi` / `style_rule` / `labels` / `annotate` / `reproject` / `export` / `export_table` |
 | `qgis_feature` | `query` / `table` / `select` / `select_by_location` / `selected` / `add` / `update` / `delete` / `field_add` / `field_calc` / `field_delete` / `field_rename` |
@@ -104,7 +104,12 @@ The plugin registers every shard as a `queued` task up front, then runs them in 
 ```
 
 Poll the group in one call with `check_qgis_task {"task_ids": ["…", "…"]}`; unfinished shards
-report `queued` / `running`, finished ones are popped on first read exactly like a single task.
+report `queued` / `running`. Reading does **not** consume the task — poll the same id twice and
+you get the same answer (a read that evicted the result made a lost poll look like a lost task).
+`{"wait": true, "timeout_ms": 60000}` blocks until every id is `done`/`error`/`cancelled` or the
+budget passes and returns `{timed_out, waited_ms, tasks[]}`, so a long shard does not cost one
+round-trip per second. Finished tasks are dropped after 30 minutes, abandoned running ones after
+an hour (`TaskRegistry(ttl=3600, keep=1800)`).
 
 Channel details: the plugin command is `pyeval_group` (`POST /api/pyeval_group`, body
 `{tasks, max_workers}`), and the file channel maps `/api/pyeval_group` in `routeToCommand()`.
@@ -585,6 +590,20 @@ only way to count failures was to mine the session log after the fact.
 to recognise the call, not enough to drown the view. `status` also carries
 `calls`, `errors` and `last_error`, so one call answers "has this been failing?"
 without reading a file.
+
+## Big results are truncated, not swallowed
+
+One `qgis_feature query` over a large layer can return megabytes, and every byte is paid again on
+every later request. `asText()` keeps the first 60 000 characters, writes the whole result to
+`<temp>/dsh-qgis-driver/result_*.txt`, and ends the text with
+
+```
+… output truncated: 812344 characters total, the first 60000 are shown; the full result is in
+<file> (read it with the read tool, or narrow the call with limit/fields).
+```
+
+That is the same shape as the harness's own tools (a bounded window plus a path to the rest); see
+[`UPSTREAM.md`](UPSTREAM.md) for the full comparison of what this bundle copied from them.
 
 ## Docs that check themselves
 

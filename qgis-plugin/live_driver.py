@@ -440,15 +440,17 @@ class TaskRegistry:
     """Registry of background pyeval tasks for the async channel.
 
     Pure Python (no QGIS objects). A daemon thread runs the code in a fresh
-    namespace and writes the result here; a finished task is popped on its
-    first read so it is returned exactly once. Stale running tasks are dropped
-    by cleanup() after ttl seconds.
+    namespace and writes the result here. Reading a task is a snapshot: it does
+    not consume the entry, so polling twice for the same id works (a read that
+    evicted the result made a lost poll look like a lost task). cleanup() drops
+    finished tasks after keep seconds and abandoned running ones after ttl.
     """
 
-    def __init__(self, ttl=3600.0):
+    def __init__(self, ttl=3600.0, keep=1800.0):
         self._tasks = {}
         self._lock = threading.Lock()
         self._ttl = ttl
+        self._keep = keep
 
     def new(self, name=None, status="running"):
         task_id = secrets.token_hex(12)
@@ -488,7 +490,7 @@ class TaskRegistry:
             t = self._tasks.get(task_id)
             if t is None:
                 return {"task_id": task_id, "cancelled": False, "was": None,
-                        "reason": "task not found (already read, or expired)"}
+                        "reason": "task not found (expired, or never existed)"}
             was = t["status"]
             if was == "queued":
                 t["status"] = status
@@ -522,23 +524,19 @@ class TaskRegistry:
             return t["status"] == "cancelled" or bool(t.get("cancel_requested"))
 
     def get(self, task_id):
-        """Return a running task's snapshot, or pop a finished task (one read)."""
+        """Return a snapshot of the task; polling does not consume it."""
         with self._lock:
             t = self._tasks.get(task_id)
-            if t is None:
-                return None
-            if t["status"] in ("done", "error", "cancelled"):
-                return self._tasks.pop(task_id)
-            return dict(t)
+            return dict(t) if t is not None else None
 
     def cleanup(self):
         now = time.monotonic()
         with self._lock:
-            stale = [k for k, v in self._tasks.items()
-                     if now - v["created"] > self._ttl
-                     and v["status"] in ("running", "queued", "cancelled")]
-            for k in stale:
-                self._tasks.pop(k, None)
+            for k, v in list(self._tasks.items()):
+                age = now - v["created"]
+                finished = v["status"] in ("done", "error", "cancelled")
+                if age > (self._keep if finished else self._ttl):
+                    self._tasks.pop(k, None)
 
 
 # Spinning up a second QApplication inside a running QGIS is the one mistake that

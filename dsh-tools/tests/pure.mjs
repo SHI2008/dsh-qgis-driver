@@ -225,6 +225,18 @@ await ok('asText keeps strings and pretty-prints objects', () => {
   assert.equal(asText('plain'), 'plain')
   assert.equal(asText({ a: 1 }), '{\n  "a": 1\n}')
 })
+await ok('an oversized result is truncated and spills to a file', () => {
+  // ops_bash keeps a bounded window and reports where the rest went; one
+  // feature query over a big layer would otherwise cost every later request.
+  const huge = 'x'.repeat(70000)
+  const out = asText(huge)
+  assert.ok(out.length < huge.length, 'the result should shrink')
+  assert.match(out, /output truncated: 70000 characters total/)
+  const file = /the full result is in (.+?) \(/.exec(out)
+  assert.ok(file, 'the note should name the spill file')
+  assert.equal(fs.readFileSync(file[1], 'utf8').length, 70000)
+  assert.equal(asText('short'), 'short')
+})
 await ok('skill frontmatter only exposes name and description', () => {
   const raw = '---\nname: demo\ndescription: does a thing\n---\n\nbody\n'
   const { meta, body } = parseSkillFrontmatter(raw)

@@ -1083,8 +1083,34 @@ async function callQgis(route, method, body, signal, target, timeoutMs) {
 
 /** Normalize an arbitrary result value to text for the model. */
 function asText(value) {
-  if (typeof value === 'string') return value
-  return JSON.stringify(value, null, 2)
+  const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+  return clampResult(text)
+}
+
+/**
+ * Truncate an oversized result and keep the whole thing on disk.
+ *
+ * Why: one `qgis_feature query` over a big layer can return megabytes, which the
+ * model pays for on every later request. ops_bash solves the same problem by
+ * keeping a bounded window and reporting the spill path, so do the same: the
+ * head stays readable, the file keeps the rest, and the note says where.
+ */
+const MAX_RESULT_CHARS = Math.max(4000, Number(process.env.QGIS_LIVE_MAX_RESULT_CHARS) || 60000)
+
+function clampResult(text) {
+  if (typeof text !== 'string' || text.length <= MAX_RESULT_CHARS) return text
+  let note
+  try {
+    const dir = path.join(os.tmpdir(), 'dsh-qgis-driver')
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `result_${Date.now()}_${Math.random().toString(16).slice(2, 8)}.txt`)
+    fs.writeFileSync(file, text, 'utf8')
+    note = `\n… output truncated: ${text.length} characters total, the first ${MAX_RESULT_CHARS} are shown; `
+      + `the full result is in ${file} (read it with the read tool, or narrow the call with limit/fields).`
+  } catch (e) {
+    note = `\n… output truncated: ${text.length} characters total, the first ${MAX_RESULT_CHARS} are shown.`
+  }
+  return text.slice(0, MAX_RESULT_CHARS) + note
 }
 
 const stringOutput = {
