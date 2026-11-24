@@ -543,5 +543,16 @@ await ok('a layout map takes an extent and reports it', () => {
   assert.match(src, /map item: \[xmin,ymin,xmax,ymax\] to frame/, 'the parameter is documented')
 })
 
+// classify used to build categories from str(value) and fill symbols. A category
+// stored as '1.0' never matches the double 1.0, and a fill symbol on a point layer
+// paints nothing, so a classified point layer rendered blank while its legend
+// listed every class. Both halves are checked here.
+await ok('a classified layer keeps the field type and its geometry', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /cats = \[QgsRendererCategory\(v, _sym\(i\), k\)/, 'the raw value stays the category')
+  assert.match(src, /if gtype == QgsWkbTypes\.PointGeometry:/, 'points get a marker symbol')
+  assert.match(src, /QgsMarkerSymbol\.createSimple\(\{'name': 'circle', 'size': '2\.2'/, 'and a size that shows')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

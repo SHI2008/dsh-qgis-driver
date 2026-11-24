@@ -302,13 +302,32 @@ mode = P.get('mode') or 'categorized'
 colors = P.get('colors') or []
 def col(i, default):
     return QColor(colors[i] if i < len(colors) else default)
+# The category value must keep the field's own type: a category stored as the string
+# '1.0' never equals the double 1.0, so the layer renders empty while the legend
+# cheerfully lists every class. Keep the raw value, label it as text.
+def _sym(i):
+    """A symbol of the layer's own geometry, so points stay visible."""
+    c = col(i, '#e6194b').name()
+    gtype = l.geometryType()
+    if gtype == QgsWkbTypes.PointGeometry:
+        return QgsMarkerSymbol.createSimple({'name': 'circle', 'size': '2.2', 'color': c})
+    if gtype == QgsWkbTypes.LineGeometry:
+        return QgsLineSymbol.createSimple({'color': c, 'width': '0.6'})
+    return QgsFillSymbol.createSimple({'color': c, 'outline_color': c})
+
 if mode == 'categorized':
-    values = sorted({str(f[field]) for f in l.getFeatures() if f[field] is not None})
-    cats = []
-    for i, v in enumerate(values):
-        sym = QgsMarkerSymbol.createSimple({'name': 'circle', 'size': '2.2',
-                                           'color': col(i, '#e6194b').name()})
-        cats.append(QgsRendererCategory(v, sym, v))
+    seen, pairs = set(), []
+    for f in l.getFeatures():
+        v = f[field]
+        if v is None:
+            continue
+        key = str(v)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((v, key))
+    values = [k for _, k in pairs]
+    cats = [QgsRendererCategory(v, _sym(i), k) for i, (v, k) in enumerate(pairs)]
     l.setRenderer(QgsCategorizedSymbolRenderer(field, cats))
     result = {'layer': l.name(), 'mode': mode, 'classes': len(cats), 'values': values}
 else:
@@ -325,7 +344,16 @@ else:
         c = QColor(int(start.red() + (endc.red() - start.red()) * t),
                    int(start.green() + (endc.green() - start.green()) * t),
                    int(start.blue() + (endc.blue() - start.blue()) * t))
-        sym = QgsFillSymbol.createSimple({'color': c.name()})
+        hue = QColor(int(start.red() + (endc.red() - start.red()) * t),
+                     int(start.green() + (endc.green() - start.green()) * t),
+                     int(start.blue() + (endc.blue() - start.blue()) * t))
+        if l.geometryType() == QgsWkbTypes.PointGeometry:
+            sym = QgsMarkerSymbol.createSimple({'name': 'circle', 'size': '2.2',
+                                                'color': hue.name()})
+        elif l.geometryType() == QgsWkbTypes.LineGeometry:
+            sym = QgsLineSymbol.createSimple({'color': hue.name(), 'width': '0.6'})
+        else:
+            sym = QgsFillSymbol.createSimple({'color': hue.name()})
         ranges.append(QgsRendererRange(a, b, sym, '%.0f–%.0f' % (a, b)))
     l.setRenderer(QgsGraduatedSymbolRenderer(field, ranges))
     result = {'layer': l.name(), 'mode': mode, 'classes': n, 'min': round(lo, 1), 'max': round(hi, 1)}`,
