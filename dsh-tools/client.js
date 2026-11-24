@@ -32,6 +32,45 @@ window.__ModuleLoader__.load({
         hint: '还包括删除、打开/另存任意项目与裸 PyQGIS。只在你信任当前任务时使用。' },
     ]
 
+    // The composer clips absolutely-positioned overlays, and this loader offers
+    // no react-dom external (only `react`), so a popover cannot be portaled.
+    // Measure the trigger and position the panel `fixed` against the viewport:
+    // same effect without an ancestor overflow cutting it off.
+
+    function useAnchored(open, width) {
+      const wrapRef = React.useRef(null)
+      const panelRef = React.useRef(null)
+      const [pos, setPos] = React.useState(null)
+      const place = React.useCallback(() => {
+        const el = wrapRef.current
+        if (!el || typeof window === 'undefined') return
+        const r = el.getBoundingClientRect()
+        const left = Math.max(8, Math.min(r.right - width, window.innerWidth - width - 8))
+        setPos({ left, bottom: window.innerHeight - r.top + 6 })
+      }, [width])
+      React.useEffect(() => {
+        if (!open) { setPos(null); return }
+        place()
+        window.addEventListener('resize', place)
+        window.addEventListener('scroll', place, true)
+        return () => {
+          window.removeEventListener('resize', place)
+          window.removeEventListener('scroll', place, true)
+        }
+      }, [open, place])
+      return { wrapRef, panelRef, pos }
+    }
+
+    function popoverStyle(pos, width, fallback) {
+      if (!pos) return fallback
+      return {
+        position: 'fixed', left: pos.left, bottom: pos.bottom, zIndex: 60,
+        width, boxSizing: 'border-box', textAlign: 'left', whiteSpace: 'normal',
+        background: '#16161b', border: '1px solid ' + BORDER, borderRadius: 8,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+      }
+    }
+
     function StatusWidget() {
       const [status, setStatus] = React.useState(null)
       const [open, setOpen] = React.useState(false)
@@ -57,13 +96,16 @@ window.__ModuleLoader__.load({
         return () => { alive = false; if (timer) clearTimeout(timer) }
       }, [])
 
-      const wrapRef = React.useRef(null)
+      const { wrapRef, panelRef, pos } = useAnchored(open, 232)
 
       React.useEffect(() => {
         if (!open) return
         function onDown(ev) {
+          if (!(ev.target instanceof Node)) return
           const el = wrapRef.current
-          if (el && ev.target instanceof Node && el.contains(ev.target)) return
+          const panel = panelRef.current
+          if (el && el.contains(ev.target)) return
+          if (panel && panel.contains(ev.target)) return
           setOpen(false)
         }
         function onKey(ev) { if (ev.key === 'Escape') setOpen(false) }
@@ -139,15 +181,13 @@ window.__ModuleLoader__.load({
         }, dot, connected ? 'QGIS 已连接' : (busy ? 'QGIS 启动中…' : 'QGIS 未连接')),
         open
           ? h('div', {
-              style: {
-                position: 'absolute', bottom: '100%', right: 0, zIndex: 20,
-                marginBottom: 6, width: 232, boxSizing: 'border-box',
-                padding: '9px 11px', borderRadius: 8,
-                background: '#16161b', border: '1px solid ' + BORDER,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                textAlign: 'left', whiteSpace: 'normal', wordBreak: 'break-word',
-                fontSize: 11.5, lineHeight: '17px',
-              },
+              ref: panelRef,
+              style: Object.assign(popoverStyle(pos, 232, {
+                position: 'absolute', bottom: '100%', right: 0, zIndex: 20, marginBottom: 6,
+                width: 232, boxSizing: 'border-box', textAlign: 'left',
+                whiteSpace: 'normal', background: '#16161b', border: '1px solid ' + BORDER,
+                borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+              }), { padding: '9px 11px', wordBreak: 'break-word', fontSize: 11.5, lineHeight: '17px' }),
             },
               h('div', { style: { color: connected ? GREEN : RED, fontWeight: 600, marginBottom: 3 } }, head),
               h('div', { style: { color: MUTED } }, bodyText),
@@ -186,7 +226,7 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = React.useState(false)
       const [busy, setBusy] = React.useState(false)
       const [err, setErr] = React.useState(null)
-      const wrapRef = React.useRef(null)
+      const { wrapRef, panelRef, pos } = useAnchored(open, 264)
 
       React.useEffect(() => {
         let alive = true
@@ -208,8 +248,11 @@ window.__ModuleLoader__.load({
       React.useEffect(() => {
         if (!open) return
         function onDown(ev) {
+          if (!(ev.target instanceof Node)) return
           const el = wrapRef.current
-          if (el && ev.target instanceof Node && el.contains(ev.target)) return
+          const panel = panelRef.current
+          if (el && el.contains(ev.target)) return
+          if (panel && panel.contains(ev.target)) return
           setOpen(false)
         }
         function onKey(ev) { if (ev.key === 'Escape') setOpen(false) }
@@ -265,14 +308,13 @@ window.__ModuleLoader__.load({
         }, '权限' + (busy ? '…' : meta.label)),
         open
           ? h('div', {
-              style: {
-                position: 'absolute', bottom: '100%', right: 0, zIndex: 21,
-                marginBottom: 6, width: 264, boxSizing: 'border-box',
-                padding: '8px', borderRadius: 8,
-                background: '#16161b', border: '1px solid ' + BORDER,
-                boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-                textAlign: 'left', whiteSpace: 'normal', fontSize: 11.5, lineHeight: '17px',
-              },
+              ref: panelRef,
+              style: Object.assign(popoverStyle(pos, 264, {
+                position: 'absolute', bottom: '100%', right: 0, zIndex: 21, marginBottom: 6,
+                width: 264, boxSizing: 'border-box', textAlign: 'left',
+                whiteSpace: 'normal', background: '#16161b', border: '1px solid ' + BORDER,
+                borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+              }), { padding: '8px', fontSize: 11.5, lineHeight: '17px' }),
             },
               SCOPE_META.map((s) => h('button', {
                 key: s.id,

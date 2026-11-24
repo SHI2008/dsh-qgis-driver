@@ -411,5 +411,15 @@ await ok('the legend never edits the live layer-tree root', () => {
   assert.equal(/setLegendFilterByMapEnabled\(True\)/.test(src), true)
 })
 
+// The docked composer clips absolutely positioned overlays, and this loader offers no
+// react-dom external (only react), so a popover cannot be portaled. Position it fixed
+// from the trigger's rectangle instead: same result, no new dependency.
+await ok('composer popovers position fixed from the trigger, not inside the clipped row', () => {
+  const src = fs.readFileSync(new URL('../client.js', import.meta.url), 'utf8')
+  assert.match(src, /function useAnchored\(/, 'client.js keeps the measured popover helper')
+  assert.match(src, /position: 'fixed', left: pos\.left/, 'popovers are fixed against the viewport')
+  assert.match(src, /function popoverStyle\(pos, width, fallback\)/, 'one shared popover style')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

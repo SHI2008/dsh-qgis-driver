@@ -12,6 +12,7 @@ same, this bundle copies their answer instead of inventing another one.
 | A bad argument should fail locally, with a sentence that names the field | `ToolArgsError(['file_path must be a non-empty string'])` | `checkRequired` / `preflightBatch` / `guardExecute` throw `missing parameter "path"`, `unknown parameter "layer_name" — did you mean "layer"?`, `nothing was changed — item 2: …` |
 | The first call must not need a manual | `bash` only requires `command`; everything else has a default and says so first in its description | `qgis_layer export` needs only `layer`, `qgis_layout export` needs only `action`, `add_item kind=map` defaults to 160 mm wide, `kind=legend` to 60 mm |
 | A result may carry an image | `read_image` returns `{type:'image', attachment}` — never inline base64 | `inline:true` saves the PNG through the attachment store and returns the same shape |
+| An overlay inside the composer must not be clipped | composer controls portal to `document.body` (`createPortal`), because the slot contract says fixed overlays must leave the docked composer | `client.js` measures the trigger and positions the panel `fixed` against the viewport — the client loader offers no `react-dom` external (only `react`), so portaling is not available and measuring achieves the same |
 | Job outcome vocabulary | `completed | killed | failed`, with `exit code: N` / `signal: X` in `detail` | tasks report `done | error | cancelled`, with the traceback or the cancel reason in `error` |
 
 Two things deliberately differ:
@@ -33,5 +34,7 @@ and read:
   — description order, local validation, job registry, bounded output.
 - `dsh/node_modules/@deepseek-ai/dsh-tool-fs/src/{read,read-image,write,edit,error}.ts`
   — pagination, attachment images, the `<path>/<type>/<content>` envelope.
+| `dsh/node_modules/@deepseek-ai/dsh-client-ui-conversation/src/client/contract/slots.ts`
+  — the slot kinds (`list` vs `single`), `scope`, and the composer overlay rule.
 - `dsh/node_modules/@deepseek-ai/dsh-app-boot/lib/index.js` — `iconOf()`, which
   is why a deleted `icon.svg` keeps producing `ENOENT` until the process restarts.
