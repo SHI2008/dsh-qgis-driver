@@ -567,5 +567,21 @@ await ok('a run checks the parameters against the algorithm contract', () => {
   assert.match(src, /invalid option\(s\): %s; action=help %s lists every option/, 'an off-enum value shows the options')
 })
 
+// A wrong layout or a stray layer used to be permanent: the next call could only add
+// more. Every project write now records the structure first, so `undo` can put it back.
+await ok('a project write can be undone', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /def _snap_take\(label\):/, 'the prelude can record the structure')
+  assert.match(src, /def _item_uuid\(it\):/, 'page items without a uuid are skipped, not fatal')
+  assert.match(src, /def _rect_of\(it\):/, 'an item position comes from pos(), not rect()')
+  assert.match(src, /def _ext_of\(it\):/, 'an untouched map frame is not an extent')
+  assert.match(src, /ring\.append\(\{'label': str\(label\), 'at': time\.time\(\), 'state': _snap_state\(\)\}\)/, 'a snapshot keeps its label and time')
+  assert.match(src, /del ring\[:-10\]/, 'the ring keeps the last ten states')
+  assert.match(src, /const guard = snapshotted \? `_snap_take\(/, 'a mutating call records before it writes')
+  assert.match(src, /&& !READ_ONLY_ACTIONS\.has\(tool \+ ':' \+ action\)/, 'reads are not recorded')
+  assert.match(src, /'not_undone': 'feature, attribute and style edits are not reverted/, 'undo says what it cannot restore')
+  assert.match(src, /enum: \['info', 'open', 'save', 'save_as', 'set_crs', 'undo'\]/, 'undo is a documented action')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

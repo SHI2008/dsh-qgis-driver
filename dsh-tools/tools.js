@@ -70,6 +70,61 @@ def _prj_extent():
         else:
             ext.combineExtentWith(e)
     return None if ext is None or ext.isEmpty() else ext
+def _item_uuid(it):
+    """Page items are plain graphics rects without a uuid - skip them."""
+    try:
+        return it.uuid()
+    except AttributeError:
+        return None
+def _rect_of(it):
+    """rect() ignores where the item sits; pos() is that position in mm."""
+    p = it.pos()
+    r = it.rect()
+    return [round(p.x(), 2), round(p.y(), 2), round(r.width(), 2), round(r.height(), 2)]
+def _ext_of(it):
+    """An untouched map frame reports the double maximum, which is not an extent."""
+    if not isinstance(it, QgsLayoutItemMap):
+        return None
+    e = it.extent()
+    if abs(e.xMinimum()) > 1e30 or abs(e.xMaximum()) > 1e30:
+        return None
+    return [round(e.xMinimum(), 4), round(e.yMinimum(), 4),
+            round(e.xMaximum(), 4), round(e.yMaximum(), 4)]
+def _snap_state():
+    """The part of the project a structure undo can put back: layers, layouts, items."""
+    layers = {}
+    for lid, lyr in prj.mapLayers().items():
+        layers[lid] = {'name': lyr.name(), 'visible': None}
+    layouts = {}
+    for lay in prj.layoutManager().layouts():
+        items = {}
+        for it in lay.items():
+            uuid = _item_uuid(it)
+            if uuid is None:
+                continue
+            items[uuid] = {
+                'kind': it.__class__.__name__,
+                'rect': _rect_of(it),
+                'extent': _ext_of(it),
+            }
+        layouts[lay.name()] = items
+    return {'layers': layers, 'layouts': layouts}
+def _snaps():
+    """The ring buffer lives in the interpreter namespace, which outlives calls."""
+    global _SNAPS
+    try:
+        return _SNAPS
+    except NameError:
+        _SNAPS = []
+        return _SNAPS
+def _snap_take(label):
+    """Called before every project-mutating tool call: keeps the last 10 states."""
+    ring = _snaps()
+    ring.append({'label': str(label), 'at': time.time(), 'state': _snap_state()})
+    del ring[:-10]
+    return len(ring)
+def _snaps_count():
+    return len(_snaps())
 def io_open(path):
     return open(path, 'r', encoding='utf-8', errors='ignore')
 _OUT = os.path.join(tempfile.gettempdir(), 'dsh-qgis-driver')
@@ -125,8 +180,7 @@ def LAYOUT(name):
     return lay
 
 def rect_of(it):
-    p = it.positionWithUnits(); s = it.sizeWithUnits()
-    return [round(p.x(), 1), round(p.y(), 1), round(s.width(), 1), round(s.height(), 1)]
+    return _rect_of(it)
 
 def first_map(lay):
     maps = [it for it in lay.items() if isinstance(it, QgsLayoutItemMap)]
@@ -147,7 +201,72 @@ result = {
                           round(e.xMaximum(), 1), round(e.yMaximum(), 1)] if e is not None else None)(_prj_extent()),
     'layers': [{'id': l.id(), 'name': l.name(), 'type': 'Vector' if l.type() == 0 else 'Raster'} for l in prj.mapLayers().values()],
     'layouts': [l.name() for l in prj.layoutManager().layouts()],
+    'undo_steps': _snaps_count(),
     'qgis': Qgis.QGIS_VERSION,
+}`,
+  undo: `
+ring = _snaps()
+if not ring:
+    raise ValueError('nothing to undo: no project write has been recorded since this instance started')
+try:
+    steps = max(1, int(P.get('steps') or 1))
+except (TypeError, ValueError):
+    steps = 1
+steps = min(steps, len(ring))
+snap = ring[-steps]
+want_layers = snap['state']['layers']
+want_layouts = snap['state']['layouts']
+removed_layers = []
+for lid, lyr in list(prj.mapLayers().items()):
+    if lid not in want_layers:
+        removed_layers.append(lyr.name())
+        prj.removeMapLayer(lid)
+manager = prj.layoutManager()
+removed_layouts = []
+for lay in list(manager.layouts()):
+    if lay.name() not in want_layouts:
+        removed_layouts.append(lay.name())
+        manager.removeLayout(lay)
+removed_items = []
+restored = []
+skipped = []
+for lay in manager.layouts():
+    want = want_layouts.get(lay.name())
+    if want is None:
+        continue
+    for it in list(lay.items()):
+        uuid = _item_uuid(it)
+        if uuid is None or uuid in want:
+            continue
+        removed_items.append('%s:%s' % (lay.name(), it.__class__.__name__.replace('QgsLayoutItem', '').lower()))
+        lay.removeLayoutItem(it)
+    for it in lay.items():
+        w = want.get(_item_uuid(it))
+        if w is None:
+            continue
+        cur = _rect_of(it)
+        if cur != w['rect']:
+            try:
+                it.attemptMove(QgsLayoutPoint(w['rect'][0], w['rect'][1], QgsUnitTypes.LayoutMillimeters))
+                it.attemptResize(QgsLayoutSize(w['rect'][2], w['rect'][3], QgsUnitTypes.LayoutMillimeters))
+                restored.append('%s item rect' % lay.name())
+            except Exception as exc:
+                skipped.append('%s item rect (%s)' % (lay.name(), exc))
+        if w.get('extent') and isinstance(it, QgsLayoutItemMap):
+            if _ext_of(it) != w['extent']:
+                try:
+                    it.zoomToExtent(QgsRectangle(*w['extent']))
+                    it.invalidateCache()
+                    restored.append('%s map extent' % lay.name())
+                except Exception as exc:
+                    skipped.append('%s map extent (%s)' % (lay.name(), exc))
+del ring[-steps:]
+result = {
+    'undone': {'label': snap['label'], 'age_s': round(time.time() - snap['at'], 1),
+               'layers_removed': removed_layers, 'layouts_removed': removed_layouts,
+               'items_removed': removed_items, 'restored': restored, 'skipped': skipped[:5]},
+    'snapshots_left': len(ring),
+    'not_undone': 'feature, attribute and style edits are not reverted - only the project structure',
 }`,
   open: `
 r = prj.read(P['path'])
@@ -891,9 +1010,7 @@ for it in lay.items():
         d['layers'] = [l.name() for l in it.layers()]
         # The extent is what decides whether the frame shows anything: an item with no
         # extent renders a blank box and the scale bar invents a planetary scale.
-        _e = it.extent()
-        d['extent'] = [round(v, 4) for v in (_e.xMinimum(), _e.yMinimum(),
-                                             _e.xMaximum(), _e.yMaximum())]
+        d['extent'] = _ext_of(it)
         d['crs'] = it.crs().authid()
     if isinstance(it, QgsLayoutItemLabel):
         d['text'] = it.text()[:60]
@@ -1199,9 +1316,8 @@ if isinstance(item, QgsLayoutItemMap):
     # A frame with no extent is a blank box that looks like a broken export; hand the
     # extent back so the caller can see what it framed before spending an export.
     _e2 = item.extent()
-    result['extent'] = [round(v, 4) for v in (_e2.xMinimum(), _e2.yMinimum(),
-                                              _e2.xMaximum(), _e2.yMaximum())]
-    if _e2.width() <= 0 or _e2.height() <= 0:
+    result['extent'] = _ext_of(item)
+    if result['extent'] is None or _e2.width() <= 0 or _e2.height() <= 0:
         result['warning'] = ('map extent is empty - pass fit_layer or extent so the frame '
                              'has something to draw')
     elif not prj.crs().isValid():
@@ -2504,6 +2620,9 @@ export function registerConsolidatedTools(deps) {
   // default; without a bigger budget the agent escapes to a hand-written .py and a second
   // QGIS process, which is exactly what we do not want.
   const HEAVY_ACTIONS = new Set(['qgis_layout:export', 'qgis_layout:export_atlas', 'qgis_analysis:run']);
+  // Tools whose writes change project structure (layers, layouts, items). The plugin
+  // keeps the snapshots in its interpreter namespace, so they survive between calls.
+  const SNAP_TOOLS = new Set(['qgis_project', 'qgis_layer', 'qgis_layout']);
   const call = async (body, args, exec, opts, tool) => {
     // args may be frozen — work on a shallow copy.
     const a = args ? { ...args } : {};
@@ -2536,8 +2655,13 @@ export function registerConsolidatedTools(deps) {
     }
     const payload = items ? batchBody(body, spec) : body;
     if (items) a[spec.key] = items;
-    const code = preludeFor(a) + payload;
     const action = String(a.action ?? '');
+    // Every project-mutating call first records what the project looked like, so
+    // `qgis_project action=undo` can put the structure back. One pyeval, no extra round trip.
+    const snapshotted = tool && SNAP_TOOLS.has(tool) && action !== 'undo'
+      && !READ_ONLY_ACTIONS.has(tool + ':' + action);
+    const guard = snapshotted ? `_snap_take(${JSON.stringify(`${tool} ${action}`)})\n` : '';
+    const code = preludeFor(a) + guard + payload;
     const budget = HEAVY_ACTIONS.has(tool + ':' + action) ? 120 : undefined;
     return withWriteLock(tool, action, a, exec,
       async () => asText(await run(code, exec?.signal, budget ? { ...(opts || {}), budget } : opts)));
@@ -2546,14 +2670,15 @@ export function registerConsolidatedTools(deps) {
   // ---------------- project
   registerTool({
     name: 'qgis_project',
-    description: 'Project state. `info` needs nothing; `open`/`save_as` need `path`, `set_crs` needs `crs` or `crs_file`. A fresh headless instance is empty - `info` first.',
+    description: 'Project state. `info` needs nothing (it reports `undo_steps`); `open`/`save_as` need `path`, `set_crs` needs `crs` or `crs_file`. `undo` reverts the project structure of the last write (added layers, layouts, items; edited rects and map extents) and says in `not_undone` what it cannot restore. A fresh headless instance is empty - `info` first.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs'] },
+        action: { type: 'string', enum: ['info', 'open', 'save', 'save_as', 'set_crs', 'undo'] },
         path: { type: 'string', description: 'open: .qgs/.qgz; save_as: destination' },
         crs: { type: 'string' },
         crs_file: { type: 'string', description: 'WKT from .prj/.wkt' },
+        steps: { type: 'integer', description: 'undo: how many writes back (default 1, max 10)' },
       },
       required: ['action'],
     },

@@ -692,6 +692,28 @@ every later request. `asText()` keeps the first 60 000 characters, writes the wh
 That is the same shape as the harness's own tools (a bounded window plus a path to the rest); see
 [`UPSTREAM.md`](UPSTREAM.md) for the full comparison of what this bundle copied from them.
 
+## Undo the structure, not the data
+
+A wrong `add_item`, a layer added by a mistyped name, a map frame dragged off the
+page: the cheapest repair is one call back, not a rebuild. Every write to
+`qgis_project`, `qgis_layer` and `qgis_layout` records a snapshot of the project
+structure first — layer ids, layout names, and each item's kind, rect and map
+extent — in a ten-deep ring inside the interpreter namespace, so it costs no
+round trip and survives until the instance restarts. `qgis_project` `undo`
+replays the newest one (or `steps` back): it removes layers, layouts and items
+that did not exist then, and puts back the rect and extent of the ones that did.
+
+What it does not do is `not_undone` in the reply: feature edits, attribute
+changes and styles are not reverted, because a ten-deep structural snapshot is
+not a document history. A snapshot is taken *before* the write, so `undo` right
+after a failed call is harmless.
+
+Two traps the first implementation hit, both worth remembering: an item's
+`rect()` starts at 0,0 — the position comes from `pos()`, otherwise every
+comparison matches and nothing is restored; and an untouched map frame reports
+`±1.7976931348623157e+308` as its extent, which must read as "no extent" rather
+than as a frame zoomed to the whole double range.
+
 ## Docs that check themselves
 
 Three places describe one surface: the tool definitions in `tools.js`, the action

@@ -12,7 +12,7 @@ round-trip, while hand-written pyeval is one round-trip per step.
 
 | tool | actions |
 |---|---|
-| `qgis_project` | info / open / save / save_as / set_crs |
+| `qgis_project` | info / open / save / save_as / set_crs / undo |
 | `qgis_layer` | list / info / fields / add / create / remove / visibility / crs / style / symbol / classify / style_multi / style_rule / labels / annotate / reproject / raster_style / export / export_table |
 | `qgis_feature` | query / table / select / select_by_location / selected / add / update / delete / field_add / field_calc / field_delete / field_rename |
 | `qgis_layout` | list / create / info / add_item / update_item / legend_edit / align / export / export_atlas |
