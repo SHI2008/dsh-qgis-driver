@@ -1624,6 +1624,33 @@ for k, v in params.items():
         mapped[k] = prj.mapLayersByName(v)[0]
     else:
         mapped[k] = v
+# Check the names against the algorithm's own definitions before QGIS does: an
+# unknown name otherwise surfaces as a vague failure after the work started, and
+# GDAL spells its parameters in caps while callers tend to type them lower.
+_pdefs = {}
+for pdef in ad.parameterDefinitions():
+    try:
+        _pdefs[pdef.name()] = pdef
+    except Exception:
+        pass
+_lower = {}
+for _n in _pdefs:
+    _lower.setdefault(_n.lower(), []).append(_n)
+_fixed = {}
+_unknown = []
+for _k, _v in mapped.items():
+    if _k in _pdefs:
+        _fixed[_k] = _v
+        continue
+    _cand = _lower.get(str(_k).lower()) or []
+    if len(_cand) == 1:
+        _fixed[_cand[0]] = _v
+    else:
+        _unknown.append(str(_k))
+if _unknown:
+    raise ValueError('unknown parameter(s) %s - this algorithm takes %s; action=help %s gives types, options and defaults'
+                     % (', '.join(sorted(_unknown)), ', '.join(sorted(_pdefs)), alg))
+mapped = _fixed
 # A point parameter (gdal:viewshed OBSERVER, for one) is not a layer name: accept
 # [x, y] or "x,y" as coordinates instead of letting QGIS reject the string.
 for pdef in ad.parameterDefinitions():
@@ -1681,6 +1708,36 @@ for n in _sinks:
     _defaulted[n] = os.path.join(_OUT, '%s_%d_%s%s'
                                  % (_short, int(time.time() * 1000) % 100000, n.lower(), ext))
     mapped[n] = _defaulted[n]
+# Required-but-absent and off-enum values are caught here for the same reason:
+# QGIS would run until it trips over them, and the message would not name them.
+_missing = []
+for _n, _p in _pdefs.items():
+    try:
+        if bool(_p.flags() & 8):
+            continue
+        _d = _p.defaultValue()
+    except Exception:
+        continue
+    if _d is not None and _d != '':
+        continue
+    if mapped.get(_n) in (None, ''):
+        _missing.append(_n)
+if _missing:
+    raise ValueError('missing required parameter(s) %s - action=help %s lists them with types and defaults'
+                     % (', '.join(sorted(_missing)), alg))
+_bad = []
+for _n, _p in _pdefs.items():
+    _v = mapped.get(_n)
+    if not isinstance(_v, str) or not _v:
+        continue
+    try:
+        _opts = [str(o) for o in (_p.options() or [])]
+    except Exception:
+        _opts = []
+    if _opts and _v not in _opts:
+        _bad.append('%s=%s (one of %s)' % (_n, _v, ', '.join(_opts[:8])))
+if _bad:
+    raise ValueError('invalid option(s): %s; action=help %s lists every option' % ('; '.join(_bad), alg))
 try:
     out = processing.run(alg, mapped)
 except Exception as e:

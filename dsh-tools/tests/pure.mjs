@@ -554,5 +554,18 @@ await ok('a classified layer keeps the field type and its geometry', () => {
   assert.match(src, /QgsMarkerSymbol\.createSimple\(\{'name': 'circle', 'size': '2\.2'/, 'and a size that shows')
 })
 
+// The run body used to hand the caller's parameter names straight to QGIS. A typo
+// then failed deep inside the algorithm with a message that named neither the
+// parameter nor the acceptable values. The contract now comes from the algorithm's
+// own definitions, so every rejection can quote them.
+await ok('a run checks the parameters against the algorithm contract', () => {
+  const src = fs.readFileSync(new URL('../tools.js', import.meta.url), 'utf8')
+  assert.match(src, /unknown parameter\(s\) %s - this algorithm takes %s/, 'an unknown name lists the real ones')
+  assert.match(src, /_cand = _lower\.get\(str\(_k\)\.lower\(\)\) or \[\]/, 'a case-insensitive alias is accepted when unique')
+  assert.match(src, /missing required parameter\(s\) %s/, 'a missing required parameter is named')
+  assert.match(src, /if _d is not None and _d != '':\n        continue/, 'a parameter QGIS can default is not reported missing')
+  assert.match(src, /invalid option\(s\): %s; action=help %s lists every option/, 'an off-enum value shows the options')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0
