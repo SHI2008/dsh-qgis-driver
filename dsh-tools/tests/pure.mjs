@@ -497,7 +497,7 @@ await ok('both list actions report count, total and truncated', () => {
   assert.equal(bounded.length, 2, 'layers and layouts share the bounded shape')
   assert.match(src, /'layers': _all\[:_lim\]/, 'layers are cut to the limit')
   assert.match(src, /'layouts': _all\[:_lim\]/, 'layouts are cut to the limit')
-  assert.match(src, /list: max rows to return \(default 200, max 1000\)/, 'the limit is documented')
+  assert.match(src, /list: default 200, max 1000/, 'the limit is documented')
 })
 
 // A no-thinking probe asked for "session status" and reached for
