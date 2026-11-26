@@ -1,0 +1,7 @@
+url: https://github.com/SHI2008/dsh-qgis-driver/tree/main/dsh-tools
+name: SHI2008/dsh-qgis-driver#dsh-qgis-driver
+category: tools
+description:
+  en: 'Drive a running QGIS 4 from DSH through ten qgis_* tools: project, layers, features, Processing algorithms, print layouts and map rendering, plus async tasks and a raw-PyQGIS escape hatch. Writes take an instance-wide lease and the last structural write can be undone.'
+  zh: '从 DSH 驱动正在运行的 QGIS 4：十个 qgis_* 工具覆盖项目、图层、要素、Processing 算法、出图与地图渲染，另有异步任务与直接写 PyQGIS 的逃生口。写入需取得实例级租约，最近一次结构写入可撤销。'
+tarball: https://github.com/SHI2008/dsh-qgis-driver/releases/download/v0.1.91-rc/dsh-qgis-driver-0.1.91-rc.tgz
