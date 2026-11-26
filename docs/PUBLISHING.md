@@ -52,6 +52,19 @@ CI 第 2 步是「从仓库的 `package.json` 读 `dsh.bundle`」，查找范围
 4. 提 PR。CI 检查 manifest、仓库年龄、格式与 README 能否重新生成；合并后站点与市场通常一天内生效。
    被要求修改时，往同一分支推修复并留一条说明即可。
 
+## 两个交付件分开装，绝不互相包含
+
+DSH 市场只发 **bundle**；QGIS 插件只走 QGIS 的「从 ZIP 安装插件」。两条通道互不打包对方：
+
+| 产物 | 通道 | 内容 |
+|---|---|---|
+| `dsh-qgis-driver-<版本>.tgz` | DSH 市场 / 插件管理器 | 只有 `dsh-tools/`（`index.js`、`tools.js`、`client.js`、技能、`node_modules`） |
+| `dsh_qgis_driver-<版本>.zip` | QGIS 插件安装器 | 只有 `qgis-plugin/`（`metadata.txt`、`live_driver.py`、`__init__.py`） |
+
+所以根 `package.json` 的 `files` 里**不许出现 `qgis-plugin`**，市场条目里也不许出现 ZIP 链接或
+`qgis-plugin` 路径——QGIS 插件不该经由 DSH 的安装器落到别人机器上。`scripts/pack.mjs` 的两个 `archive()`
+调用（`['dsh_qgis_driver']` 与 `['package']`）就是这条边界的实现，改动打包逻辑时别把两个树合到一起。
+
 ## 打包
 
 ```

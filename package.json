@@ -18,8 +18,7 @@
     "dsh-tools/node_modules",
     "dsh-tools/scripts",
     "dsh-tools/skills",
-    "dsh-tools/tests",
-    "qgis-plugin"
+    "dsh-tools/tests"
   ],
   "dsh": {
     "bundle": {
