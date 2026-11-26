@@ -20,9 +20,11 @@ data/plugins/SHI2008__dsh-qgis-driver.yml
 - `category: tools`：按插件实际做的事选；选偏了维护者会直接改，不会打回。
 - `description.en` 必填，单行、以句号结尾、只说功能；含 `: `（冒号加空格）必须加引号。描述里提到的命令、
   API、数量都会被对照代码核对。
-- `tarball:` 可选，填了市场会优先给「预构建安装」。它必须是 **GitHub Release 托管**的 `https` `.tgz`；
-  本仓库现在有 `v0.1.91-rc` 的附件，所以填了，并**钉住 tag**——`releases/latest/download/` 只在请求时解析
-  `latest`，文件名却是照字面取的，资产名带版本号时下一次发版就 404。
+- `tarball:` 可选，填了市场会优先给「预构建安装」。它必须是 **GitHub Release 托管**的 `https` `.tgz`。
+  本仓库指向 `releases/latest/download/dsh-qgis-driver.tgz`：**资产名不带版本号**，所以条目只写一次，
+  以后每次发版只换同名附件即可。两个前提——资产必须真的叫这个名字（上传时用
+  `uploads.github.com/...?name=dsh-qgis-driver.tgz`），且最新那次 Release **不能勾 prerelease**
+  （`releases/latest` 会跳过预发布，勾了就 404）。
 
 ## 收录前的硬性条件
 
@@ -41,9 +43,11 @@ CI 第 2 步是「从仓库的 `package.json` 读 `dsh.bundle`」，查找范围
 
 ## 步骤
 
-1. 打 tag、建 GitHub Release，把 `dist/` 里的两个交付件作为资产上传：
-   - `dsh-qgis-driver-0.1.91-rc.tgz`（DSH bundle，npm 布局，市场用 `tarball:` 指向它）
-   - `dsh_qgis_driver-0.18.13.zip`（QGIS 插件 ZIP）
+1. 打 tag、建 GitHub Release，把 `dist/` 里的两个交付件作为资产上传，**资产名去掉版本号**
+   （`?name=` 可以任意命名，本地文件名不必改）：
+   - `dsh-qgis-driver.tgz` ← `dist/dsh-qgis-driver-<bundle>.tgz`（DSH bundle，npm 布局，市场 `tarball:` 指向它）
+   - `dsh_qgis_driver.zip` ← `dist/dsh_qgis_driver-<plugin>.zip`（QGIS 插件 ZIP，同时要单独上传 plugins.qgis.org）
+   最新那次 Release 不要勾 prerelease，否则 `releases/latest/download/…` 解析不到。
    上传按钮被锁时不是死路：Release 与附件都能用 API 建（`POST /repos/{owner}/{repo}/releases`，
    再 `POST https://uploads.github.com/repos/{owner}/{repo}/releases/{id}/assets?name=…`），
    或者干脆跳过——源码安装（`dsh plugin add github:SHI2008/dsh-qgis-driver`）不依赖 Release。
