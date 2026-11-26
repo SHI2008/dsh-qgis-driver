@@ -20,10 +20,9 @@ data/plugins/SHI2008__dsh-qgis-driver.yml
 - `category: tools`：按插件实际做的事选；选偏了维护者会直接改，不会打回。
 - `description.en` 必填，单行、以句号结尾、只说功能；含 `: `（冒号加空格）必须加引号。描述里提到的命令、
   API、数量都会被对照代码核对。
-- `tarball:` 可选。**本仓库先不填**：它必须是 GitHub Release 托管的 `https` `.tgz`，而当前账号的 Release
-  资产上传被关掉了；从源码安装已经可用（根 `package.json` 声明了 `dsh.bundle`，`schemastery` 随仓库提交）。
-  等能传资产时再补，并且**要钉住 tag**——`releases/latest/download/` 那条链接只在请求时解析 `latest`，文件名却是
-  照字面取的，资产名带版本号时下一次发版就 404。
+- `tarball:` 可选，填了市场会优先给「预构建安装」。它必须是 **GitHub Release 托管**的 `https` `.tgz`；
+  本仓库现在有 `v0.1.91-rc` 的附件，所以填了，并**钉住 tag**——`releases/latest/download/` 只在请求时解析
+  `latest`，文件名却是照字面取的，资产名带版本号时下一次发版就 404。
 
 ## 收录前的硬性条件
 
@@ -42,8 +41,12 @@ CI 第 2 步是「从仓库的 `package.json` 读 `dsh.bundle`」，查找范围
 
 ## 步骤
 
-1. 打 tag、建 GitHub Release。资产上传被关掉时先跳过这一步——源码安装不依赖 Release：
-   `dsh plugin add github:SHI2008/dsh-qgis-driver`。
+1. 打 tag、建 GitHub Release，把 `dist/` 里的两个交付件作为资产上传：
+   - `dsh-qgis-driver-0.1.91-rc.tgz`（DSH bundle，npm 布局，市场用 `tarball:` 指向它）
+   - `dsh_qgis_driver-0.18.13.zip`（QGIS 插件 ZIP）
+   上传按钮被锁时不是死路：Release 与附件都能用 API 建（`POST /repos/{owner}/{repo}/releases`，
+   再 `POST https://uploads.github.com/repos/{owner}/{repo}/releases/{id}/assets?name=…`），
+   或者干脆跳过——源码安装（`dsh plugin add github:SHI2008/dsh-qgis-driver`）不依赖 Release。
 2. 给仓库加 `dsh-plugin` topic。
 3. fork `awesome-dsh-plugin/awesome-dsh-plugin`，新增上面那个 YAML（一个 PR 最多 3 条，只加自己的）。
 4. 提 PR。CI 检查 manifest、仓库年龄、格式与 README 能否重新生成；合并后站点与市场通常一天内生效。
