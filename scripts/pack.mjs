@@ -11,7 +11,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -124,12 +124,17 @@ writeFileSync(
 
 const pluginZip = join(dist, `dsh_qgis_driver-${pluginVersion}.zip`);
 const bundleTgz = join(dist, `dsh-qgis-driver-${bundleVersion}.tgz`);
-archive(pluginZip, join(stage, 'plugin'), ['dsh_qgis_driver']);
-archive(bundleTgz, stage, ['package']);
+// Rebuilding an archive rewrites every entry's timestamp, so a bundle that did
+// not change still gets a new hash. When only one side changed, build only that
+// side: `--only=plugin` / `--only=bundle` keeps the published artefact intact.
+const only = (process.argv.find((a) => a.startsWith('--only=')) || '').split('=')[1] || 'both';
+if (only !== 'bundle') archive(pluginZip, join(stage, 'plugin'), ['dsh_qgis_driver']);
+if (only !== 'plugin') archive(bundleTgz, stage, ['package']);
 
 // A short manifest: what is inside, and the hash of each archive.
 const lines = [];
-for (const [file, label] of [[pluginZip, 'QGIS plugin'], [bundleTgz, 'DSH bundle']]) {
+const wanted = [[pluginZip, 'QGIS plugin'], [bundleTgz, 'DSH bundle']].filter(([file]) => existsSync(file));
+for (const [file, label] of wanted) {
   const hash = createHash('sha256').update(readFileSync(file)).digest('hex');
   lines.push(`${hash}  ${basename(file)}  (${label})`);
 }

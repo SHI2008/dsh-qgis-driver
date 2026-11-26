@@ -73,8 +73,13 @@ DSH 市场只发 **bundle**；QGIS 插件只走 QGIS 的「从 ZIP 安装插件�
 
 ```
 node scripts/bump.mjs <bundle 版本> [插件版本]
-node scripts/pack.mjs
+node scripts/pack.mjs                  # 两个都打
+node scripts/pack.mjs --only=plugin    # 只改插件时用这个
+node scripts/pack.mjs --only=bundle    # 只改 bundle 时用这个
 ```
+
+打包会重写每个条目的时间戳，所以**内容没变、哈希也会变**。只改一侧时务必用 `--only=`，否则已经发布出去的
+那个资产会因为你本地重打而得到新哈希，`SHA256SUMS.txt` 与 Release 上的附件就对不上了。
 
 `dist/` 会得到 `dsh-qgis-driver-<版本>.tgz`（DSH bundle，npm 布局：根是 `package/`，`package.json` 里
 `dsh.bundle.patch` 指向包内的 `cordis.patch.yml`，`schemastery` 随包）和 `dsh_qgis_driver-<版本>.zip`

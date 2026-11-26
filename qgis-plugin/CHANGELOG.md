@@ -6,6 +6,9 @@ Versions are kept in sync with `version` in `metadata.txt`.
 ## [Unreleased]
 
 ### Changed
+- `supportsQt6` is gone and `qgisMaximumVersion=4.99` takes its place: the
+  repository flags the old flag as deprecated for QGIS 4, where compatibility
+  is decided by the maximum version alone.
 - `description` is one line again, as the repository guidelines ask, with the
   long form moved to `about`; `about` now states the external dependency (the
   DSH bundle) explicitly, and `tags` were added so the entry can be found.
