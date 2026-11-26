@@ -5,6 +5,10 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Added
+- A plugin icon (`icon.png`, 64x64), declared as `icon=icon.png` so the
+  plugin manager and the official repository show it instead of a blank tile.
+
 ### Changed
 - The command queue is drained every 50 ms instead of 200 ms (`POLL_MS`).
   Same work per tick, but it removes the fixed ~200 ms floor under every
