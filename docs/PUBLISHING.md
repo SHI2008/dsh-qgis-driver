@@ -19,7 +19,7 @@ category: tools
 description:
   en: 'Drive QGIS 4 from DSH: ten qgis_* tools for layers, symbology, print layouts and Processing, backed by a QGIS plugin that runs them on the live GUI thread.'
   zh: '从 DSH 驱动 QGIS 4：十个 qgis_* 工具覆盖图层、符号、出图和 Processing，由 QGIS 插件在 GUI 主线程上执行。'
-tarball: https://github.com/SHI2008/dsh-qgis-driver/releases/latest/download/dsh-qgis-driver-<版本>.tgz
+tarball: https://github.com/SHI2008/dsh-qgis-driver/releases/latest/download/dsh-qgis-driver-0.1.91-rc.tgz
 ```
 
 - `category` 取 `tools`（工作流/自动化也可用 `workflow`）。
