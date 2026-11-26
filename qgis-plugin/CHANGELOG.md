@@ -5,6 +5,11 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Changed
+- `description` is one line again, as the repository guidelines ask, with the
+  long form moved to `about`; `about` now states the external dependency (the
+  DSH bundle) explicitly, and `tags` were added so the entry can be found.
+
 ### Fixed
 - No silent `try/except/pass` is left in the control loop. The repository's
   security scan rejects them (three were reported as B110 and the upload was
