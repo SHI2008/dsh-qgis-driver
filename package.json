@@ -1,8 +1,9 @@
 {
   "name": "dsh-qgis-driver",
-  "version": "0.1.91-rc",
+  "version": "0.1.92-rc",
   "type": "module",
   "main": "./dsh-tools/index.js",
+  "icon": "./dsh-tools/icon.png",
   "exports": {
     ".": "./dsh-tools/index.js",
     "./client": "./dsh-tools/client.js",
@@ -18,7 +19,8 @@
     "dsh-tools/node_modules",
     "dsh-tools/scripts",
     "dsh-tools/skills",
-    "dsh-tools/tests"
+    "dsh-tools/tests",
+    "dsh-tools/icon.png"
   ],
   "dsh": {
     "bundle": {

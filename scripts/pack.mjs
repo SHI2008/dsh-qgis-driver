@@ -101,6 +101,9 @@ const releaseManifest = {
   author: devManifest.author,
   type: devManifest.type,
   main: './index.js',
+  // The bundle page shows this icon; a package-root manifest may name one file
+  // next to itself, and the tarball root is `package/`, so the path is flat here.
+  icon: './icon.png',
   exports: devManifest.exports,
   files: devManifest.files,
   repository: {

@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-qgis-driver",
-  "version": "0.1.91-rc",
+  "version": "0.1.92-rc",
   "private": true,
   "type": "module",
   "scripts": {
@@ -22,7 +22,8 @@
     "node_modules",
     "scripts",
     "skills",
-    "tests"
+    "tests",
+    "icon.png"
   ],
   "dsh": {
     "bundle": {
@@ -37,5 +38,6 @@
     }
   },
   "license": "GPL-3.0-or-later",
-  "author": "SHI2008"
+  "author": "SHI2008",
+  "icon": "./icon.png"
 }
