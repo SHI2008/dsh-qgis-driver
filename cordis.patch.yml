@@ -1,0 +1,4 @@
+- insert:
+    - id: dsh-qgis-driver
+      name: dsh-qgis-driver
+      config: {}

@@ -1,0 +1,54 @@
+{
+  "name": "dsh-qgis-driver",
+  "version": "0.1.91-rc",
+  "type": "module",
+  "main": "./dsh-tools/index.js",
+  "exports": {
+    ".": "./dsh-tools/index.js",
+    "./client": "./dsh-tools/client.js",
+    "./locale/*.json": "./dsh-tools/locale/*.json"
+  },
+  "files": [
+    "cordis.patch.yml",
+    "dsh-tools/client.js",
+    "dsh-tools/cordis.patch.yml",
+    "dsh-tools/docs",
+    "dsh-tools/index.js",
+    "dsh-tools/locale/*.json",
+    "dsh-tools/node_modules",
+    "dsh-tools/scripts",
+    "dsh-tools/skills",
+    "dsh-tools/tests",
+    "qgis-plugin"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "deepseek-harness",
+    "qgis",
+    "gis"
+  ],
+  "description": "Drive QGIS from DeepSeek Harness through qgis_* tools: layers, symbology, layouts, Processing and PNG/PDF export. 通过 qgis_* 工具驱动 QGIS：图层、符号化、版式、Processing 与 PNG/PDF 导出。",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SHI2008/dsh-qgis-driver.git"
+  },
+  "homepage": "https://github.com/SHI2008/dsh-qgis-driver#readme",
+  "bugs": {
+    "url": "https://github.com/SHI2008/dsh-qgis-driver/issues"
+  },
+  "license": "GPL-3.0-or-later",
+  "author": "SHI2008"
+}

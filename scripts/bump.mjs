@@ -18,6 +18,9 @@ const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkgPath = path.join(root, 'dsh-tools', 'package.json')
+// The repo root carries a second manifest: it is what an install from git (or
+// from the plugin market) resolves, while dsh-tools/ stays the dev link target.
+const rootPkgPath = path.join(root, 'package.json')
 const metadataPath = path.join(root, 'qgis-plugin', 'metadata.txt')
 
 function profileMetadataPath() {
@@ -37,13 +40,13 @@ function check(version, label) {
   }
 }
 
-function setBundleVersion(version) {
-  const raw = fs.readFileSync(pkgPath, 'utf8')
+function setBundleVersion(file, version) {
+  const raw = fs.readFileSync(file, 'utf8')
   const pkg = JSON.parse(raw)
   const before = pkg.version
   pkg.version = version
-  fs.writeFileSync(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8')
-  console.log(`dsh-tools/package.json      ${before} -> ${version}`)
+  fs.writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8')
+  console.log(`${path.relative(root, file)}  ${before} -> ${version}`)
 }
 
 function setMetadataVersion(file, version) {
@@ -64,7 +67,8 @@ if (!bundle) {
   process.exit(2)
 }
 check(bundle, 'bundle')
-setBundleVersion(bundle)
+setBundleVersion(pkgPath, bundle)
+setBundleVersion(rootPkgPath, bundle)
 
 if (plugin) {
   check(plugin, 'plugin')
