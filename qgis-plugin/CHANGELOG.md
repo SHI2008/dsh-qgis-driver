@@ -5,6 +5,14 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Fixed
+- No silent `try/except/pass` is left in the control loop. The repository's
+  security scan rejects them (three were reported as B110 and the upload was
+  refused), so the optional `processing.run` hook now records why it was
+  skipped, the cancel path checks the future's state instead of catching the
+  exception, finished pools are pruned by testing their threads, and the audit
+  rotation and generation pruning use `contextlib.suppress(OSError)`.
+
 ### Added
 - A plugin icon (`icon.png`, 64x64), declared as `icon=icon.png` so the
   plugin manager and the official repository show it instead of a blank tile.

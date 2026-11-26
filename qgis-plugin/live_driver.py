@@ -32,6 +32,7 @@ another plugin, and the result returns to the caller's results.jsonl
 """
 
 import concurrent.futures
+import contextlib
 import datetime
 import hmac
 import inspect
@@ -405,10 +406,10 @@ def _audit_record(driver_pkg, cmd, obj, ms):
     # When the size limit is exceeded, rotate to a timestamped generation and start new
     if os.path.exists(path) and os.path.getsize(path) > max_bytes:
         stamp = datetime.datetime.now().strftime("%H%M%S")
-        try:
+        # Another writer may hold the old file open; a failed rotation only
+        # means the current file keeps growing until the next call.
+        with contextlib.suppress(OSError):
             os.replace(path, path[:-6] + "-" + stamp + ".jsonl")
-        except OSError:
-            pass
     with open(path, "a", encoding="utf-8") as f:
         f.write(line)
     # Generation cap: keep only max_files, in descending filename order (newest first)
@@ -416,10 +417,9 @@ def _audit_record(driver_pkg, cmd, obj, ms):
                     if n.startswith("audit-") and n.endswith(".jsonl")),
                    reverse=True)
     for old in names[max_files:]:
-        try:
+        # A file someone else removed first is exactly the outcome we want.
+        with contextlib.suppress(OSError):
             os.remove(os.path.join(base, old))
-        except OSError:
-            pass
 
 
 class TaskRegistry:
@@ -664,8 +664,8 @@ class LiveDriver:
         self.gate = WriteGate()
         try:
             patch_processing_run()
-        except Exception:
-            pass
+        except Exception as exc:  # the hook is optional; record and serve anyway
+            self.stats["last_error"] = "processing.run patch skipped: %s" % exc
         # command currently running on the GUI thread (read by the heartbeat thread)
         self._busy = {}
         self._beat_t0 = time.time()
@@ -1065,10 +1065,10 @@ class LiveDriver:
             for tid in ids:
                 fut = _GROUP_FUTURES.get(tid)
                 if fut is not None:
-                    try:
-                        fut.cancel()          # stops a shard still waiting in the pool
-                    except Exception:
-                        pass
+                    # A shard still waiting in the pool can be stopped here; one
+                    # already running is left to the cooperative check inside it.
+                    if not fut.running() and not fut.done():
+                        fut.cancel()
                     if fut.cancelled() or fut.done():
                         _GROUP_FUTURES.pop(tid, None)
                 res = self.tasks.abort(tid)
@@ -1170,11 +1170,11 @@ class LiveDriver:
 
         # Prune pools whose work is finished, then keep this one referenced.
         for pool in list(_GROUP_POOLS):
-            try:
-                if not any(t.is_alive() for t in getattr(pool, "_threads", ())):
-                    _GROUP_POOLS.remove(pool)
-            except Exception:
-                pass
+            threads = getattr(pool, "_threads", ())
+            if any(t.is_alive() for t in threads):
+                continue
+            if pool in _GROUP_POOLS:       # another call may have pruned it first
+                _GROUP_POOLS.remove(pool)
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers,
                                                      thread_name_prefix="pyeval-group")
         _GROUP_POOLS.append(pool)
