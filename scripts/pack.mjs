@@ -4,7 +4,7 @@
 //   qgis-plugin  -> dist/dsh_qgis_driver-<plugin version>.zip
 //                   (installable in QGIS: Plugins > Install from ZIP)
 //   dsh-tools    -> dist/dsh-qgis-driver-<bundle version>.tgz
-//                   (a DSH bundle; unpack and add it to the profile)
+//                   (an npm-layout tarball the plugin manager installs)
 //
 // Versions come from qgis-plugin/metadata.txt and dsh-tools/package.json, so
 // `scripts/bump.mjs` stays the only place they are written.
@@ -82,14 +82,47 @@ rmSync(stage, { recursive: true, force: true });
 mkdirSync(join(stage, 'plugin'), { recursive: true });
 copyTree(join(root, 'qgis-plugin'), join(stage, 'plugin', 'dsh_qgis_driver'));
 
-copyTree(join(root, 'dsh-tools'), join(stage, 'bundle', 'dsh-tools'), true);
+copyTree(join(root, 'dsh-tools'), join(stage, 'package'), true);
 
-// The bundle patch refers to @local/dsh-qgis-driver by name; keep package.json
-// and cordis.patch.yml as they are so a local install behaves like this repo.
+// The bundle ships as a real npm package. The plugin manager installs a
+// tarball only when the archive is laid out the way `npm pack` lays one out - a
+// single `package/` root holding package.json - and lists it by the keywords it
+// declares, so the release copy carries a publishable name instead of the
+// repository's `@local/` link name. The repo keeps its dev name: nothing here
+// rewrites dsh-tools/package.json.
+const devManifest = JSON.parse(readFileSync(join(root, 'dsh-tools', 'package.json'), 'utf8'));
+const releaseManifest = {
+  name: 'dsh-qgis-driver',
+  version: devManifest.version,
+  description:
+    'Drive QGIS from DeepSeek Harness: layers, symbology, print layouts and Processing through ten qgis_* tools. AI Assisted. Recommended together with the QGIS plugin dsh_qgis_driver.',
+  keywords: ['dsh-plugin', 'dsh', 'deepseek-harness', 'qgis', 'gis', 'pyqgis', 'layout', 'map', 'processing'],
+  license: devManifest.license,
+  author: devManifest.author,
+  type: devManifest.type,
+  main: './index.js',
+  exports: devManifest.exports,
+  files: devManifest.files,
+  repository: {
+    type: 'git',
+    url: 'git+https://github.com/SHI2008/dsh-qgis-driver.git',
+    directory: 'dsh-tools',
+  },
+  homepage: 'https://github.com/SHI2008/dsh-qgis-driver#readme',
+  bugs: { url: 'https://github.com/SHI2008/dsh-qgis-driver/issues' },
+  dsh: devManifest.dsh,
+};
+writeFileSync(join(stage, 'package', 'package.json'), `${JSON.stringify(releaseManifest, null, 2)}\n`);
+// The patch names the package it belongs to, so it follows the release name.
+writeFileSync(
+  join(stage, 'package', 'cordis.patch.yml'),
+  "- insert:\n    - id: dsh-qgis-driver\n      name: 'dsh-qgis-driver'\n      config: {}\n",
+);
+
 const pluginZip = join(dist, `dsh_qgis_driver-${pluginVersion}.zip`);
 const bundleTgz = join(dist, `dsh-qgis-driver-${bundleVersion}.tgz`);
 archive(pluginZip, join(stage, 'plugin'), ['dsh_qgis_driver']);
-archive(bundleTgz, join(stage, 'bundle'), ['dsh-tools']);
+archive(bundleTgz, stage, ['package']);
 
 // A short manifest: what is inside, and the hash of each archive.
 const lines = [];
@@ -98,7 +131,7 @@ for (const [file, label] of [[pluginZip, 'QGIS plugin'], [bundleTgz, 'DSH bundle
   lines.push(`${hash}  ${basename(file)}  (${label})`);
 }
 const pluginFiles = walk(join(stage, 'plugin', 'dsh_qgis_driver')).length;
-const bundleFiles = walk(join(stage, 'bundle', 'dsh-tools')).length;
+const bundleFiles = walk(join(stage, 'package')).length;
 lines.push('', `plugin ${pluginVersion}: ${pluginFiles} files`, `bundle ${bundleVersion}: ${bundleFiles} files`);
 writeFileSync(join(dist, 'SHA256SUMS.txt'), lines.join('\n') + '\n');
 console.log(lines.join('\n'));
