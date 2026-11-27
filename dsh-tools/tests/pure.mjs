@@ -597,5 +597,23 @@ await ok('the bundle is linted before it is packed', () => {
   assert.match(lint, /skipped: acorn is not installed/, 'a missing parser is a notice, not a failure')
 })
 
+// The catalogue in awesome-dsh-plugin is one schema; the market inside DSH 0.2
+// reads `format: 1`, whose sources are npm or git only. The file has to stay in
+// step with the manifest, or the card offers a version nobody can install.
+await ok('the market index names the version the manifest carries', () => {
+  const index = JSON.parse(fs.readFileSync(new URL('../../docs/market/index.json', import.meta.url), 'utf8'))
+  const pkg = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'))
+  assert.equal(index.format, 1, 'the index declares format 1')
+  const plugin = index.plugins[0]
+  assert.equal(plugin.name, pkg.name, 'the plugin is the package')
+  const version = plugin.versions[0]
+  assert.equal(version.version, pkg.version, 'the listed version is the manifest version')
+  assert.equal(version.source.type, 'git', 'a release asset cannot be expressed, so git it is')
+  assert.match(version.source.commit, /^[0-9a-f]{40}$/, 'the git source pins a full commit')
+  assert.match(version.source.url, /^https:\/\//, 'the git source is https')
+  assert.ok(plugin.title.en && plugin.description.en, 'the market needs en text')
+  assert.match(plugin.icon, /^data:image\/png;base64,/, 'the icon travels with the index')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

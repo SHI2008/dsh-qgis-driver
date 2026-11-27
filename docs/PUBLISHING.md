@@ -56,6 +56,37 @@ CI 第 2 步是「从仓库的 `package.json` 读 `dsh.bundle`」，查找范围
 4. 提 PR。CI 检查 manifest、仓库年龄、格式与 README 能否重新生成；合并后站点与市场通常一天内生效。
    被要求修改时，往同一分支推修复并留一条说明即可。
 
+## 新版市场（DSH 0.2 的索引格式）
+
+DSH 0.2 换了市场协议，且**不内置任何索引源**：用户在「发现」→「添加索引源」里自己贴一个 URL。
+格式是 `format: 1` 的 JSON，`source` 只接受两种：
+
+```json
+{"type": "npm", "registry": "https://registry.npmjs.org"}
+{"type": "git", "url": "https://github.com/SHI2008/dsh-qgis-driver", "commit": "<40 hex>"}
+```
+
+Release 资产（我们给老市场用的 `tarball`）在这个格式里**无法表达**，所以新版市场走 git：
+`scripts/market-index.mjs` 生成 `docs/market/index.json`，`source.commit` 钉在当时的 `HEAD`。
+用户添加的索引 URL 是
+
+```
+https://raw.githubusercontent.com/SHI2008/dsh-qgis-driver/main/docs/market/index.json
+```
+
+要点：
+
+- `docs/market/index.json` 由脚本生成，不要手改；`node scripts/market-index.mjs --check` 验证它
+  与 `package.json` 的版本一致（`pure.mjs` 里也有一条同样的检查）。
+- 索引里的 `version` 必须等于 `package.json` 的版本，`commit` 必须是已经推上去的提交；发版顺序是
+  **先提交推送 `package.json` + 代码，再 `market-index.mjs`，再提交推送索引**。
+- 图标内联成 `data:` URL（≤32 KiB）。`dsh-tools/icon.png` 是 256 px、41 KB，超限，所以用
+  `docs/market/icon.png`（96 px、1.5 KB）。
+- `engines.dsh` 是可选项，本仓库**不声明**：缺省表示任意宿主版本，安装时再按 peer 依赖检查。
+- 卡片优先显示兼容的最高**非预发布**版本，没有才退回最高预发布版本；我们现在只有 `-rc`，
+  所以会以预发布版本出现。
+- 索引请求必须 2xx 且**不经重定向**——`raw.githubusercontent.com` 直出，不要用带跳转的短链。
+
 ## 两个交付件分开装，绝不互相包含
 
 DSH 市场只发 **bundle**；QGIS 插件只走 QGIS 的「从 ZIP 安装插件」。两条通道互不打包对方：

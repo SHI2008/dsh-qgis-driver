@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "title": {
+    "en": "SHI2008 plugins",
+    "zh": "SHI2008 插件"
+  },
+  "description": {
+    "en": "Plugins published by SHI2008.",
+    "zh": "SHI2008 发布的插件。"
+  },
+  "plugins": [
+    {
+      "name": "dsh-qgis-driver",
+      "title": {
+        "en": "QGIS Driver",
+        "zh": "QGIS 驱动"
+      },
+      "description": {
+        "en": "Drive a running QGIS 4 from DeepSeek Harness through ten qgis_* tools: project, layers, features, Processing algorithms, print layouts and map rendering, plus async tasks and a raw-PyQGIS escape hatch.",
+        "zh": "从 DeepSeek Harness 驱动正在运行的 QGIS 4：十个 qgis_* 工具覆盖项目、图层、要素、Processing 算法、地图与版式出图，另有异步任务与直接写 PyQGIS 的逃生口。"
+      },
+      "icon": "data:image/png;base64,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",
+      "author": "SHI2008",
+      "homepage": "https://github.com/SHI2008/dsh-qgis-driver",
+      "repository": {
+        "url": "https://github.com/SHI2008/dsh-qgis-driver"
+      },
+      "versions": [
+        {
+          "version": "0.1.93-rc",
+          "publishTimestamp": 1795754418,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/SHI2008/dsh-qgis-driver",
+            "commit": "254cc048358c5f4635d53edcf2b0def69b8d77c0"
+          }
+        }
+      ]
+    }
+  ]
+}

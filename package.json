@@ -41,7 +41,7 @@
     "qgis",
     "gis"
   ],
-  "description": "Drive QGIS from DeepSeek Harness through qgis_* tools: layers, symbology, layouts, Processing and PNG/PDF export. 通过 qgis_* 工具驱动 QGIS：图层、符号化、版式、Processing 与 PNG/PDF 导出。",
+  "description": "Drive QGIS from DeepSeek Harness through qgis_* tools: layers, symbology, layouts, Processing and PNG/PDF export.",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SHI2008/dsh-qgis-driver.git"
