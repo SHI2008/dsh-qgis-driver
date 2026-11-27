@@ -5,6 +5,15 @@ Versions are kept in sync with `version` in `metadata.txt`.
 
 ## [Unreleased]
 
+### Fixed
+- Layer rules match again. The `_as_list` helper was deleted during a refactor
+  while eight calls to it stayed, so any rule using `format`, `ext`, `provider`,
+  `layer_type`, `geom`, `plugin` or `tags` raised `NameError` and no layer was
+  ever organised. The repository's checker caught it as F821, which `py_compile`
+  cannot see.
+- Four imports nothing used (`json` twice, `os`, `inspect`) are gone: the same
+  checker reports them, and a clean report is what the upload waits on.
+
 ### Changed
 - `supportsQt6` is gone and `qgisMaximumVersion=4.99` takes its place: the
   repository flags the old flag as deprecated for QGIS 4, where compatibility

@@ -2,7 +2,7 @@
 name=dsh_qgis_driver
 description=Drive a running QGIS 4 from an AI agent over local JSONL and REST commands; no GUI and no remote mode.
 about=Turns the running QGIS into a local control surface for an AI agent. Commands arrive through commands.jsonl/results.jsonl or the local REST routes (/api/pyeval, /api/pyeval_group, /api/tasks/<id>, /api/task_cancel, /api/screenshot, /api/cmd, /api/status). The HTTP server binds 127.0.0.1 only and requires a per-session token stored in a user-only file under ~/.qgis-live; there is no remote mode, no host/port setting and no stable API key. pyeval executes arbitrary Python inside QGIS, so the trust boundary is the local user account. A runaway pyeval is interrupted by a watchdog, a worker-thread heartbeat distinguishes a busy GUI thread from a dead process (QGIS_LIVE_EVAL_TIMEOUT, default 60 s), and mutating calls take an instance-wide write lease so two agents cannot silently overwrite each other. Dependency: the agent side is the DeepSeek Harness bundle at https://github.com/SHI2008/dsh-qgis-driver (optional - any client that speaks the JSONL or REST protocol can drive it). Derived from QGIS Live Harness by yamamoto-ryuzo (GPL-3.0), see LICENSE and NOTICE.
-version=0.18.18
+version=0.18.19
 qgisMinimumVersion=4.0
 qgisMaximumVersion=4.99
 author=SHI2008

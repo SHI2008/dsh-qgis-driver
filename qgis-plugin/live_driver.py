@@ -35,7 +35,6 @@ import concurrent.futures
 import contextlib
 import datetime
 import hmac
-import inspect
 import io
 import itertools
 import json

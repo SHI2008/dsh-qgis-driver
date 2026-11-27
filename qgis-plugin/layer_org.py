@@ -41,7 +41,6 @@ Every QGIS operation that assumes the GUI thread is confined to imports inside
 methods, so this module itself imports with stdlib only (unit test target).
 """
 
-import json
 import os
 
 from .profile_store import DEFAULT_PROFILE, ProfileStore
@@ -61,6 +60,13 @@ def profiles_dir():
 def _bundled_dir():
     """Directory of the plugin's bundled default profiles."""
     return _PROFILES.bundled_dir
+
+
+def _as_list(v):
+    """A rule key may be a single value or a list; compare them the same way."""
+    if isinstance(v, (list, tuple, set)):
+        return list(v)
+    return [v] if v is not None else []
 
 
 def list_profiles():

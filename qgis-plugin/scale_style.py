@@ -39,8 +39,6 @@ Every QGIS operation that assumes the GUI thread is confined to imports inside
 methods, so this module itself imports with stdlib only (unit test target).
 """
 
-import json
-import os
 
 from .profile_store import DEFAULT_PROFILE, ProfileStore
 

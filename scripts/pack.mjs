@@ -122,13 +122,57 @@ writeFileSync(
   "- insert:\n    - id: dsh-qgis-driver\n      name: 'dsh-qgis-driver'\n      config: {}\n",
 );
 
+// The plugin repository runs these checks on upload and rejects the whole
+// version on any finding - a file the linter cannot see is a version that never
+// reaches a user - so run the same ones before the zip is built. The linter is
+// a developer tool: missing it is a notice, a finding is a failure.
+function checkPlugin(dir) {
+  const python = process.env.PYTHON || 'python';
+  const files = readdirSync(dir).filter((f) => f.endsWith('.py')).sort();
+  const lint = spawnSync(python, ['-m', 'pyflakes', ...files], { cwd: dir, encoding: 'utf8' });
+  const said = `${lint.stdout || ''}${lint.stderr || ''}`.trim();
+  if (/No module named pyflakes/i.test(said)) {
+    console.warn('warning: pyflakes is not installed - `python -m pip install pyflakes` to lint like the plugin repository does');
+  } else if (lint.status !== 0) {
+    throw new Error(`pyflakes rejected ${files.length} files:\n${said}`);
+  } else if (said) {
+    throw new Error(`pyflakes reported findings:\n${said}`);
+  }
+
+  const meta = new Map();
+  for (const line of readFileSync(join(dir, 'metadata.txt'), 'utf8').split(/\r?\n/)) {
+    const m = line.match(/^([A-Za-z_]+)\s*=\s*(.*)$/);
+    if (m) meta.set(m[1], m[2].trim());
+  }
+  const required = ['name', 'description', 'about', 'version', 'qgisMinimumVersion', 'author', 'email', 'license'];
+  const missing = required.filter((k) => !meta.get(k));
+  if (missing.length) throw new Error(`metadata.txt is missing ${missing.join(', ')}`);
+  if (!/\bqgisMaximumVersion\b/.test(readFileSync(join(dir, 'metadata.txt'), 'utf8'))) {
+    throw new Error('metadata.txt needs qgisMaximumVersion - QGIS 4 decides compatibility by it alone');
+  }
+  if (meta.has('supportsQt6')) {
+    throw new Error('metadata.txt still carries supportsQt6, which the repository rejects as deprecated');
+  }
+  if (meta.get('description').length > 200 || /\n/.test(meta.get('description'))) {
+    throw new Error('metadata.txt description must be one short line: the plugin list renders it inline');
+  }
+  for (const key of ['icon', 'tags']) {
+    if (!meta.get(key)) throw new Error(`metadata.txt needs ${key}`);
+  }
+  if (!existsSync(join(dir, meta.get('icon')))) throw new Error(`metadata.txt names icon=${meta.get('icon')} but the file is not in the package`);
+  console.log(`plugin checks passed: ${files.length} python files, metadata ${meta.get('version')}`);
+}
+
 const pluginZip = join(dist, `dsh_qgis_driver-${pluginVersion}.zip`);
 const bundleTgz = join(dist, `dsh-qgis-driver-${bundleVersion}.tgz`);
 // Rebuilding an archive rewrites every entry's timestamp, so a bundle that did
 // not change still gets a new hash. When only one side changed, build only that
 // side: `--only=plugin` / `--only=bundle` keeps the published artefact intact.
 const only = (process.argv.find((a) => a.startsWith('--only=')) || '').split('=')[1] || 'both';
-if (only !== 'bundle') archive(pluginZip, join(stage, 'plugin'), ['dsh_qgis_driver']);
+if (only !== 'bundle') {
+  checkPlugin(join(stage, 'plugin', 'dsh_qgis_driver'));
+  archive(pluginZip, join(stage, 'plugin'), ['dsh_qgis_driver']);
+}
 if (only !== 'plugin') archive(bundleTgz, stage, ['package']);
 
 // A short manifest: what is inside, and the hash of each archive.
