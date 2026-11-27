@@ -72,8 +72,12 @@ function build(commit) {
           {
             version: pkg.version,
             publishTimestamp: Number(git('log', '-1', '--format=%ct', commit)),
-            // `path` stays out: the bundle is the repository root.
-            source: { type: 'git', url: repository, commit },
+            // The npm package installs prebuilt, which skips the build-approval
+            // step a git install needs; --source=git stays for the day the
+            // published version lags the repository.
+            source: useNpm
+              ? { type: 'npm', registry: 'https://registry.npmjs.org' }
+              : { type: 'git', url: repository, commit },
           },
         ],
       },
@@ -127,12 +131,14 @@ function check(index) {
   return true
 }
 
+const useNpm = !process.argv.includes('--source=git')
 const flag = process.argv.find((arg) => arg.startsWith('--commit='))?.split('=')[1]
 if (process.argv.includes('--check')) {
   const index = JSON.parse(readFileSync(out, 'utf8'))
   if (check(index)) {
     const version = index.plugins[0].versions[0]
-    console.log(`ok ${index.plugins[0].name}@${version.version} ${version.source.commit.slice(0, 8)}`)
+    const where = version.source.type === 'git' ? version.source.commit.slice(0, 8) : `npm${version.source.registry ? ` ${version.source.registry}` : ''}`
+    console.log(`ok ${index.plugins[0].name}@${version.version} ${where}`)
   }
 } else {
   const commit = flag ?? git('rev-parse', 'HEAD')

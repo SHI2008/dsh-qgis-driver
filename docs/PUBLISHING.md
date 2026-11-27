@@ -87,6 +87,39 @@ https://raw.githubusercontent.com/SHI2008/dsh-qgis-driver/main/docs/market/index
   所以会以预发布版本出现。
 - 索引请求必须 2xx 且**不经重定向**——`raw.githubusercontent.com` 直出，不要用带跳转的短链。
 
+## 发布到 npm（进入新版市场聚合索引的唯一路径）
+
+`awesome-dsh-plugin.com/index.json` 里 6972 个插件全部是 npm 来源，Release 资产表达不了，
+所以「一搜就有」只能走 npm。包名 `dsh-qgis-driver`，与市场条目同名。
+
+本机没有 npm CLI，做法是把官方 CLI 解到临时目录当 node 脚本跑：
+
+```sh
+curl -sS -o npm.tgz https://registry.npmjs.org/npm/-/npm-12.2.3.tgz && tar -xzf npm.tgz
+ELECTRON_RUN_AS_NODE=1 "/d/shichencai/HARNESS/DeepSeek Harness.exe" package/bin/npm-cli.js --version
+```
+
+npm 12 起**首发必须分两步**（`E_STAGE_REQUIRED`）：`npm stage publish` 进暂存区，再由维护者
+在 2FA 后 `npm stage approve` 或网页上点 Approve。`scripts/publish-npm.py` 是我先前手写的
+HTTP 版本（注册表 PUT + base64 附件），留着做「一眼看懂协议」的参考与 dry-run；真要发布走 CLI：
+
+1. `npm stage publish dist/dsh-qgis-driver-<ver>.tgz --tag next` → 得到 stage id，状态 `validating` → `staged`
+   （自动校验像 QGIS 那样要等，通常 1–2 分钟）。
+2. 批准：CLI `npm stage approve <id> --otp <6 位>`，或网页 `https://www.npmjs.com/settings/<user>/staged`
+   → Approve → 过 2FA。**首发时 npm 会先放一个 `0.0.0-stage` 占位版本**，批准后真版本才出现在包页。
+3. 收尾：`npm dist-tag add dsh-qgis-driver@<ver> latest`（预发布默认只落到 `next`，让 `latest` 指向真版本，
+   否则 `npm i dsh-qgis-driver` 装的是占位版）；`npm deprecate dsh-qgis-driver@0.0.0-stage "<理由>"`
+   把占位版标掉。
+4. 校验：`curl -sSL -o /tmp/pub.tgz https://registry.npmjs.org/dsh-qgis-driver/-/dsh-qgis-driver-<ver>.tgz`
+   与 `dist/` 里的 sha256 必须逐位相同（本次 `331889b2…`）。
+
+发布之后索引可以切成 npm 来源（默认），git 来源只在本机版本领先于 npm 时需要：
+
+```sh
+node scripts/market-index.mjs              # source: {type:"npm",registry:...}
+node scripts/market-index.mjs --source=git # source: {type:"git",url,commit}
+```
+
 ## 两个交付件分开装，绝不互相包含
 
 DSH 市场只发 **bundle**；QGIS 插件只走 QGIS 的「从 ZIP 安装插件」。两条通道互不打包对方：

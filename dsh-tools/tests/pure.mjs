@@ -608,9 +608,15 @@ await ok('the market index names the version the manifest carries', () => {
   assert.equal(plugin.name, pkg.name, 'the plugin is the package')
   const version = plugin.versions[0]
   assert.equal(version.version, pkg.version, 'the listed version is the manifest version')
-  assert.equal(version.source.type, 'git', 'a release asset cannot be expressed, so git it is')
-  assert.match(version.source.commit, /^[0-9a-f]{40}$/, 'the git source pins a full commit')
-  assert.match(version.source.url, /^https:\/\//, 'the git source is https')
+  // A release asset cannot be expressed at all; the entry is npm (prebuilt, no
+  // build approval) or git pinned to a commit.
+  assert.ok(['npm', 'git'].includes(version.source.type), 'the source is one the market can install')
+  if (version.source.type === 'git') {
+    assert.match(version.source.commit, /^[0-9a-f]{40}$/, 'the git source pins a full commit')
+    assert.match(version.source.url, /^https:\/\//, 'the git source is https')
+  } else {
+    assert.match(String(version.source.registry ?? 'https://registry.npmjs.org'), /^https:\/\//, 'the npm registry is https')
+  }
   assert.ok(plugin.title.en && plugin.description.en, 'the market needs en text')
   assert.match(plugin.icon, /^data:image\/png;base64,/, 'the icon travels with the index')
 })
