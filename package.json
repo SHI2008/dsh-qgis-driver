@@ -1,6 +1,6 @@
 {
   "name": "dsh-qgis-driver",
-  "version": "0.1.92-rc",
+  "version": "0.1.93-rc",
   "type": "module",
   "main": "./dsh-tools/index.js",
   "icon": "./dsh-tools/icon.png",
@@ -51,5 +51,8 @@
     "url": "https://github.com/SHI2008/dsh-qgis-driver/issues"
   },
   "license": "GPL-3.0-or-later",
-  "author": "SHI2008"
+  "author": "SHI2008",
+  "devDependencies": {
+    "acorn": "^8.19.0"
+  }
 }

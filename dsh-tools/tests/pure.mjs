@@ -583,5 +583,19 @@ await ok('a project write can be undone', () => {
   assert.match(src, /enum: \['info', 'open', 'save', 'save_as', 'set_crs', 'undo'\]/, 'undo is a documented action')
 })
 
+// The plugin repository rejects a version for a name that is used and never
+// declared; the bundle gets the same check before it is packed, and the check runs
+// over the real files rather than over a copy.
+await ok('the bundle is linted before it is packed', () => {
+  const pack = fs.readFileSync(new URL('../../scripts/pack.mjs', import.meta.url), 'utf8')
+  const lint = fs.readFileSync(new URL('../../scripts/lint-js.mjs', import.meta.url), 'utf8')
+  assert.match(pack, /checkBundle\(\)/, 'packing calls the bundle check')
+  assert.match(pack, /scripts', 'lint-js\.mjs'/, 'the check is the lint script')
+  assert.match(lint, /undefined name/, 'a used and undeclared name is reported')
+  assert.match(lint, /is written twice; the later one silently wins/, 'a repeated object key is reported')
+  assert.match(lint, /and never used/, 'a declaration nothing reads is reported')
+  assert.match(lint, /skipped: acorn is not installed/, 'a missing parser is a notice, not a failure')
+})
+
 process.stdout.write(`\n1..${checks}${failed ? ` — ${failed} failed` : ''}\n`)
 process.exitCode = failed ? 1 : 0

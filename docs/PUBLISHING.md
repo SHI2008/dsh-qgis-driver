@@ -81,6 +81,14 @@ node scripts/pack.mjs --only=bundle    # 只改 bundle 时用这个
 打包会重写每个条目的时间戳，所以**内容没变、哈希也会变**。只改一侧时务必用 `--only=`，否则已经发布出去的
 那个资产会因为你本地重打而得到新哈希，`SHA256SUMS.txt` 与 Release 上的附件就对不上了。
 
+打包前会先过两道静态检查，有发现就**直接失败**，不会产出半成品：
+
+- `python -m pyflakes` 扫插件全部 `.py`（QGIS 仓库上传时跑的就是它）；
+- `node scripts/lint-js.mjs` 扫 bundle 的 `tools.js`/`index.js`/`client.js`：引用了却没声明的名字、
+  写了两遍的对象键（后者静默生效）、声明了没人读的变量、`return` 之后的语句。解析用 `acorn`
+  （`devDependencies`，`npm install` 装上；没装时打印一行提示并跳过）。单独跑：
+  `node scripts/lint-js.mjs` 或 `node scripts/lint-js.mjs dsh-tools/tools.js`。
+
 `dist/` 会得到 `dsh-qgis-driver-<版本>.tgz`（DSH bundle，npm 布局：根是 `package/`，`package.json` 里
 `dsh.bundle.patch` 指向包内的 `cordis.patch.yml`，`schemastery` 随包）和 `dsh_qgis_driver-<版本>.zip`
 （QGIS 里「从 ZIP 安装插件」）。

@@ -1493,14 +1493,12 @@ export function apply(ctx, config = {}) {
       scope: currentScope(),
       connected: false,
       channel: null,
-      target: null,
       host: null,
       error: null,
       detail: null,
       headless: config?.headless !== false,
       gui: null,
       canLaunch: !!resolveAutostart(config),
-      target: 'local',
     }
     const local = findLocalLiveDir()
     if (local) {

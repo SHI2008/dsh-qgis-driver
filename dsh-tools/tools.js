@@ -2386,7 +2386,7 @@ export function withExtent(args) {
 }
 
 export function registerConsolidatedTools(deps) {
-  const { registerTool, run: runRaw, runCmd: runCmdRaw, stringOutput, asText, jsonSafeString,
+  const { registerTool, run: runRaw, runCmd: runCmdRaw, stringOutput, asText,
     scope, restartInstance, allowPaths, allowAlgorithms } = deps;
   // Set by withWriteLock for the duration of one mutating call. The lease rides inside
   // the command that needs it, so the plugin can take and drop it in the same request.

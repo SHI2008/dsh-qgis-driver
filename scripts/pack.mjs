@@ -163,6 +163,21 @@ function checkPlugin(dir) {
   console.log(`plugin checks passed: ${files.length} python files, metadata ${meta.get('version')}`);
 }
 
+// The bundle side gets the same treatment: a name that is used and never
+// declared (or a key written twice) only shows up when that branch runs, so the
+// check happens before the tarball exists.
+function checkBundle() {
+  const lint = join(root, 'scripts', 'lint-js.mjs');
+  const run = spawnSync(process.execPath, [lint], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+  });
+  const said = `${run.stdout || ''}${run.stderr || ''}`.trim();
+  if (run.status !== 0) throw new Error(`lint-js rejected the bundle:\n${said}`);
+  console.log(`bundle checks passed: ${said.split('\n').pop()}`);
+}
+
 const pluginZip = join(dist, `dsh_qgis_driver-${pluginVersion}.zip`);
 const bundleTgz = join(dist, `dsh-qgis-driver-${bundleVersion}.tgz`);
 // Rebuilding an archive rewrites every entry's timestamp, so a bundle that did
@@ -173,7 +188,10 @@ if (only !== 'bundle') {
   checkPlugin(join(stage, 'plugin', 'dsh_qgis_driver'));
   archive(pluginZip, join(stage, 'plugin'), ['dsh_qgis_driver']);
 }
-if (only !== 'plugin') archive(bundleTgz, stage, ['package']);
+if (only !== 'plugin') {
+  checkBundle();
+  archive(bundleTgz, stage, ['package']);
+}
 
 // A short manifest: what is inside, and the hash of each archive.
 const lines = [];

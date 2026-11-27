@@ -18,7 +18,6 @@ window.__ModuleLoader__.load({
     // DSH brand blue (design token --dsw-static-deepseek-450, the
     // 'primary-new-color' in the dark theme). One accent, no lavender.
     const ACCENT = '#5686fe'
-    const ACCENT_BG = '#5686fe'
 
 
     // What the tools may do. Enforced by the bundle on every call (tools.js
@@ -482,7 +481,8 @@ window.__ModuleLoader__.load({
             h('button', {
               type: 'button',
               onClick: () => push({ qgisRoot: rootDraft }),
-              disabled: saving,
+              disabled: saving || !loaded,
+              title: loaded ? undefined : '正在读取当前配置…',
               style: {
                 padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600,
                 border: '1px solid ' + BORDER, background: 'transparent', color: TEXT,
@@ -492,7 +492,7 @@ window.__ModuleLoader__.load({
               ? h('button', {
                 type: 'button',
                 onClick: () => { setRootDraft(detectedRoot); push({ qgisRoot: detectedRoot }) },
-                disabled: saving,
+                disabled: saving || !loaded,
                 style: {
                   padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600,
                   border: '1px solid ' + ACCENT, background: 'transparent', color: ACCENT,
